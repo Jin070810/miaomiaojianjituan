@@ -70,6 +70,22 @@ jobs:
           ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
             "set -e; cd '$PRODUCTION_PATH'; git fetch origin; git checkout --detach '$RELEASE_COMMIT'; bash scripts/backup-db.sh backups .env.production; docker compose --env-file .env.production --profile production up -d --build; docker compose ps"
 
+      - name: Bootstrap production administrator
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          ADMIN_KUAISHOU_IDS: ${{ secrets.ADMIN_KUAISHOU_IDS }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          ADMIN_NICKNAME: ${{ vars.ADMIN_NICKNAME }}
+        run: |
+          test -n "$ADMIN_KUAISHOU_IDS"
+          test -n "$ADMIN_PASSWORD"
+          test "${#ADMIN_PASSWORD}" -ge 8
+          admin_script="$(printf 'set -e\ncd %q\nexport ADMIN_KUAISHOU_IDS=%q\nexport ADMIN_PASSWORD=%q\nexport ADMIN_NICKNAME=%q\ndocker compose --env-file .env.production run --rm --no-deps worker npm run seed:admin\n' \
+            "$PRODUCTION_PATH" "$ADMIN_KUAISHOU_IDS" "$ADMIN_PASSWORD" "${ADMIN_NICKNAME:-管理员}")"
+          printf '%s\n' "$admin_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
+
       - name: Verify production health
         env:
           PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}

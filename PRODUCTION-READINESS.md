@@ -34,13 +34,15 @@
 
 ## 当前阻塞
 
-1. 正式管理员快手 ID 已确认并在当前迁移数据库初始化；正式环境部署时仍需通过密钥环境注入并执行：
+1. 正式管理员快手 ID 已确认并在当前迁移数据库初始化。正式部署 workflow 已增加管理员初始化步骤；需要在 GitHub `production` Environment 配置以下变量后才能执行：
 
    ```powershell
-   $env:ADMIN_KUAISHOU_IDS="已确认的快手ID"
-   $env:ADMIN_PASSWORD="仅在首次创建或重置时临时注入"
-   npm run seed:admin
+   Secret: ADMIN_KUAISHOU_IDS   # 15542018104
+   Secret: ADMIN_PASSWORD       # 管理员登录密码
+   Variable: ADMIN_NICKNAME      # 妙妙剪辑团管理员
    ```
+
+   密码只在受保护的部署步骤中通过标准输入注入到服务器，不写入仓库、镜像或日志；账号已存在时会被提升为 `ADMIN` 并启用。
 
 2. 生产密钥仍是部署前配置项。正式环境必须使用随机生成的 `SESSION_SECRET`、`PHONE_ENCRYPTION_KEY` 和独立 PostgreSQL 密码，不能沿用本机 `.env`。
 

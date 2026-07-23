@@ -1,6 +1,8 @@
 import { db } from "./db";
 import { LedgerType, Prisma, PrismaClient } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
+import { calculateVideoPoints } from "./kuaishou";
+import { getVideoPointRule } from "./point-rules";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -118,6 +120,64 @@ export async function completeTransfer(input: {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
       if (existing) return existing;
+    }
+    throw error;
+  }
+}
+
+export async function adminAdjustPoints(input: {
+  userId: string;
+  amount: number;
+  reason: string;
+  idempotencyKey: string;
+  actorId: string;
+  ip?: string;
+}) {
+  if (!Number.isInteger(input.amount) || input.amount === 0 || Math.abs(input.amount) > 1_000_000) {
+    throw new Error("调整积分必须是绝对值不超过 1000000 的非零整数");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 2 || reason.length > 500) throw new Error("请填写 2 至 500 字的调整原因");
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const existing = await tx.pointLedger.findUnique({
+        where: { idempotencyKey: input.idempotencyKey },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (existing) return { ledger: existing, balance: existing.balanceAfter };
+
+      const target = await tx.user.findUnique({ where: { id: input.userId }, select: { id: true, active: true } });
+      if (!target || !target.active) throw new Error("目标成员不存在或已停用");
+      const account = input.amount > 0
+        ? await credit(tx, input.userId, input.amount, "ADMIN_ADJUSTMENT", input.idempotencyKey, reason, input.idempotencyKey)
+        : await debit(tx, input.userId, -input.amount, "ADMIN_ADJUSTMENT", input.idempotencyKey, reason, input.idempotencyKey);
+      const ledger = await tx.pointLedger.findUniqueOrThrow({
+        where: { idempotencyKey: input.idempotencyKey },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: input.actorId,
+          action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED",
+          entity: "PointAccount",
+          entityId: account.id,
+          beforeValue: { balance: account.balance - input.amount },
+          afterValue: { balance: account.balance, amount: input.amount, userId: input.userId },
+          reason,
+          ip: input.ip,
+          requestId: input.idempotencyKey,
+        },
+      });
+      return { ledger, balance: account.balance };
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const existing = await db.pointLedger.findUnique({
+        where: { idempotencyKey: input.idempotencyKey },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (existing) return { ledger: existing, balance: existing.balanceAfter };
     }
     throw error;
   }
@@ -287,6 +347,96 @@ export async function rejectVideo(input: { videoId: string; reason: string; acto
         entityId: input.videoId,
         beforeValue: { status: video.status },
         afterValue: { status: updated.status, reason: input.reason },
+        reason: input.reason,
+        ip: input.ip,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function resolveVideoAppeal(input: {
+  appealId: string;
+  action: "approve" | "reject";
+  actorId: string;
+  reason?: string;
+  points?: number;
+  ip?: string;
+}) {
+  return db.$transaction(async (tx) => {
+    const appeal = await tx.videoAppeal.findUnique({
+      where: { id: input.appealId },
+      include: { video: true },
+    });
+    if (!appeal) throw new Error("申诉记录不存在");
+    if (appeal.status !== "PENDING") return appeal;
+    if (input.action === "reject") {
+      const reason = input.reason?.trim();
+      if (!reason) throw new Error("驳回申诉必须填写原因");
+      const claimed = await tx.videoAppeal.updateMany({
+        where: { id: appeal.id, status: "PENDING" },
+        data: { status: "REJECTED", reviewReason: reason, reviewedAt: new Date(), reviewedById: input.actorId },
+      });
+      if (claimed.count !== 1) return tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
+      const updated = await tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
+      await tx.auditLog.create({
+        data: {
+          actorId: input.actorId,
+          action: "VIDEO_APPEAL_REJECTED",
+          entity: "VideoAppeal",
+          entityId: appeal.id,
+          beforeValue: { status: appeal.status },
+          afterValue: { status: updated.status, videoId: appeal.videoId },
+          reason,
+          ip: input.ip,
+        },
+      });
+      return updated;
+    }
+
+    if (appeal.video.status !== "REJECTED") throw new Error("只有已自动驳回的视频可以通过申诉");
+    const duplicate = appeal.video.photoId
+      ? await tx.videoSubmission.findFirst({
+          where: {
+            photoId: appeal.video.photoId,
+            id: { not: appeal.video.id },
+            status: { in: ["PROCESSING", "PENDING_REVIEW", "APPROVED"] },
+          },
+        })
+      : null;
+    if (duplicate) throw new Error("该视频已被其他记录结算，不能通过申诉");
+    const rule = await getVideoPointRule(tx);
+    const points = input.points ?? calculateVideoPoints(appeal.video.likes ?? 0, rule);
+    if (!Number.isInteger(points) || points < 0 || points > rule.maximumPoints) {
+      throw new Error(`申诉积分必须是 0 至 ${rule.maximumPoints} 的整数`);
+    }
+    const claimed = await tx.videoAppeal.updateMany({
+      where: { id: appeal.id, status: "PENDING" },
+      data: {
+        status: "APPROVED",
+        reviewedPoints: points,
+        reviewReason: input.reason?.trim() || "申诉复查通过",
+        reviewedAt: new Date(),
+        reviewedById: input.actorId,
+      },
+    });
+    if (claimed.count !== 1) return tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
+    const video = await tx.videoSubmission.update({
+      where: { id: appeal.video.id },
+      data: { status: "APPROVED", points, reviewedAt: new Date(), reviewReason: input.reason?.trim() || "申诉复查通过" },
+    });
+    if (points > 0) {
+      await credit(tx, appeal.video.userId, points, "VIDEO_REWARD", appeal.video.id, "视频申诉通过");
+    }
+    const updated = await tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
+    await tx.auditLog.create({
+      data: {
+        actorId: input.actorId,
+        action: "VIDEO_APPEAL_APPROVED",
+        entity: "VideoAppeal",
+        entityId: appeal.id,
+        beforeValue: { appealStatus: appeal.status, videoStatus: appeal.video.status, points: appeal.video.points },
+        afterValue: { appealStatus: updated.status, videoStatus: video.status, points },
         reason: input.reason,
         ip: input.ip,
       },

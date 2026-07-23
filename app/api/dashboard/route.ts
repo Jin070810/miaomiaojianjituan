@@ -19,6 +19,7 @@ export async function GET() {
       : [],
     db.videoSubmission.findMany({
       where: { userId: user.id },
+      include: { appeals: { orderBy: { createdAt: "desc" }, take: 3 } },
       orderBy: { submittedAt: "desc" },
       take: 50,
     }),

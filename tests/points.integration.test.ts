@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { completeTransfer, creditVideoReward, redeemGift, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
+import { adminAdjustPoints, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
 import { periodBounds, settleRanking } from "@/lib/rankings";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
@@ -65,6 +65,39 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
     expect(await db.pointLedger.count({ where: { referenceId: video.id } })).toBe(1);
     expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(50);
+  });
+
+  it("reviews an appeal transactionally and credits only once under concurrency", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
+    const video = await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/integration-appeal",
+        requestUrl: "https://v.kuaishou.com/integration-appeal",
+        sourceKind: "short-link",
+        status: "REJECTED",
+        likes: 500,
+        photoId: `appeal-photo-${Date.now()}`,
+        submittedNickname: "测试转出",
+        idempotencyKey: `integration-appeal-video-${Date.now()}`,
+      },
+    });
+    const appeal = await db.videoAppeal.create({
+      data: {
+        videoId: video.id,
+        userId: senderId,
+        reason: "作者名只是多了装饰字符",
+        idempotencyKey: `integration-appeal-${Date.now()}`,
+      },
+    });
+    const results = await Promise.all([
+      resolveVideoAppeal({ appealId: appeal.id, action: "approve", points: 250, actorId: receiverId }),
+      resolveVideoAppeal({ appealId: appeal.id, action: "approve", points: 250, actorId: receiverId }),
+    ]);
+    expect(results[0].id).toBe(results[1].id);
+    expect(await db.videoSubmission.findUnique({ where: { id: video.id } }).then((item) => item?.status)).toBe("APPROVED");
+    expect(await db.pointLedger.count({ where: { referenceId: video.id, type: "VIDEO_REWARD" } })).toBe(1);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(250);
   });
 
   it("reverses an approved video exactly once", async () => {
@@ -189,5 +222,34 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     });
     expect(order.cashQrCodeUrl).toBe("https://example.com/qr.png");
     expect(await db.recipientProfile.findUnique({ where: { userId: senderId } }).then((profile) => profile?.cashQrCodeUrl)).toBe("https://example.com/qr.png");
+  });
+
+  it("applies integer admin adjustments once and prevents overspending", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 100 } });
+    const idempotencyKey = `integration-admin-adjust-${Date.now()}`;
+    const [first, duplicate] = await Promise.all([
+      adminAdjustPoints({ userId: senderId, amount: 25, reason: "测试管理员发放", idempotencyKey, actorId: receiverId }),
+      adminAdjustPoints({ userId: senderId, amount: 25, reason: "测试管理员发放", idempotencyKey, actorId: receiverId }),
+    ]);
+    expect(first.ledger.id).toBe(duplicate.ledger.id);
+    expect(first.balance).toBe(125);
+    expect(Number.isInteger(first.balance)).toBe(true);
+    expect(await db.pointLedger.count({ where: { idempotencyKey } })).toBe(1);
+
+    await adminAdjustPoints({
+      userId: senderId,
+      amount: -20,
+      reason: "测试管理员扣除",
+      idempotencyKey: `${idempotencyKey}-deduct`,
+      actorId: receiverId,
+    });
+    await expect(adminAdjustPoints({
+      userId: senderId,
+      amount: -106,
+      reason: "测试余额不足",
+      idempotencyKey: `${idempotencyKey}-overspend`,
+      actorId: receiverId,
+    })).rejects.toThrow("积分余额不足");
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(105);
   });
 });

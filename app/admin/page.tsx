@@ -32,7 +32,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type AdminSection = "overview" | "videos" | "users" | "gifts" | "orders" | "rankings" | "logs";
+type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "logs";
 
 type AdminVideo = {
   id: string;
@@ -43,6 +43,18 @@ type AdminVideo = {
   reviewReason: string | null;
   submittedAt: string;
   user: { kuaishouId: string; nickname: string };
+};
+type AdminAppeal = {
+  id: string;
+  reason: string;
+  createdAt: string;
+  video: AdminVideo & {
+    fetchedOwner: string | null;
+    submittedNickname: string;
+    matchedOwner: boolean | null;
+    photoId: string | null;
+  };
+  user: { id: string; kuaishouId: string; nickname: string };
 };
 
 type AdminUserRow = {
@@ -59,6 +71,23 @@ type AdminUserRow = {
 };
 
 type AdminGiftRow = { id: string; name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl: string | null; description: string | null; active: boolean };
+type AdminPointLedgerRow = {
+  id: string;
+  type: string;
+  amount: number;
+  balanceAfter: number;
+  note: string | null;
+  createdAt: string;
+  account: { user: { id: string; kuaishouId: string; nickname: string; active: boolean } };
+};
+type VideoPointRule = {
+  minimumLikes: number;
+  fixedTierMaxLikes: number;
+  fixedTierPoints: number;
+  likesDivisor: number;
+  maximumPoints: number;
+  submissionWindowDays: number;
+};
 type AdminOrderRow = {
   id: string;
   totalCost: number;
@@ -104,10 +133,14 @@ type AdminData = {
   metrics: { users: number; pendingVideos: number; activeGifts: number; pendingOrders: number; totalBalance: number };
   audit: AdminAuditRow[];
   videos: AdminVideo[];
+  appeals: AdminAppeal[];
   users: AdminUserRow[];
   gifts: AdminGiftRow[];
   orders: AdminOrderRow[];
   periods: AdminRankingPeriod[];
+  pointLedger: AdminPointLedgerRow[];
+  pointRule: VideoPointRule;
+  pointPagination: { page: number; take: number; total: number; pages: number };
 };
 
 function formatAdminDate(value: string) {
@@ -172,14 +205,15 @@ function AdminSidebar({
       label: "工作台",
       items: [
         { id: "overview" as const, label: "数据概览", icon: LayoutDashboard },
-        { id: "videos" as const, label: "视频与审核", icon: ClipboardCheck, badge: pendingVideos ? pendingVideos.toString() : undefined },
+        { id: "videos" as const, label: "视频与申诉", icon: ClipboardCheck, badge: pendingVideos ? pendingVideos.toString() : undefined },
       ],
     },
     {
       label: "业务管理",
       items: [
         { id: "users" as const, label: "用户与公会", icon: Users },
-        { id: "gifts" as const, label: "积分与礼品", icon: Gift },
+        { id: "points" as const, label: "积分管理", icon: CircleDollarSign },
+        { id: "gifts" as const, label: "礼品管理", icon: Gift },
         { id: "orders" as const, label: "兑换订单", icon: PackageCheck, badge: pendingOrders ? pendingOrders.toString() : undefined },
         { id: "rankings" as const, label: "榜单结算", icon: Trophy },
       ],
@@ -259,7 +293,7 @@ function Overview({ data }: { data: AdminData }) {
       <div className="admin-stat-grid">
         <StatCard label="成员总数" value={data.metrics.users.toLocaleString()} trend="+ 实时" icon={Users} tone="coral" />
         <StatCard label="账户积分总量" value={data.metrics.totalBalance.toLocaleString()} trend="+ 实时" icon={CircleDollarSign} tone="teal" />
-        <StatCard label="待处理视频" value={data.metrics.pendingVideos.toLocaleString()} trend="+ 待办" icon={ClipboardCheck} tone="yellow" />
+        <StatCard label="待处理申诉" value={data.metrics.pendingVideos.toLocaleString()} trend="+ 待办" icon={ClipboardCheck} tone="yellow" />
         <StatCard label="待处理订单" value={data.metrics.pendingOrders.toLocaleString()} trend="+ 待办" icon={PackageCheck} tone="purple" />
       </div>
       <div className="admin-dashboard-grid">
@@ -278,7 +312,7 @@ function Overview({ data }: { data: AdminData }) {
         <section className="admin-panel exception-panel">
           <div className="admin-panel-head"><div><h2>需要关注</h2><p>异常视频与待处理订单</p></div><AlertTriangle size={19} color="#b8750a" /></div>
           <div className="exception-list">
-            <div><span className="exception-icon danger"><AlertTriangle size={16} /></span><div><strong>视频审核队列</strong><small>作者不匹配或抓取失败</small></div><b>{data.metrics.pendingVideos}</b></div>
+            <div><span className="exception-icon danger"><AlertTriangle size={16} /></span><div><strong>视频申诉队列</strong><small>普通视频已自动通过或驳回</small></div><b>{data.metrics.pendingVideos}</b></div>
             <div><span className="exception-icon warning"><Activity size={16} /></span><div><strong>在架礼品</strong><small>库存与状态实时同步</small></div><b>{data.metrics.activeGifts}</b></div>
             <div><span className="exception-icon teal"><PackageCheck size={16} /></span><div><strong>待处理订单</strong><small>兑换积分已锁定</small></div><b>{data.metrics.pendingOrders}</b></div>
           </div>
@@ -344,6 +378,34 @@ function VideosAdmin({ rows, onAction }: { rows: AdminVideo[]; onAction: (video:
   );
 }
 
+function AppealsAdmin({ rows, onAction }: { rows: AdminAppeal[]; onAction: (appeal: AdminAppeal, action: "approve" | "reject") => void }) {
+  return (
+    <>
+      <div className="admin-page-title">
+        <div><span className="eyebrow">APPEAL REVIEW QUEUE</span><h1>视频与申诉</h1><p>普通视频由系统直接通过或驳回，管理员只处理成员提交的申诉。</p></div>
+        <span className="status-chip warning">{rows.length} 条待复查</span>
+      </div>
+      <section className="admin-panel audit-panel">
+        <div className="admin-panel-head"><div><h2>待复查申诉</h2><p>自动驳回原因、作者比对和成员申诉理由</p></div></div>
+        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>视频</th><th>自动结果</th><th>申诉理由</th><th>提交时间</th><th /></tr></thead><tbody>
+          {rows.map((appeal) => <tr key={appeal.id}>
+            <td><div className="table-main"><span className="table-avatar">{appeal.user.nickname.slice(0, 1)}</span><div><strong>{appeal.user.nickname}</strong><small>{appeal.user.kuaishouId}</small></div></div></td>
+            <td><div className="table-main"><div><strong>{appeal.video.likes?.toLocaleString() ?? "未获取"} 赞</strong><small>{appeal.video.sourceUrl.slice(0, 48)}</small></div></div></td>
+            <td><span className="status-chip danger">{appeal.video.reviewReason ?? "自动驳回"}</span><small>抓取作者：{appeal.video.fetchedOwner ?? "未获取"} · 提交昵称：{appeal.video.submittedNickname}</small></td>
+            <td>{appeal.reason}</td>
+            <td>{formatAdminDate(appeal.createdAt)}</td>
+            <td><div className="table-actions-inline">
+              <button className="table-more" title="通过申诉并入账" aria-label="通过申诉" onClick={() => onAction(appeal, "approve")}><Check size={16} /></button>
+              <button className="table-more" title="驳回申诉" aria-label="驳回申诉" onClick={() => onAction(appeal, "reject")}><X size={16} /></button>
+            </div></td>
+          </tr>)}
+          {rows.length === 0 && <tr><td colSpan={6}>暂无待复查申诉</td></tr>}
+        </tbody></table></div>
+      </section>
+    </>
+  );
+}
+
 function UsersAdmin({ rows, onToggle, onUpdate, onResetPassword }: { rows: AdminUserRow[]; onToggle: (user: AdminUserRow) => void; onUpdate: (user: AdminUserRow, input: { role?: "MEMBER" | "ADMIN"; guildStatus?: string }) => void; onResetPassword: (user: AdminUserRow) => void }) {
   const [filter, setFilter] = useState<"all" | "joined" | "pending">("all");
   const [query, setQuery] = useState("");
@@ -363,6 +425,111 @@ function UsersAdmin({ rows, onToggle, onUpdate, onResetPassword }: { rows: Admin
       <section className="admin-panel audit-panel">
         <div className="admin-panel-head"><div><h2>成员列表</h2><p>显示 {filtered.length} 名，快手 ID 是唯一身份标识</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索快手 ID 或昵称" /></div></div></div>
         <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>角色</th><th>公会状态</th><th>当前积分</th><th>有效视频</th><th>注册时间</th><th /></tr></thead><tbody>{filtered.map((user) => <tr key={user.id}><td><div className="table-main"><span className="table-avatar">{user.nickname.slice(0, 1)}</span><div><strong>{user.nickname}</strong><small>{user.kuaishouId}</small></div></div></td><td><select value={user.role} onChange={(event) => onUpdate(user, { role: event.target.value as "MEMBER" | "ADMIN" })} aria-label={`${user.nickname}角色`}><option value="MEMBER">普通成员</option><option value="ADMIN">管理员</option></select></td><td><select value={user.guildStatus ?? "未设置"} onChange={(event) => onUpdate(user, { guildStatus: event.target.value })} aria-label={`${user.nickname}公会状态`}><option>未设置</option><option>已邀请</option><option>已入会</option><option>已绑定</option><option>未绑定</option></select></td><td>{(user.account?.balance ?? 0).toLocaleString()}</td><td>{user._count.videos}</td><td>{formatAdminDate(user.createdAt)}</td><td><div className="table-actions-inline"><button className="table-more" title="重置密码" aria-label={`重置${user.nickname}密码`} onClick={() => onResetPassword(user)}><KeyRound size={15} /></button><button className="table-more" title={user.active ? "停用账号" : "启用账号"} aria-label={user.active ? "停用账号" : "启用账号"} onClick={() => onToggle(user)}>{user.active ? <X size={16} /> : <Check size={16} />}</button></div></td></tr>)}{filtered.length === 0 && <tr><td colSpan={7}>没有匹配的成员</td></tr>}</tbody></table></div>
+      </section>
+    </>
+  );
+}
+
+function PointsAdmin({
+  users,
+  ledger,
+  rule,
+  pagination,
+  onAdjust,
+  onRuleSave,
+  onLoadMore,
+}: {
+  users: AdminUserRow[];
+  ledger: AdminPointLedgerRow[];
+  rule: VideoPointRule;
+  pagination: { page: number; pages: number; total: number };
+  onAdjust: (input: { userId: string; amount: number; reason: string }) => Promise<void>;
+  onRuleSave: (input: VideoPointRule) => Promise<void>;
+  onLoadMore: () => Promise<void>;
+}) {
+  const [userId, setUserId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [ruleDraft, setRuleDraft] = useState(rule);
+  const [saving, setSaving] = useState(false);
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [error, setError] = useState("");
+
+  async function submitAdjustment() {
+    const numericAmount = Number(amount);
+    if (!userId || !Number.isInteger(numericAmount) || numericAmount === 0 || !reason.trim()) {
+      setError("请选择成员，输入非零整数积分，并填写调整原因");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setFeedback("");
+    try {
+      await onAdjust({ userId, amount: numericAmount, reason: reason.trim() });
+      setAmount("");
+      setReason("");
+      setFeedback("积分调整已记录，余额和审计日志已更新。");
+    } catch (adjustError) {
+      setError(adjustError instanceof Error ? adjustError.message : "积分调整失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveRule() {
+    const values = Object.fromEntries(Object.entries(ruleDraft).map(([key, value]) => [key, Number(value)])) as VideoPointRule;
+    if (Object.values(values).some((value) => !Number.isInteger(value) || value <= 0) || values.fixedTierMaxLikes < values.minimumLikes || values.maximumPoints < values.fixedTierPoints) {
+      setError("积分规则必须全部为正整数，且档位和上限关系正确");
+      return;
+    }
+    setRuleSaving(true);
+    setError("");
+    setFeedback("");
+    try {
+      await onRuleSave(values);
+      setRuleDraft(values);
+      setFeedback("积分规则已保存，仅对之后新抓取的视频生效。");
+    } catch (ruleError) {
+      setError(ruleError instanceof Error ? ruleError.message : "积分规则保存失败");
+    } finally {
+      setRuleSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="admin-page-title">
+        <div><span className="eyebrow">POINTS CONTROL</span><h1>积分管理</h1><p>所有人工调整必须说明原因，并在事务中生成不可变流水。</p></div>
+      </div>
+      {(error || feedback) && <p className={error ? "form-error" : "form-success"} role="status">{error || feedback}</p>}
+      <div className="admin-dashboard-grid">
+        <section className="admin-panel audit-panel">
+          <div className="admin-panel-head"><div><h2>人工增减积分</h2><p>扣减不能超过成员当前余额；撤销类补偿由系统专用流程处理。</p></div><CircleDollarSign size={19} color="#149e91" /></div>
+          <div className="admin-form-grid admin-panel-form">
+            <div className="field"><label htmlFor="points-user">成员</label><select id="points-user" value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">选择成员</option>{users.filter((user) => user.active).map((user) => <option key={user.id} value={user.id}>{user.nickname} · {user.kuaishouId} · {(user.account?.balance ?? 0).toLocaleString()} 分</option>)}</select></div>
+            <div className="field"><label htmlFor="points-amount">积分变动</label><input id="points-amount" type="number" step="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="正数发放，负数扣除" /></div>
+          </div>
+          <div className="field admin-panel-form"><label htmlFor="points-reason">原因</label><textarea id="points-reason" rows={3} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="例如：活动补发、人工纠错、违规扣分" /></div>
+          <div className="admin-panel-actions"><button className="primary-button" disabled={saving} onClick={submitAdjustment}><CircleDollarSign size={16} />{saving ? "提交中..." : "提交积分调整"}</button></div>
+        </section>
+        <section className="admin-panel audit-panel">
+          <div className="admin-panel-head"><div><h2>视频积分规则</h2><p>修改会留痕，不会重算历史视频。</p></div><SlidersHorizontal size={19} color="#ff5a3d" /></div>
+          <div className="admin-form-grid admin-panel-form">
+            <div className="field"><label htmlFor="rule-min-likes">最低点赞量</label><input id="rule-min-likes" type="number" step="1" value={ruleDraft.minimumLikes} onChange={(event) => setRuleDraft({ ...ruleDraft, minimumLikes: Number(event.target.value) })} /></div>
+            <div className="field"><label htmlFor="rule-tier-max">固定档上限</label><input id="rule-tier-max" type="number" step="1" value={ruleDraft.fixedTierMaxLikes} onChange={(event) => setRuleDraft({ ...ruleDraft, fixedTierMaxLikes: Number(event.target.value) })} /></div>
+            <div className="field"><label htmlFor="rule-tier-points">固定档积分</label><input id="rule-tier-points" type="number" step="1" value={ruleDraft.fixedTierPoints} onChange={(event) => setRuleDraft({ ...ruleDraft, fixedTierPoints: Number(event.target.value) })} /></div>
+            <div className="field"><label htmlFor="rule-divisor">点赞除数</label><input id="rule-divisor" type="number" step="1" value={ruleDraft.likesDivisor} onChange={(event) => setRuleDraft({ ...ruleDraft, likesDivisor: Number(event.target.value) })} /></div>
+            <div className="field"><label htmlFor="rule-max-points">最高积分</label><input id="rule-max-points" type="number" step="1" value={ruleDraft.maximumPoints} onChange={(event) => setRuleDraft({ ...ruleDraft, maximumPoints: Number(event.target.value) })} /></div>
+            <div className="field"><label htmlFor="rule-window">有效天数</label><input id="rule-window" type="number" step="1" value={ruleDraft.submissionWindowDays} onChange={(event) => setRuleDraft({ ...ruleDraft, submissionWindowDays: Number(event.target.value) })} /></div>
+          </div>
+          <div className="admin-panel-actions"><button className="secondary-button" disabled={ruleSaving} onClick={saveRule}><Check size={16} />{ruleSaving ? "保存中..." : "保存规则"}</button></div>
+        </section>
+      </div>
+      <section className="admin-panel audit-panel">
+        <div className="admin-panel-head"><div><h2>积分流水</h2><p>共 {pagination.total} 条，当前显示第 {pagination.page} / {pagination.pages} 页</p></div></div>
+        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>类型</th><th>变动</th><th>变动后余额</th><th>说明</th><th>时间</th></tr></thead><tbody>{ledger.map((row) => <tr key={row.id}><td><div className="table-main"><span className="table-avatar">{row.account.user.nickname.slice(0, 1)}</span><div><strong>{row.account.user.nickname}</strong><small>{row.account.user.kuaishouId}</small></div></div></td><td>{row.type}</td><td className={row.amount >= 0 ? "positive-text" : "negative-text"}>{row.amount >= 0 ? "+" : ""}{row.amount.toLocaleString()}</td><td>{row.balanceAfter.toLocaleString()}</td><td>{row.note ?? "—"}</td><td>{formatAdminDate(row.createdAt)}</td></tr>)}{ledger.length === 0 && <tr><td colSpan={6}>暂无积分流水</td></tr>}</tbody></table></div>
+        {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={onLoadMore}>加载更多流水 <ChevronDown size={15} /></button></div>}
       </section>
     </>
   );
@@ -538,21 +705,35 @@ export default function AdminPage() {
     Promise.all([
       fetch("/api/admin/dashboard", { cache: "no-store" }),
       fetch("/api/admin/videos", { cache: "no-store" }),
+      fetch("/api/admin/video-appeals", { cache: "no-store" }),
       fetch("/api/admin/users", { cache: "no-store" }),
       fetch("/api/admin/gifts", { cache: "no-store" }),
       fetch("/api/admin/orders", { cache: "no-store" }),
       fetch("/api/admin/rankings", { cache: "no-store" }),
-    ]).then(async ([dashboardResponse, videosResponse, usersResponse, giftsResponse, ordersResponse, rankingsResponse]) => {
-      if ([dashboardResponse, videosResponse, usersResponse, giftsResponse, ordersResponse, rankingsResponse].some((response) => response.status === 401 || response.status === 403)) {
+      fetch("/api/admin/points?take=50", { cache: "no-store" }),
+      fetch("/api/admin/point-rules", { cache: "no-store" }),
+    ]).then(async ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, rankingsResponse, pointsResponse, pointRulesResponse]) => {
+      if ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, rankingsResponse, pointsResponse, pointRulesResponse].some((response) => response.status === 401 || response.status === 403)) {
         router.replace("/login");
         return;
       }
-      const [dashboard, videos, users, gifts, orders, rankings] = await Promise.all([
-        dashboardResponse.json(), videosResponse.json(), usersResponse.json(), giftsResponse.json(), ordersResponse.json(), rankingsResponse.json(),
+      const [dashboard, videos, appeals, users, gifts, orders, rankings, points, pointRules] = await Promise.all([
+        dashboardResponse.json(), videosResponse.json(), appealsResponse.json(), usersResponse.json(), giftsResponse.json(), ordersResponse.json(), rankingsResponse.json(), pointsResponse.json(), pointRulesResponse.json(),
       ]);
       if (!dashboardResponse.ok) throw new Error(dashboard.error ?? "后台数据加载失败");
       if (activeRequest) {
-        setData({ ...dashboard, videos: videos.videos ?? [], users: users.users ?? [], gifts: gifts.gifts ?? [], orders: orders.orders ?? [], periods: rankings.periods ?? [] });
+        setData({
+          ...dashboard,
+          videos: videos.videos ?? [],
+          appeals: appeals.appeals ?? [],
+          users: users.users ?? [],
+          gifts: gifts.gifts ?? [],
+          orders: orders.orders ?? [],
+          periods: rankings.periods ?? [],
+          pointLedger: points.ledger ?? [],
+          pointPagination: points.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
+          pointRule: pointRules.rule,
+        });
       }
     }).catch((loadError) => {
       if (activeRequest) setError(loadError instanceof Error ? loadError.message : "后台数据加载失败");
@@ -576,6 +757,30 @@ export default function AdminPage() {
       ...current,
       videos: current.videos.filter((item) => item.id !== video.id),
       metrics: { ...current.metrics, pendingVideos: ["PENDING_REVIEW", "FAILED"].includes(video.status) ? Math.max(0, current.metrics.pendingVideos - 1) : current.metrics.pendingVideos },
+    } : current);
+  }
+  async function handleAppealAction(appeal: AdminAppeal, action: "approve" | "reject") {
+    const reason = action === "reject" ? window.prompt("请输入驳回申诉原因") : window.prompt("可选：填写复查说明或留空使用默认积分");
+    if (action === "reject" && !reason) return;
+    let points: number | undefined;
+    if (action === "approve") {
+      const raw = window.prompt(`请输入核定积分（当前抓取点赞 ${appeal.video.likes ?? 0}，建议 ${appeal.video.points || "自动计算"}）`, String(appeal.video.points || ""));
+      if (raw !== null && raw.trim() !== "") {
+        points = Number(raw);
+        if (!Number.isInteger(points) || points < 0) { window.alert("积分必须是非负整数"); return; }
+      }
+    }
+    const response = await fetch(`/api/admin/video-appeals/${appeal.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, reason, points }),
+    });
+    const result = await response.json();
+    if (!response.ok) { window.alert(result.error ?? "申诉处理失败"); return; }
+    setData((current) => current ? {
+      ...current,
+      appeals: current.appeals.filter((item) => item.id !== appeal.id),
+      metrics: { ...current.metrics, pendingVideos: Math.max(0, current.metrics.pendingVideos - 1) },
     } : current);
   }
   async function handleOrderAction(order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") {
@@ -668,6 +873,47 @@ export default function AdminPage() {
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
   }
+  async function handlePointAdjustment(input: { userId: string; amount: number; reason: string }) {
+    const response = await fetch("/api/admin/points", {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
+      body: JSON.stringify(input),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "积分调整失败");
+    setData((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        metrics: { ...current.metrics, totalBalance: current.metrics.totalBalance + input.amount },
+        users: current.users.map((user) => user.id === input.userId ? { ...user, account: { balance: result.balance } } : user),
+        pointLedger: [result.ledger, ...current.pointLedger.filter((row: AdminPointLedgerRow) => row.id !== result.ledger.id)],
+        pointPagination: { ...current.pointPagination, total: current.pointPagination.total + 1 },
+      };
+    });
+  }
+  async function handlePointRuleSave(input: VideoPointRule) {
+    const response = await fetch("/api/admin/point-rules", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
+      body: JSON.stringify(input),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "积分规则保存失败");
+    setData((current) => current ? { ...current, pointRule: result.rule } : current);
+  }
+  async function loadMorePointLedger() {
+    if (!data || data.pointPagination.page >= data.pointPagination.pages) return;
+    const nextPage = data.pointPagination.page + 1;
+    const response = await fetch(`/api/admin/points?page=${nextPage}&take=${data.pointPagination.take}`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "积分流水加载失败");
+    setData((current) => current ? {
+      ...current,
+      pointLedger: [...current.pointLedger, ...(result.ledger ?? [])],
+      pointPagination: result.pagination,
+    } : current);
+  }
   async function handleGiftSave(input: { name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl?: string | null; description?: string | null; active: boolean }) {
     const gift = giftEditor?.gift;
     const response = await fetch(gift ? `/api/admin/gifts/${gift.id}` : "/api/admin/gifts", {
@@ -684,8 +930,9 @@ export default function AdminPage() {
   }
   const render = () => {
     if (!data) return null;
-    if (active === "videos") return <VideosAdmin rows={data.videos} onAction={handleVideoAction} />;
+    if (active === "videos") return <AppealsAdmin rows={data.appeals} onAction={handleAppealAction} />;
     if (active === "users") return <UsersAdmin rows={data.users} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} />;
+    if (active === "points") return <PointsAdmin users={data.users} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} onAction={handleOrderAction} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} gifts={data.gifts} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
@@ -701,7 +948,7 @@ export default function AdminPage() {
       <section className="admin-main">
         <header className="admin-topbar">
           <button className="mobile-admin-menu" aria-label="打开菜单"><MoreHorizontal size={20} /></button>
-          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与审核" : active === "users" ? "用户与公会" : active === "gifts" ? "积分与礼品" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : "审计日志"}</strong></div>
+          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : "审计日志"}</strong></div>
           <div className="admin-top-actions"><button className="icon-button"><Bell size={18} /></button><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
         </header>
         <div className="admin-content">{render()}</div>

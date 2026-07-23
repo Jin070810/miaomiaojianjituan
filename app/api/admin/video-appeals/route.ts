@@ -5,13 +5,16 @@ import { db } from "@/lib/db";
 export async function GET() {
   try {
     await requireAdmin();
-    const videos = await db.videoSubmission.findMany({
-      where: { status: { in: ["APPROVED", "REJECTED", "REVOKED"] } },
-      include: { user: { select: { kuaishouId: true, nickname: true } } },
-      orderBy: { submittedAt: "desc" },
-      take: 300,
+    const appeals = await db.videoAppeal.findMany({
+      where: { status: "PENDING" },
+      include: {
+        video: true,
+        user: { select: { id: true, kuaishouId: true, nickname: true } },
+      },
+      orderBy: { createdAt: "asc" },
+      take: 200,
     });
-    return NextResponse.json({ videos });
+    return NextResponse.json({ appeals });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }

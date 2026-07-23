@@ -21,6 +21,12 @@ enum VideoStatus {
   FAILED
 }
 
+enum VideoAppealStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum LedgerType {
   VIDEO_REWARD
   TRANSFER_IN
@@ -81,6 +87,8 @@ model User {
   account          PointAccount?
   recipientProfile RecipientProfile?
   videos           VideoSubmission[]
+  videoAppeals     VideoAppeal[]      @relation("AppealRequester")
+  reviewedAppeals  VideoAppeal[]      @relation("AppealReviewer")
   rankingEntries   RankingEntry[]
   rankingAwards    RankingAward[]
   outgoing         Transfer[]           @relation("sender")
@@ -139,6 +147,19 @@ model PointLedger {
   @@index([referenceId])
 }
 
+model VideoPointRule {
+  id                  String   @id @default("default")
+  minimumLikes        Int      @default(200)
+  fixedTierMaxLikes   Int      @default(1000)
+  fixedTierPoints     Int      @default(50)
+  likesDivisor        Int      @default(2)
+  maximumPoints       Int      @default(5000)
+  submissionWindowDays Int     @default(7)
+  updatedById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
 model VideoSubmission {
   id                String      @id @default(cuid())
   userId            String
@@ -162,10 +183,32 @@ model VideoSubmission {
   rawPayload        Json?
   idempotencyKey    String      @unique
   user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appeals           VideoAppeal[]
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
   @@index([photoId, status])
+}
+
+model VideoAppeal {
+  id              String            @id @default(cuid())
+  videoId         String
+  userId          String
+  reason          String
+  status          VideoAppealStatus @default(PENDING)
+  reviewReason    String?
+  reviewedPoints  Int?
+  idempotencyKey  String            @unique
+  createdAt       DateTime          @default(now())
+  reviewedAt      DateTime?
+  reviewedById    String?
+  video           VideoSubmission   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user            User              @relation("AppealRequester", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy      User?             @relation("AppealReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([videoId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model Transfer {

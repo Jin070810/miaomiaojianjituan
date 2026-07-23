@@ -14,3 +14,5 @@ output/feishu/inspect-report.json
 *.log
 backups/
 output/backup-drill/
+output/audit/
+output/dev.*

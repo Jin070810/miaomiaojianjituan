@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { normalizeKuaishouLink, calculateVideoPoints, ownerMatches } from "./kuaishou";
+import { normalizeKuaishouLink, calculateVideoPoints, compareOwnerNames } from "./kuaishou";
+import { DEFAULT_VIDEO_POINT_RULE, VideoPointRuleConfig } from "./point-rules";
 
 export type FetchedKuaishouVideo = {
   source: ReturnType<typeof normalizeKuaishouLink>;
@@ -11,6 +12,7 @@ export type FetchedKuaishouVideo = {
   points: number;
   rawHtml: string;
   ownerMatches: boolean;
+  ownerMatchMethod: ReturnType<typeof compareOwnerNames>["method"];
 };
 
 function runCurl(url: string, timeoutMs = 10_000) {
@@ -89,17 +91,38 @@ export function parseKuaishouHtml(rawHtml: string) {
   return { likes, views, publishedAt, photoId, owner: decodedOwner };
 }
 
-export async function fetchKuaishouVideo(input: string, submittedNickname: string): Promise<FetchedKuaishouVideo> {
+export async function fetchKuaishouVideo(
+  input: string,
+  submittedNickname: string,
+  rule: VideoPointRuleConfig = DEFAULT_VIDEO_POINT_RULE,
+): Promise<FetchedKuaishouVideo> {
   const source = normalizeKuaishouLink(input);
-  const rawHtml = await runCurl(source.requestUrl);
-  const parsed = parseKuaishouHtml(rawHtml);
-  return {
-    source,
-    ...parsed,
-    points: calculateVideoPoints(parsed.likes),
-    rawHtml,
-    ownerMatches: ownerMatches(submittedNickname, parsed.owner),
-  };
+  let lastError: unknown;
+  // Kuaishou occasionally returns a shell page before the embedded JSON is
+  // available. Retry the same normalized URL with a bounded backoff before
+  // treating it as an unavailable/deleted video.
+  const retryDelays = [0, 300, 800, 1_500, 3_000];
+  for (let attempt = 1; attempt <= retryDelays.length; attempt += 1) {
+    try {
+      if (retryDelays[attempt - 1] > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt - 1]));
+      }
+      const rawHtml = await runCurl(source.requestUrl);
+      const parsed = parseKuaishouHtml(rawHtml);
+      const ownerComparison = compareOwnerNames(submittedNickname, parsed.owner);
+      return {
+        source,
+        ...parsed,
+        points: calculateVideoPoints(parsed.likes, rule),
+        rawHtml,
+        ownerMatches: ownerComparison.matches,
+        ownerMatchMethod: ownerComparison.method,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("快手页面抓取失败，请稍后重试");
 }
 
 export { runCurl };

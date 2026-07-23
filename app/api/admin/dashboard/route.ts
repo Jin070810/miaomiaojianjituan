@@ -5,9 +5,9 @@ import { db } from "@/lib/db";
 export async function GET() {
   try {
     await requireAdmin();
-    const [users, pendingVideos, gifts, pendingOrders, recentAudit, accounts] = await Promise.all([
+    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts] = await Promise.all([
       db.user.count(),
-      db.videoSubmission.count({ where: { status: { in: ["PENDING_REVIEW", "FAILED"] } } }),
+      db.videoAppeal.count({ where: { status: "PENDING" } }),
       db.gift.count({ where: { active: true } }),
       db.redemptionOrder.count({ where: { status: "PENDING" } }),
       db.auditLog.findMany({
@@ -20,7 +20,8 @@ export async function GET() {
     return NextResponse.json({
       metrics: {
         users,
-        pendingVideos,
+        pendingVideos: pendingAppeals,
+        pendingAppeals,
         activeGifts: gifts,
         pendingOrders,
         totalBalance: accounts._sum.balance ?? 0,

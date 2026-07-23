@@ -1943,6 +1943,24 @@ a {
   line-height: 1.5;
 }
 
+.form-success {
+  margin: -2px 0 0;
+  color: #0b766c;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.admin-panel-form {
+  margin: 18px 20px 0;
+}
+
+.admin-panel-actions {
+  padding: 16px 20px 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .member-loading {
   min-height: 100dvh;
   padding: 22px 20px;

@@ -19,6 +19,9 @@ export async function POST(request: Request) {
     if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
       return NextResponse.json({ error: "快手ID或密码不正确" }, { status: 401 });
     }
+    if (!user.active) {
+      return NextResponse.json({ error: "账号已停用，请联系管理员" }, { status: 403 });
+    }
     await createSession(user.id);
     return NextResponse.json({
       user: { id: user.id, kuaishouId: user.kuaishouId, nickname: user.nickname, role: user.role },

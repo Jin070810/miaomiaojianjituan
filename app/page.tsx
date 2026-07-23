@@ -69,6 +69,14 @@ type DashboardData = {
     points: number;
     submittedAt: string;
     reviewReason: string | null;
+    appeals: Array<{
+      id: string;
+      reason: string;
+      status: "PENDING" | "APPROVED" | "REJECTED";
+      reviewReason: string | null;
+      reviewedPoints: number | null;
+      createdAt: string;
+    }>;
   }>;
   gifts: Array<{
     id: string;
@@ -395,15 +403,42 @@ function VideosView({
   onOpen: (dialog: DialogType) => void;
   data: DashboardData;
 }) {
+  const [appealingVideo, setAppealingVideo] = useState<DashboardData["videos"][number] | null>(null);
+  const [appealReason, setAppealReason] = useState("");
+  const [appealError, setAppealError] = useState("");
+  const [appealSaving, setAppealSaving] = useState(false);
+  const [submittedAppeals, setSubmittedAppeals] = useState<Record<string, boolean>>({});
+  async function submitAppeal() {
+    if (!appealingVideo) return;
+    setAppealSaving(true);
+    setAppealError("");
+    try {
+      const response = await fetch(`/api/videos/${appealingVideo.id}/appeal`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
+        body: JSON.stringify({ reason: appealReason }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "申诉提交失败");
+      setSubmittedAppeals((current) => ({ ...current, [appealingVideo.id]: true }));
+      setAppealingVideo(null);
+      setAppealReason("");
+    } catch (appealSubmitError) {
+      setAppealError(appealSubmitError instanceof Error ? appealSubmitError.message : "申诉提交失败");
+    } finally {
+      setAppealSaving(false);
+    }
+  }
   const rows = data.videos.map((video) => ({
     ...video,
     title: video.sourceUrl,
     date: formatDate(video.submittedAt),
     likesLabel: video.likes === null ? "抓取中" : `${video.likes.toLocaleString()} 赞`,
-    pointsLabel: video.points > 0 ? `+${video.points.toLocaleString()}` : video.status === "APPROVED" ? "0" : "待处理",
+    pointsLabel: video.points > 0 ? `+${video.points.toLocaleString()}` : video.status === "PROCESSING" ? "处理中" : "0",
   }));
   return (
-    <div className="member-content">
+    <>
+      <div className="member-content">
       <section className="page-header-row">
         <div>
           <span className="eyebrow">CONTENT CONTRIBUTION</span>
@@ -449,26 +484,53 @@ function VideosView({
                 {video.status === "APPROVED" && (
                   <span className="status-chip success">已到账</span>
                 )}
-                {(video.status === "PROCESSING" || video.status === "FAILED") && (
+                {video.status === "PROCESSING" && (
                   <span className="status-chip warning">处理中</span>
                 )}
-                {(video.status === "PENDING_REVIEW" || video.status === "REJECTED") && (
-                  <span className="status-chip danger">异常</span>
+                {video.status === "REJECTED" && (
+                  <span className="status-chip danger">已驳回</span>
                 )}
               </div>
               <span className="video-date">{video.date}</span>
               <div className="video-foot">
-                <span className="video-note">{video.reviewReason ?? (video.status === "APPROVED" ? "作者匹配，积分已到账" : "系统正在处理")}</span>
+                <span className="video-note">
+                  {submittedAppeals[video.id] || video.appeals[0]?.status === "PENDING"
+                    ? "申诉待复查"
+                    : video.appeals[0]?.status === "APPROVED"
+                      ? `申诉已通过${video.appeals[0].reviewedPoints !== null ? `，核定 ${video.appeals[0].reviewedPoints} 积分` : ""}`
+                      : video.appeals[0]?.status === "REJECTED"
+                        ? `申诉未通过：${video.appeals[0].reviewReason ?? "请查看处理结果"}`
+                        : video.reviewReason ?? (video.status === "APPROVED" ? "作者匹配，积分已到账" : "系统正在处理")}
+                </span>
                 <b className={video.points > 0 ? "positive-text" : "muted-text"}>
                   {video.pointsLabel}
                 </b>
               </div>
+              {video.status === "REJECTED" && !video.appeals.some((appeal) => appeal.status === "PENDING") && !submittedAppeals[video.id] && (
+                <button className="secondary-button compact-button appeal-button" onClick={() => { setAppealingVideo(video); setAppealError(""); }}>
+                  <CircleHelp size={16} /> 申诉
+                </button>
+              )}
             </div>
           </article>
         ))}
         {rows.length === 0 && <p className="empty-copy">还没有提交视频，先完成第一次创作吧</p>}
-      </section>
-    </div>
+        </section>
+      </div>
+      {appealingVideo && (
+        <ModalShell title="提交视频申诉" eyebrow="VIDEO APPEAL" onClose={() => setAppealingVideo(null)}>
+          <p className="modal-lead">请说明为何该视频应当重新复查。管理员只处理已自动驳回视频的申诉。</p>
+          <div className="field">
+            <label htmlFor="appeal-reason">申诉理由</label>
+            <textarea id="appeal-reason" value={appealReason} onChange={(event) => setAppealReason(event.target.value)} maxLength={1000} rows={5} placeholder="例如：作者名仅使用了不同装饰字符，实际为本人账号" />
+          </div>
+          {appealError && <p className="form-error" role="alert">{appealError}</p>}
+          <button className="primary-button full-button modal-submit" disabled={appealSaving || appealReason.trim().length < 2} onClick={submitAppeal}>
+            <Send size={17} /> {appealSaving ? "提交中..." : "提交申诉"}
+          </button>
+        </ModalShell>
+      )}
+    </>
   );
 }
 

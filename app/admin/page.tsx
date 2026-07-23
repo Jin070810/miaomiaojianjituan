@@ -17,6 +17,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   MoreHorizontal,
   PackageCheck,
   Search,
@@ -32,7 +33,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "logs";
+type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "announcements" | "logs";
 
 type AdminVideo = {
   id: string;
@@ -135,6 +136,18 @@ type AdminRankingPeriod = {
   awards: AdminRankingAward[];
 };
 type AdminPagination = { page: number; take: number; total: number; pages: number };
+type AdminAnnouncement = {
+  id: string;
+  title: string;
+  content: string;
+  status: "DRAFT" | "PUBLISHED" | "WITHDRAWN";
+  audience: "ALL" | "SELECTED";
+  createdAt: string;
+  publishedAt: string | null;
+  withdrawnAt: string | null;
+  recipients: Array<{ userId: string; user: { id: string; nickname: string; kuaishouId: string } }>;
+  _count: { notifications: number };
+};
 type AdminData = {
   metrics: { users: number; pendingVideos: number; activeGifts: number; pendingOrders: number; totalBalance: number };
   pointsTrend: Array<{ label: string; videoReward: number; adminAdjustment: number }>;
@@ -145,6 +158,7 @@ type AdminData = {
   gifts: AdminGiftRow[];
   orders: AdminOrderRow[];
   periods: AdminRankingPeriod[];
+  announcements: AdminAnnouncement[];
   pointLedger: AdminPointLedgerRow[];
   pointRule: VideoPointRule;
   pointPagination: AdminPagination;
@@ -232,6 +246,7 @@ function AdminSidebar({
         { id: "gifts" as const, label: "礼品管理", icon: Gift },
         { id: "orders" as const, label: "兑换订单", icon: PackageCheck, badge: pendingOrders ? pendingOrders.toString() : undefined },
         { id: "rankings" as const, label: "榜单结算", icon: Trophy },
+        { id: "announcements" as const, label: "公告通知", icon: Megaphone },
       ],
     },
     {
@@ -775,6 +790,141 @@ function RankingsAdmin({
   );
 }
 
+function AnnouncementsAdmin({
+  rows,
+  users,
+  onSave,
+  onAction,
+}: {
+  rows: AdminAnnouncement[];
+  users: AdminUserRow[];
+  onSave: (input: { id?: string; title: string; content: string; audience: "ALL" | "SELECTED"; recipientIds?: string[] }) => Promise<AdminAnnouncement>;
+  onAction: (id: string, action: "publish" | "withdraw") => Promise<void>;
+}) {
+  const [editingId, setEditingId] = useState<string | undefined>();
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [audience, setAudience] = useState<"ALL" | "SELECTED">("ALL");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [actionId, setActionId] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [error, setError] = useState("");
+
+  const activeMembers = users.filter((user) => user.active && user.role === "MEMBER");
+  const filteredMembers = activeMembers.filter((user) => {
+    const query = search.trim().toLowerCase();
+    return !query || user.nickname.toLowerCase().includes(query) || user.kuaishouId.toLowerCase().includes(query);
+  });
+
+  function resetEditor() {
+    setEditingId(undefined);
+    setTitle("");
+    setContent("");
+    setAudience("ALL");
+    setSelectedIds([]);
+    setFeedback("");
+    setError("");
+  }
+
+  function edit(row: AdminAnnouncement) {
+    setEditingId(row.id);
+    setTitle(row.title);
+    setContent(row.content);
+    setAudience(row.audience);
+    setSelectedIds(row.recipients.map((recipient) => recipient.userId));
+    setFeedback("");
+    setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function toggleMember(id: string) {
+    setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  }
+
+  async function save(publish = false) {
+    if (!title.trim() || !content.trim() || (audience === "SELECTED" && selectedIds.length === 0)) {
+      setError(audience === "SELECTED" ? "请填写标题、正文并选择至少一名有效成员" : "请填写公告标题和正文");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setFeedback("");
+    try {
+      const saved = await onSave({ id: editingId, title: title.trim(), content, audience, recipientIds: audience === "SELECTED" ? selectedIds : [] });
+      setEditingId(saved.id);
+      if (publish) {
+        setActionId(saved.id);
+        await onAction(saved.id, "publish");
+        setFeedback("公告已发布，通知已在同一事务内发送给目标成员。");
+        resetEditor();
+      } else {
+        setFeedback("草稿已保存。");
+      }
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "公告保存失败");
+    } finally {
+      setSaving(false);
+      setActionId("");
+    }
+  }
+
+  async function action(id: string, next: "publish" | "withdraw") {
+    setActionId(id);
+    setError("");
+    setFeedback("");
+    try {
+      await onAction(id, next);
+      setFeedback(next === "publish" ? "公告已发布。" : "公告已撤回，未读提醒已关闭。");
+      if (editingId === id) resetEditor();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "公告操作失败");
+    } finally {
+      setActionId("");
+    }
+  }
+
+  return (
+    <>
+      <div className="admin-page-title">
+        <div><span className="eyebrow">MESSAGE CENTER</span><h1>公告通知</h1><p>公告发布后不可编辑；撤回会保留审计记录并停止未读弹窗。</p></div>
+        <button className="secondary-button" onClick={resetEditor}><Megaphone size={16} />新建公告</button>
+      </div>
+      {(error || feedback) && <p className={error ? "form-error" : "form-success"} role="status">{error || feedback}</p>}
+      <div className="admin-dashboard-grid">
+        <section className="admin-panel audit-panel">
+          <div className="admin-panel-head"><div><h2>{editingId ? "编辑公告草稿" : "创建公告草稿"}</h2><p>正文按纯文本保存，支持换行，不渲染 HTML。</p></div><Megaphone size={19} color="#ff5a3d" /></div>
+          <div className="field admin-panel-form"><label htmlFor="announcement-title">标题</label><input id="announcement-title" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} placeholder="例如：本周活动说明" /></div>
+          <div className="field admin-panel-form"><label htmlFor="announcement-content">正文</label><textarea id="announcement-content" rows={8} value={content} onChange={(event) => setContent(event.target.value)} maxLength={5000} placeholder="请输入公告内容，换行会原样保留。" /></div>
+          <div className="field admin-panel-form"><label htmlFor="announcement-audience">发送范围</label><select id="announcement-audience" value={audience} onChange={(event) => setAudience(event.target.value as "ALL" | "SELECTED")}><option value="ALL">全体有效普通成员</option><option value="SELECTED">定向成员</option></select></div>
+          {audience === "SELECTED" && (
+            <div className="announcement-recipient-picker">
+              <div className="announcement-recipient-head"><strong>选择成员（已选 {selectedIds.length} 人）</strong><div className="admin-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索昵称或快手 ID" /></div></div>
+              <div className="announcement-recipient-list">
+                {filteredMembers.map((user) => <label className="checkbox-field" key={user.id}><input type="checkbox" checked={selectedIds.includes(user.id)} onChange={() => toggleMember(user.id)} /><span>{user.nickname} · {user.kuaishouId}</span></label>)}
+                {filteredMembers.length === 0 && <span className="field-hint">没有匹配的有效普通成员</span>}
+              </div>
+            </div>
+          )}
+          <div className="admin-panel-actions"><button className="secondary-button" disabled={saving} onClick={() => void save(false)}>{saving ? "保存中..." : "保存草稿"}</button><button className="primary-button" disabled={saving} onClick={() => void save(true)}><Megaphone size={16} />{saving ? "处理中..." : "保存并立即发布"}</button></div>
+        </section>
+        <section className="admin-panel audit-panel">
+          <div className="admin-panel-head"><div><h2>发布记录</h2><p>全员公告只发送给发布时已存在且有效的普通成员。</p></div></div>
+          <div className="announcement-history">
+            {rows.map((row) => <article className="announcement-history-row" key={row.id}>
+              <div className="announcement-history-main"><div><strong>{row.title}</strong><span>{row.audience === "ALL" ? "全体成员" : `定向 ${row.recipients.length} 人`} · {formatAdminDate(row.createdAt)}</span></div><span className={`status-chip ${row.status === "PUBLISHED" ? "success" : row.status === "WITHDRAWN" ? "danger" : "warning"}`}>{row.status === "PUBLISHED" ? "已发布" : row.status === "WITHDRAWN" ? "已撤回" : "草稿"}</span></div>
+              <p>{row.status === "WITHDRAWN" ? "该公告已撤回，成员端正文已隐藏。" : row.content}</p>
+              <div className="announcement-history-actions">{row.status === "DRAFT" && <><button className="secondary-button compact-button" onClick={() => edit(row)}>编辑</button><button className="primary-button compact-button" disabled={actionId === row.id} onClick={() => void action(row.id, "publish")}>发布</button></>}{row.status === "PUBLISHED" && <button className="danger-button compact-button" disabled={actionId === row.id} onClick={() => void action(row.id, "withdraw")}>撤回</button>}</div>
+            </article>)}
+            {rows.length === 0 && <div className="empty-state"><Megaphone size={25} /><strong>还没有公告</strong><span>创建草稿后会显示在这里</span></div>}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
 function LogsAdmin({ rows, pagination, onLoadMore, onSearch }: { rows: AdminAuditRow[]; pagination: AdminPagination; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void> }) {
   const [query, setQuery] = useState("");
   async function submitSearch() {
@@ -805,20 +955,21 @@ export default function AdminPage() {
       fetch("/api/admin/dashboard", { cache: "no-store" }),
       fetch("/api/admin/videos", { cache: "no-store" }),
       fetch("/api/admin/video-appeals", { cache: "no-store" }),
-      fetch("/api/admin/users", { cache: "no-store" }),
+      fetch("/api/admin/users?take=200", { cache: "no-store" }),
       fetch("/api/admin/gifts", { cache: "no-store" }),
       fetch("/api/admin/orders", { cache: "no-store" }),
       fetch("/api/admin/audit-logs?take=50", { cache: "no-store" }),
       fetch("/api/admin/rankings", { cache: "no-store" }),
+      fetch("/api/admin/announcements?take=50", { cache: "no-store" }),
       fetch("/api/admin/points?take=50", { cache: "no-store" }),
       fetch("/api/admin/point-rules", { cache: "no-store" }),
-    ]).then(async ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, pointsResponse, pointRulesResponse]) => {
-      if ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, pointsResponse, pointRulesResponse].some((response) => response.status === 401 || response.status === 403)) {
+    ]).then(async ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, announcementsResponse, pointsResponse, pointRulesResponse]) => {
+      if ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, announcementsResponse, pointsResponse, pointRulesResponse].some((response) => response.status === 401 || response.status === 403)) {
         router.replace("/login");
         return;
       }
-      const [dashboard, videos, appeals, users, gifts, orders, audit, rankings, points, pointRules] = await Promise.all([
-        dashboardResponse.json(), videosResponse.json(), appealsResponse.json(), usersResponse.json(), giftsResponse.json(), ordersResponse.json(), auditResponse.json(), rankingsResponse.json(), pointsResponse.json(), pointRulesResponse.json(),
+      const [dashboard, videos, appeals, users, gifts, orders, audit, rankings, announcements, points, pointRules] = await Promise.all([
+        dashboardResponse.json(), videosResponse.json(), appealsResponse.json(), usersResponse.json(), giftsResponse.json(), ordersResponse.json(), auditResponse.json(), rankingsResponse.json(), announcementsResponse.json(), pointsResponse.json(), pointRulesResponse.json(),
       ]);
       if (!dashboardResponse.ok) throw new Error(dashboard.error ?? "后台数据加载失败");
       if (activeRequest) {
@@ -829,7 +980,7 @@ export default function AdminPage() {
           appeals: appeals.appeals ?? [],
           appealsPagination: appeals.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
           users: users.users ?? [],
-          usersPagination: users.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
+          usersPagination: users.pagination ?? { page: 1, take: 200, total: 0, pages: 1 },
           gifts: gifts.gifts ?? [],
           orders: orders.orders ?? [],
           ordersPagination: orders.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
@@ -837,6 +988,7 @@ export default function AdminPage() {
           pointsTrend: dashboard.pointsTrend ?? [],
           auditPagination: audit.pagination ?? { page: 1, take: 50, total: (audit.audit ?? dashboard.audit ?? []).length, pages: 1 },
           periods: rankings.periods ?? [],
+          announcements: announcements.announcements ?? [],
           pointLedger: points.ledger ?? [],
           pointPagination: points.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
           pointRule: pointRules.rule,
@@ -852,6 +1004,32 @@ export default function AdminPage() {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error ?? fallbackMessage);
     return result;
+  }
+  async function saveAnnouncement(input: { id?: string; title: string; content: string; audience: "ALL" | "SELECTED"; recipientIds?: string[] }) {
+    const response = await fetch(input.id ? `/api/admin/announcements/${input.id}` : "/api/admin/announcements", {
+      method: input.id ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input.id ? { action: "update", ...input } : input),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "公告保存失败");
+    const announcement = result.announcement as AdminAnnouncement;
+    setData((current) => current ? {
+      ...current,
+      announcements: input.id ? current.announcements.map((row) => row.id === input.id ? announcement : row) : [announcement, ...current.announcements],
+    } : current);
+    return announcement;
+  }
+  async function actionAnnouncement(id: string, action: "publish" | "withdraw") {
+    const response = await fetch(`/api/admin/announcements/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "公告操作失败");
+    const announcement = result.announcement as AdminAnnouncement;
+    setData((current) => current ? { ...current, announcements: current.announcements.map((row) => row.id === id ? { ...row, ...announcement } : row) } : current);
   }
   async function loadVideos(input: { page?: number; search?: string; status?: string; append?: boolean }) {
     if (!data) return;
@@ -1183,6 +1361,7 @@ export default function AdminPage() {
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
+    if (active === "announcements") return <AnnouncementsAdmin rows={data.announcements} users={data.users} onSave={saveAnnouncement} onAction={actionAnnouncement} />;
     if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} onSearch={(search) => loadAudit({ search })} />;
     return <Overview data={data} />;
   };
@@ -1195,7 +1374,7 @@ export default function AdminPage() {
       <section className="admin-main">
         <header className="admin-topbar">
           <button className="mobile-admin-menu" aria-label="打开菜单"><MoreHorizontal size={20} /></button>
-          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : "审计日志"}</strong></div>
+          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "announcements" ? "公告通知" : "审计日志"}</strong></div>
           <div className="admin-top-actions"><button className="icon-button"><Bell size={18} /></button><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
         </header>
         <div className="admin-content">{render()}</div>

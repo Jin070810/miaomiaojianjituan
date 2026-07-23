@@ -5,6 +5,7 @@ import { fetchKuaishouVideo } from "./kuaishou-fetch";
 import { videoEligibilityError } from "./kuaishou";
 import { creditVideoReward } from "./points";
 import { getVideoPointRule } from "./point-rules";
+import { createNotification } from "./notifications";
 
 function connection() {
   const url = new URL(process.env.REDIS_URL ?? "redis://127.0.0.1:6379");
@@ -58,6 +59,16 @@ async function autoRejectVideo(
         },
         reason,
       },
+    });
+    await createNotification(tx, {
+      userId: current.userId,
+      type: "VIDEO_RESULT",
+      title: "视频未通过校验",
+      body: reason,
+      entityType: "VideoSubmission",
+      entityId: videoId,
+      metadata: { status: "REJECTED" },
+      dedupeKey: `video:${videoId}:auto-rejected:${updated.reviewedAt?.toISOString() ?? "final"}`,
     });
     return updated;
   });

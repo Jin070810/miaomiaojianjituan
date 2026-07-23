@@ -3,6 +3,7 @@ import { LedgerType, Prisma, PrismaClient } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { calculateVideoPoints } from "./kuaishou";
 import { getVideoPointRule } from "./point-rules";
+import { createNotification } from "./notifications";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -114,6 +115,26 @@ export async function completeTransfer(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: input.senderId,
+      type: "TRANSFER",
+      title: "积分转账已完成",
+      body: `已向 ${receiver.nickname} 转出 ${input.amount} 积分${input.note ? `：${input.note}` : ""}`,
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadata: { amount: -input.amount },
+      dedupeKey: `transfer:${transfer.id}:sender`,
+    });
+    await createNotification(tx, {
+      userId: input.receiverId,
+      type: "TRANSFER",
+      title: "收到积分转账",
+      body: `${sender.nickname} 向你转入 ${input.amount} 积分${input.note ? `：${input.note}` : ""}`,
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadata: { amount: input.amount },
+      dedupeKey: `transfer:${transfer.id}:receiver`,
+    });
     return transfer;
     });
   } catch (error) {
@@ -168,6 +189,16 @@ export async function adminAdjustPoints(input: {
           ip: input.ip,
           requestId: input.idempotencyKey,
         },
+      });
+      await createNotification(tx, {
+        userId: input.userId,
+        type: "POINTS",
+        title: input.amount > 0 ? "管理员发放积分" : "管理员扣减积分",
+        body: `${input.amount > 0 ? "增加" : "扣减"} ${Math.abs(input.amount)} 积分，当前余额 ${account.balance} 分。原因：${reason}`,
+        entityType: "PointLedger",
+        entityId: ledger.id,
+        metadata: { amount: input.amount, balanceAfter: account.balance },
+        dedupeKey: `admin-points:${input.idempotencyKey}:${input.userId}`,
       });
       return { ledger, balance: account.balance };
     });
@@ -269,6 +300,16 @@ export async function redeemGift(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: input.userId,
+      type: "REDEMPTION",
+      title: "兑换申请已提交",
+      body: `已使用 ${totalCost} 积分兑换 ${gift.name}，订单进入待发货状态`,
+      entityType: "RedemptionOrder",
+      entityId: order.id,
+      metadata: { amount: -totalCost, status: order.status },
+      dedupeKey: `redemption:${order.id}:created`,
+    });
     return order;
     });
   } catch (error) {
@@ -307,6 +348,16 @@ export async function creditVideoReward(input: {
           ip: input.ip,
         },
       });
+      await createNotification(tx, {
+        userId: input.userId,
+        type: "VIDEO_RESULT",
+        title: "视频积分已调整",
+        body: `视频积分由 ${video.points} 分调整为 ${input.points} 分，本次变动 ${delta >= 0 ? "+" : ""}${delta} 分`,
+        entityType: "VideoSubmission",
+        entityId: video.id,
+        metadata: { amount: delta, points: input.points, status: adjusted.status },
+        dedupeKey: `video:${video.id}:points:${input.points}`,
+      });
       return adjusted;
     }
     if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
@@ -335,6 +386,16 @@ export async function creditVideoReward(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: input.userId,
+      type: "VIDEO_RESULT",
+      title: "视频审核通过",
+      body: `视频已通过校验${input.points > 0 ? `，${input.points} 积分已到账` : ""}`,
+      entityType: "VideoSubmission",
+      entityId: video.id,
+      metadata: { amount: input.points, points: input.points, status: "APPROVED" },
+      dedupeKey: `video:${video.id}:approved`,
+    });
     return updated;
   });
 }
@@ -360,6 +421,16 @@ export async function rejectVideo(input: { videoId: string; reason: string; acto
         reason: input.reason,
         ip: input.ip,
       },
+    });
+    await createNotification(tx, {
+      userId: video.userId,
+      type: "VIDEO_RESULT",
+      title: "视频未通过审核",
+      body: input.reason,
+      entityType: "VideoSubmission",
+      entityId: video.id,
+      metadata: { status: "REJECTED" },
+      dedupeKey: `video:${video.id}:rejected:${updated.reviewedAt?.toISOString() ?? "manual"}`,
     });
     return updated;
   });
@@ -400,6 +471,16 @@ export async function resolveVideoAppeal(input: {
           reason,
           ip: input.ip,
         },
+      });
+      await createNotification(tx, {
+        userId: appeal.userId,
+        type: "APPEAL_RESULT",
+        title: "视频申诉未通过",
+        body: reason,
+        entityType: "VideoAppeal",
+        entityId: appeal.id,
+        metadata: { status: "REJECTED", videoId: appeal.videoId },
+        dedupeKey: `appeal:${appeal.id}:rejected`,
       });
       return updated;
     }
@@ -451,6 +532,16 @@ export async function resolveVideoAppeal(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: appeal.userId,
+      type: "APPEAL_RESULT",
+      title: "视频申诉已通过",
+      body: `申诉复查通过${points > 0 ? `，${points} 积分已到账` : ""}`,
+      entityType: "VideoAppeal",
+      entityId: appeal.id,
+      metadata: { amount: points, points, status: "APPROVED", videoId: appeal.videoId },
+      dedupeKey: `appeal:${appeal.id}:approved`,
+    });
     return updated;
   });
 }
@@ -481,6 +572,16 @@ export async function revokeVideoReward(input: { videoId: string; actorId: strin
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: video.userId,
+      type: "VIDEO_RESULT",
+      title: "视频奖励已撤销",
+      body: `${input.reason}${video.points > 0 ? `，已扣回 ${video.points} 积分` : ""}`,
+      entityType: "VideoSubmission",
+      entityId: video.id,
+      metadata: { amount: -video.points, status: "REVOKED" },
+      dedupeKey: `video:${video.id}:revoked`,
+    });
     return updated;
   });
 }
@@ -501,6 +602,16 @@ export async function updateRedemptionOrder(input: {
       await tx.auditLog.create({
         data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
       });
+      await createNotification(tx, {
+        userId: order.userId,
+        type: "REDEMPTION",
+        title: "兑换订单已确认",
+        body: `${order.gift.name} 已确认，等待发放`,
+        entityType: "RedemptionOrder",
+        entityId: order.id,
+        metadata: { status: "APPROVED" },
+        dedupeKey: `redemption:${order.id}:approved`,
+      });
       return updated;
     }
     if (input.action === "fulfill") {
@@ -514,6 +625,16 @@ export async function updateRedemptionOrder(input: {
       const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "FULFILLED", reviewedAt: new Date() } });
       await tx.auditLog.create({
         data: { actorId: input.actorId, action: "REDEMPTION_FULFILLED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
+      });
+      await createNotification(tx, {
+        userId: order.userId,
+        type: "REDEMPTION",
+        title: order.gift.kind === "CASH" ? "兑换已完成" : "礼品已发货",
+        body: `${order.gift.name} 已完成发放`,
+        entityType: "RedemptionOrder",
+        entityId: order.id,
+        metadata: { status: "FULFILLED" },
+        dedupeKey: `redemption:${order.id}:fulfilled`,
       });
       return updated;
     }
@@ -532,6 +653,16 @@ export async function updateRedemptionOrder(input: {
     const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
     await tx.auditLog.create({
       data: { actorId: input.actorId, action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status, refunded: order.totalCost }, reason: input.reason, ip: input.ip },
+    });
+    await createNotification(tx, {
+      userId: order.userId,
+      type: "REDEMPTION",
+      title: input.action === "refund" ? "兑换订单已退款" : "兑换订单已驳回",
+      body: `${order.gift.name} 已${input.action === "refund" ? "退款" : "驳回"}，${order.totalCost} 积分已退回${input.reason ? `。原因：${input.reason}` : ""}`,
+      entityType: "RedemptionOrder",
+      entityId: order.id,
+      metadata: { amount: order.totalCost, status: updated.status },
+      dedupeKey: `redemption:${order.id}:${updated.status.toLowerCase()}`,
     });
     return updated;
   });

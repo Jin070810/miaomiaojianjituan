@@ -34,7 +34,7 @@
 
 ## 当前阻塞
 
-1. 正式管理员快手 ID 已确认并在当前迁移数据库初始化。正式部署 workflow 已增加管理员初始化步骤；需要在 GitHub `production` Environment 配置以下变量后才能执行：
+1. 正式管理员快手 ID 已确认并在当前迁移数据库初始化。正式部署 workflow 已增加一次性管理员初始化步骤；首次上线时将 `bootstrap_admin` 设为 `true`，后续发布保持 `false`。需要在 GitHub `production` Environment 配置以下变量后才能执行：
 
    ```powershell
    Secret: ADMIN_KUAISHOU_IDS   # 15542018104

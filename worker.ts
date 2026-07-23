@@ -1,7 +1,6 @@
 import { Worker } from "bullmq";
 import "dotenv/config";
 import { connection, processVideoSubmission, recoverStaleVideoSubmissions } from "./lib/video-jobs";
-import { settleDueRankings } from "./lib/rankings";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
 
@@ -25,7 +24,6 @@ async function maintenance() {
   try {
     const [recovery] = await Promise.all([
       recoverStaleVideoSubmissions(),
-      settleDueRankings(),
       db.session.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
     ]);
     if (recovery.found > 0) {

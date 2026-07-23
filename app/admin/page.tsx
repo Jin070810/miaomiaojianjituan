@@ -125,6 +125,8 @@ type AdminRankingAward = {
   recipientName: string | null;
   recipientPhone: string | null;
   recipientAddress: string | null;
+  rewardTitle?: string | null;
+  rewardDescription?: string | null;
 };
 type AdminRankingPeriod = {
   id: string;
@@ -134,6 +136,8 @@ type AdminRankingPeriod = {
   status: "OPEN" | "SETTLED";
   settledAt: string | null;
   awards: AdminRankingAward[];
+  preview?: Array<{ rank: number; userId: string; nickname: string; kuaishouId: string; value: number; videoCount: number; likes: number }>;
+  settleable?: boolean;
 };
 type AdminPagination = { page: number; take: number; total: number; pages: number };
 type AdminAnnouncement = {
@@ -763,24 +767,47 @@ function RankingsAdmin({
   onAwardUpdate,
 }: {
   periods: AdminRankingPeriod[];
-  onSettle: (type: "week" | "month") => void;
+  onSettle: (type: "week" | "month", periodStart: string, rewards: Array<{ rank: number; title: string; description?: string }>) => Promise<void>;
   onAwardUpdate: (award: AdminRankingAward, input: { status?: "FULFILLED" }) => void;
 }) {
+  const [rewards, setRewards] = useState<Record<string, Record<number, { title: string; description: string }>>>({});
+  const [settling, setSettling] = useState("");
+  const [error, setError] = useState("");
+  function updateReward(periodId: string, rank: number, field: "title" | "description", value: string) {
+    setRewards((current) => ({ ...current, [periodId]: { ...(current[periodId] ?? {}), [rank]: { ...(current[periodId]?.[rank] ?? { title: "", description: "" }), [field]: value } } }));
+  }
+  async function settle(period: AdminRankingPeriod) {
+    const draft = rewards[period.id] ?? {};
+    const preview = period.preview ?? [];
+    const missing = preview.find((row) => !draft[row.rank]?.title.trim());
+    if (missing) {
+      setError(`请填写第 ${missing.rank} 名的奖励名称`);
+      return;
+    }
+    setSettling(period.id);
+    setError("");
+    try {
+      await onSettle(period.type === "WEEK" ? "week" : "month", period.periodStart, preview.map((row) => ({ rank: row.rank, title: draft[row.rank].title.trim(), description: draft[row.rank].description.trim() || undefined })));
+    } catch (settleError) {
+      setError(settleError instanceof Error ? settleError.message : "榜单结算失败");
+    } finally {
+      setSettling("");
+    }
+  }
   return (
     <>
       <div className="admin-page-title">
-        <div><span className="eyebrow">RANKING SETTLEMENT</span><h1>榜单结算</h1><p>周榜按通过视频数，月榜按提交时点赞总量；每期前五名进入领奖流程。</p></div>
-        <div className="table-actions-inline">
-          <button className="secondary-button" onClick={() => onSettle("week")}><Trophy size={16} />检查周榜结算</button>
-          <button className="secondary-button" onClick={() => onSettle("month")}><Trophy size={16} />检查月榜结算</button>
-        </div>
+        <div><span className="eyebrow">RANKING SETTLEMENT</span><h1>榜单结算</h1><p>只结算已结束周期；结算时保存奖励文字快照并向成员发送站内通知。</p></div>
       </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
       {periods.map((period) => (
         <section className="admin-panel audit-panel" key={period.id}>
           <div className="admin-panel-head">
-            <div><h2>{period.type === "WEEK" ? "周更新排行榜" : "月点赞量排行榜"}</h2><p>{new Date(period.periodStart).toLocaleDateString("zh-CN")} 至 {new Date(period.periodEnd).toLocaleDateString("zh-CN")} · {period.status === "SETTLED" ? "已结算" : "进行中"}</p></div>
-            <span className={`status-chip ${period.status === "SETTLED" ? "success" : "warning"}`}>{period.status === "SETTLED" ? "已结算" : "进行中"}</span>
+            <div><h2>{period.type === "WEEK" ? "周更新排行榜" : "月点赞量排行榜"}</h2><p>{new Date(period.periodStart).toLocaleDateString("zh-CN")} 至 {new Date(period.periodEnd).toLocaleDateString("zh-CN")} · {period.status === "SETTLED" ? "已结算" : period.settleable ? "待结算" : "进行中"}</p></div>
+            <span className={`status-chip ${period.status === "SETTLED" ? "success" : period.settleable ? "warning" : "teal"}`}>{period.status === "SETTLED" ? "已结算" : period.settleable ? "待结算" : "进行中"}</span>
           </div>
+          {period.status === "OPEN" && period.settleable && <div className="ranking-settlement-preview"><strong>前五名预览</strong>{(period.preview ?? []).length === 0 ? <span className="field-hint">本期暂无有效成绩，结算后会发送“暂无有效成绩”通知。</span> : <><div className="ranking-preview-list">{period.preview?.map((row) => <div key={row.userId}><span>{row.rank}</span><strong>{row.nickname}</strong><small>{row.kuaishouId}</small><b>{row.value.toLocaleString()} {period.type === "WEEK" ? "个视频" : "赞"}</b></div>)}</div>{period.preview?.map((row) => <div className="ranking-reward-fields" key={`reward-${row.rank}`}><span>第 {row.rank} 名奖励</span><input value={rewards[period.id]?.[row.rank]?.title ?? ""} onChange={(event) => updateReward(period.id, row.rank, "title", event.target.value)} placeholder="奖励名称（必填）" maxLength={120} /><input value={rewards[period.id]?.[row.rank]?.description ?? ""} onChange={(event) => updateReward(period.id, row.rank, "description", event.target.value)} placeholder="奖励说明（可选）" maxLength={500} /></div>)}</>}</div>}
+          {period.status === "OPEN" && period.settleable && <div className="admin-panel-actions"><button className="primary-button" disabled={settling === period.id} onClick={() => void settle(period)}><Trophy size={16} />{settling === period.id ? "结算中..." : "确认结算本期榜单"}</button></div>}
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>名次与成员</th><th>成绩</th><th>奖励</th><th>领奖状态</th><th>收货信息</th><th /></tr></thead>
@@ -789,7 +816,7 @@ function RankingsAdmin({
                   <tr key={award.id}>
                     <td><div className="table-main"><span className="table-avatar">{award.rank}</span><div><strong>{award.user.nickname}</strong><small>{award.user.kuaishouId}</small></div></div></td>
                     <td>{award.value.toLocaleString()} {period.type === "WEEK" ? "个视频" : "赞"}</td>
-                    <td>榜单奖励</td>
+                    <td><strong>{award.rewardTitle ?? "榜单奖励"}</strong>{award.rewardDescription && <small>{award.rewardDescription}</small>}</td>
                     <td><span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "待领奖" : award.status === "CLAIMED" ? "已填写" : award.status === "FULFILLED" ? "已完成" : award.status}</span></td>
                     <td>{award.recipientName ? <><strong>{award.recipientName}</strong><small>{award.recipientPhone}<br />{award.recipientAddress}</small></> : "尚未填写"}</td>
                     <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" onClick={() => onAwardUpdate(award, { status: "FULFILLED" })}>完成发放</button>}</td>
@@ -1283,11 +1310,11 @@ export default function AdminPage() {
     }
     window.alert("密码已重置，旧登录会话已失效。请通过安全方式将临时密码交给成员。");
   }
-  async function handleRankingSettle(type: "week" | "month") {
+  async function handleRankingSettle(type: "week" | "month", periodStart: string, rewards: Array<{ rank: number; title: string; description?: string }>) {
     const response = await fetch("/api/admin/rankings", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "settle", type }),
+      body: JSON.stringify({ action: "settle", type, periodStart, rewards }),
     });
     const result = await response.json();
     if (!response.ok) {
@@ -1297,7 +1324,7 @@ export default function AdminPage() {
     const refreshed = await fetch("/api/admin/rankings", { cache: "no-store" });
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
-    if (!result.settled) window.alert(result.reason ?? "该周期尚未结束");
+    if (!result.settled) window.alert(result.reason ?? "该周期已结算");
   }
   async function handleRankingAwardUpdate(award: AdminRankingAward, input: { status?: "FULFILLED" }) {
     const response = await fetch(`/api/admin/rankings/awards/${award.id}`, {

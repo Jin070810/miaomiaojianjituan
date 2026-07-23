@@ -23,6 +23,7 @@ type NotificationRow = {
   body: string;
   entityType: string | null;
   entityId: string | null;
+  metadata?: Record<string, unknown> | null;
   readAt: string | null;
   withdrawn?: boolean;
   createdAt: string;

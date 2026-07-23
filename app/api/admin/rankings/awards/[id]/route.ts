@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { assertSameOrigin, getClientIp } from "@/lib/security";
+import { createNotification } from "@/lib/notifications";
 
 const schema = z.object({
   giftId: z.string().min(1).optional(),
@@ -68,6 +69,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           ip: getClientIp(request),
         },
       });
+      if (input.status === "FULFILLED") {
+        await createNotification(tx, {
+          userId: updated.userId,
+          type: "RANKING_AWARD",
+          title: "榜单奖励已发放",
+          body: `第 ${updated.rank} 名奖励已完成发放。`,
+          entityType: "RankingAward",
+          entityId: updated.id,
+          metadata: { status: "FULFILLED", rank: updated.rank },
+          dedupeKey: `ranking-award:${updated.id}:fulfilled`,
+        });
+      }
       return updated;
     });
     return NextResponse.json({ award });

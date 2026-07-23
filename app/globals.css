@@ -590,6 +590,82 @@ a {
   margin-top: 5px;
 }
 
+.ranking-settlement-preview {
+  margin-bottom: 16px;
+  padding: 13px 14px;
+  border: 1px solid #eadfc4;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  background: #fffcf4;
+}
+
+.ranking-settlement-preview > strong {
+  font-size: 13px;
+}
+
+.ranking-preview-list {
+  display: grid;
+  gap: 5px;
+}
+
+.ranking-preview-list > div {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+
+.ranking-preview-list > div > span {
+  width: 20px;
+  color: var(--warning);
+  font-weight: 800;
+  text-align: center;
+}
+
+.ranking-preview-list > div > strong {
+  min-width: 70px;
+}
+
+.ranking-preview-list > div > small {
+  color: var(--subtle);
+}
+
+.ranking-preview-list > div > b {
+  margin-left: auto;
+  color: var(--brand-strong);
+}
+
+.ranking-reward-fields {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.ranking-reward-fields > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ranking-reward-fields input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid #ded7c7;
+  border-radius: 6px;
+  background: white;
+  outline: none;
+  font-size: 12px;
+}
+
+.ranking-reward-fields input:focus {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px rgba(184, 117, 10, 0.12);
+}
+
 .notification-heading-spacer {
   width: 42px;
   height: 42px;

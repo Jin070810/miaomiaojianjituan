@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { adminAdjustPoints, adminAdjustPointsBatch, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
-import { claimRankingAward, periodBounds, settleRanking } from "@/lib/rankings";
+import { claimRankingAward, periodBounds, settleRanking, settleRankingPeriod } from "@/lib/rankings";
 import { prepareVideoReprocess } from "@/lib/video-jobs";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
@@ -206,7 +206,14 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: "integration-ranking-video",
       },
     });
-    const first = await settleRanking("week", reference, new Date(bounds.end.getTime() + 1));
+    const period = await db.rankingPeriod.create({ data: { type: "WEEK", periodStart: bounds.start, periodEnd: bounds.end } });
+    const first = await settleRankingPeriod({
+      type: "week",
+      periodStart: period.periodStart,
+      rewards: [{ rank: 1, title: "定制礼盒", description: "测试奖励说明" }],
+      actorId: receiverId,
+      settledAt: new Date(bounds.end.getTime() + 1),
+    });
     rankingPeriodIds.push(first.period.id);
     const second = await settleRanking("week", reference, new Date(bounds.end.getTime() + 2));
     expect(first.settled).toBe(true);
@@ -214,6 +221,8 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     expect(await db.rankingEntry.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
     expect(await db.rankingAward.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
     const award = await db.rankingAward.findFirstOrThrow({ where: { periodId: first.period.id, userId: senderId } });
+    expect(award.rewardTitle).toBe("定制礼盒");
+    expect(await db.notification.count({ where: { entityType: "RankingAward", entityId: award.id } })).toBe(1);
     await db.rankingAward.update({ where: { id: award.id }, data: { status: "EXPIRED" } });
     await expect(claimRankingAward({ awardId: award.id, userId: senderId })).rejects.toThrow("已过期");
     const shippingAward = await db.rankingAward.create({

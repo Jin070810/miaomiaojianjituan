@@ -343,6 +343,8 @@ model RankingAward {
   userId              String
   rank                Int
   value               Int
+  rewardTitle        String?
+  rewardDescription  String?
   giftId              String?
   status              RankingAwardStatus @default(PENDING)
   recipientName       String?

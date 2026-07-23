@@ -54,6 +54,9 @@ jobs:
       - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
       - run: docker compose config
+      - run: |
+          docker compose config | grep -q 'HOSTNAME: 0.0.0.0'
+          docker compose config | grep -q 'http://127.0.0.1:3000/api/health'
       - run: docker compose build app
       - run: docker build --target worker -t miaomiao-points-worker:ci .
       - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts"

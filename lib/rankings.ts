@@ -1,6 +1,7 @@
 import { RankingPeriodType, Prisma } from "@prisma/client";
 import { db } from "./db";
 import { decryptSensitive, encryptSensitive } from "./security";
+import { createNotification } from "./notifications";
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -111,58 +112,149 @@ export async function getLiveRanking(kind: RankingKind, userId?: string, referen
   };
 }
 
-export async function settleRanking(kind: Exclude<RankingKind, "total">, periodReference = new Date(), settledAt = new Date()) {
-  const period = await ensurePeriod(db, kind, periodReference);
-  if (period.periodEnd > settledAt) return { period, settled: false, reason: "周期尚未结束" };
+export type RankingRewardInput = { rank: number; title: string; description?: string };
+
+export async function previewRankingPeriod(input: { type: Exclude<RankingKind, "total">; periodStart: Date }) {
+  const period = await db.rankingPeriod.findUnique({
+    where: { type_periodStart: { type: periodType(input.type), periodStart: input.periodStart } },
+  });
+  if (!period) return { period: null, rankings: [] };
+  const rows = await computeRows(db, input.type, period.periodStart, period.periodEnd);
+  const users = await userMap(db, rows.slice(0, 5).map((row) => row.userId));
+  return {
+    period,
+    rankings: rows.slice(0, 5).map((row, index) => ({
+      rank: index + 1,
+      userId: row.userId,
+      nickname: users.get(row.userId)?.nickname ?? "未知成员",
+      kuaishouId: users.get(row.userId)?.kuaishouId ?? "",
+      value: row.value,
+      videoCount: row.videoCount,
+      likes: row.likes,
+    })),
+  };
+}
+
+export async function listSettlementPeriods(reference = new Date()) {
+  for (const kind of ["week", "month"] as const) {
+    const current = periodBounds(kind, reference);
+    await ensurePeriod(db, kind, reference);
+    await ensurePeriod(db, kind, periodBounds(kind, new Date(current.start.getTime() - 1)).start);
+  }
+  return db.rankingPeriod.findMany({
+    where: { status: "OPEN", periodEnd: { lte: reference } },
+    orderBy: [{ periodEnd: "desc" }, { type: "asc" }],
+    take: 120,
+  });
+}
+
+export async function settleRankingPeriod(input: {
+  type: Exclude<RankingKind, "total">;
+  periodStart: Date;
+  rewards: RankingRewardInput[];
+  actorId: string;
+  ip?: string;
+  settledAt?: Date;
+  allowEmptyRewards?: boolean;
+}) {
+  const settledAt = input.settledAt ?? new Date();
+  const expected = periodBounds(input.type, input.periodStart);
+  if (expected.start.getTime() !== input.periodStart.getTime()) throw new Error("榜单周期起点不符合 Asia/Shanghai 边界");
+  const period = await db.rankingPeriod.findUnique({
+    where: { type_periodStart: { type: periodType(input.type), periodStart: input.periodStart } },
+  });
+  if (!period) throw new Error("榜单周期不存在");
+  if (period.periodEnd > settledAt) throw new Error("当前周期尚未结束，不能结算");
+  const rewardMap = new Map(input.rewards.map((reward) => [reward.rank, reward]));
   return db.$transaction(async (tx) => {
     const claimed = await tx.rankingPeriod.updateMany({
-      where: { id: period.id, status: "OPEN" },
+      where: { id: period.id, status: "OPEN", periodEnd: { lte: settledAt } },
       data: { status: "SETTLED", settledAt },
     });
     if (claimed.count !== 1) {
-      return { period: await tx.rankingPeriod.findUniqueOrThrow({ where: { id: period.id } }), settled: false, reason: "已结算" };
+      const current = await tx.rankingPeriod.findUniqueOrThrow({ where: { id: period.id } });
+      return { period: current, settled: false, reason: "已结算" };
     }
-    const rows = await computeRows(tx, kind, period.periodStart, period.periodEnd);
+    const rows = await computeRows(tx, input.type, period.periodStart, period.periodEnd);
+    if (!input.allowEmptyRewards && rows.some((_, index) => index < 5 && !rewardMap.get(index + 1)?.title.trim())) {
+      throw new Error("前五名实际获奖成员必须填写奖励名称");
+    }
+    const entries = [];
+    const awards = [];
     for (const [index, row] of rows.entries()) {
       const rank = index + 1;
-      await tx.rankingEntry.create({
+      const entry = await tx.rankingEntry.create({
         data: { periodId: period.id, userId: row.userId, rank, value: row.value, videoCount: row.videoCount, likes: row.likes },
       });
+      entries.push(entry);
       if (rank <= 5) {
-        await tx.rankingAward.create({
-          data: { periodId: period.id, userId: row.userId, rank, value: row.value },
+        const reward = rewardMap.get(rank);
+        const award = await tx.rankingAward.create({
+          data: {
+            periodId: period.id,
+            userId: row.userId,
+            rank,
+            value: row.value,
+            rewardTitle: reward?.title?.trim() || null,
+            rewardDescription: reward?.description?.trim() || null,
+          },
+        });
+        awards.push(award);
+      }
+    }
+    const members = await tx.user.findMany({ where: { active: true, role: "MEMBER" }, select: { id: true } });
+    const winnerByUser = new Map(awards.map((award) => [award.userId, award]));
+    for (const member of members) {
+      const award = winnerByUser.get(member.id);
+      if (award) {
+        await createNotification(tx, {
+          userId: member.id,
+          type: "RANKING_AWARD",
+          title: `${input.type === "week" ? "周榜" : "月榜"}结算完成：第 ${award.rank} 名`,
+          body: `本期成绩 ${award.value}，奖励：${award.rewardTitle ?? "待公布"}${award.rewardDescription ? `。${award.rewardDescription}` : ""}。请填写收货信息领取奖励。`,
+          entityType: "RankingAward",
+          entityId: award.id,
+          metadata: { rank: award.rank, value: award.value, rewardTitle: award.rewardTitle, action: "CLAIM_SHIPPING" },
+          dedupeKey: `ranking:${period.id}:${member.id}`,
+        });
+      } else {
+        await createNotification(tx, {
+          userId: member.id,
+          type: "RANKING_RESULT",
+          title: `${input.type === "week" ? "周榜" : "月榜"}已结算`,
+          body: rows.length ? `本期榜单已完成结算，共有 ${rows.length} 名成员上榜。` : "本期暂无有效成绩。",
+          entityType: "RankingPeriod",
+          entityId: period.id,
+          metadata: { type: input.type, hasResults: rows.length > 0 },
+          dedupeKey: `ranking:${period.id}:${member.id}`,
         });
       }
     }
     await tx.auditLog.create({
       data: {
+        actorId: input.actorId,
         action: "RANKING_SETTLED",
         entity: "RankingPeriod",
         entityId: period.id,
-        afterValue: { kind, periodStart: period.periodStart.toISOString(), periodEnd: period.periodEnd.toISOString(), topFive: rows.slice(0, 5) },
+        afterValue: { kind: input.type, periodStart: period.periodStart.toISOString(), periodEnd: period.periodEnd.toISOString(), topFive: rows.slice(0, 5), rewards: input.rewards },
+        ip: input.ip,
       },
     });
-    return { period: { ...period, status: "SETTLED" as const, settledAt }, settled: true };
+    return { period: { ...period, status: "SETTLED" as const, settledAt }, settled: true, entries, awards };
   });
 }
 
-export async function settleDueRankings(reference = new Date()) {
-  const results = [];
-  for (const kind of ["week", "month"] as const) {
-    const current = periodBounds(kind, reference);
-    const latest = await db.rankingPeriod.findFirst({
-      where: { type: periodType(kind), status: "SETTLED" },
-      orderBy: { periodStart: "desc" },
-    });
-    let cursor = latest?.periodEnd ?? periodBounds(kind, new Date(current.start.getTime() - 1)).start;
-    let safety = 0;
-    while (cursor < current.start && safety < 120) {
-      results.push(await settleRanking(kind, cursor, reference));
-      cursor = periodBounds(kind, cursor).end;
-      safety += 1;
-    }
-  }
-  return results;
+export async function settleRanking(kind: Exclude<RankingKind, "total">, periodReference = new Date(), settledAt = new Date()) {
+  const period = await ensurePeriod(db, kind, periodReference);
+  if (period.periodEnd > settledAt) return { period, settled: false, reason: "周期尚未结束" };
+  return settleRankingPeriod({
+    type: kind,
+    periodStart: period.periodStart,
+    rewards: [],
+    actorId: "system",
+    settledAt,
+    allowEmptyRewards: true,
+  });
 }
 
 export async function claimRankingAward(input: {

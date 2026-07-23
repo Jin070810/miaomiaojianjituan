@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { adminAdjustPoints, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
-import { claimRankingAward, periodBounds, settleRanking } from "@/lib/rankings";
+import { adminAdjustPoints, adminAdjustPointsBatch, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
+import { claimRankingAward, periodBounds, settleRanking, settleRankingPeriod } from "@/lib/rankings";
 import { prepareVideoReprocess } from "@/lib/video-jobs";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
@@ -206,7 +206,14 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: "integration-ranking-video",
       },
     });
-    const first = await settleRanking("week", reference, new Date(bounds.end.getTime() + 1));
+    const period = await db.rankingPeriod.create({ data: { type: "WEEK", periodStart: bounds.start, periodEnd: bounds.end } });
+    const first = await settleRankingPeriod({
+      type: "week",
+      periodStart: period.periodStart,
+      rewards: [{ rank: 1, title: "定制礼盒", description: "测试奖励说明" }],
+      actorId: receiverId,
+      settledAt: new Date(bounds.end.getTime() + 1),
+    });
     rankingPeriodIds.push(first.period.id);
     const second = await settleRanking("week", reference, new Date(bounds.end.getTime() + 2));
     expect(first.settled).toBe(true);
@@ -214,6 +221,8 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     expect(await db.rankingEntry.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
     expect(await db.rankingAward.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
     const award = await db.rankingAward.findFirstOrThrow({ where: { periodId: first.period.id, userId: senderId } });
+    expect(award.rewardTitle).toBe("定制礼盒");
+    expect(await db.notification.count({ where: { entityType: "RankingAward", entityId: award.id } })).toBe(1);
     await db.rankingAward.update({ where: { id: award.id }, data: { status: "EXPIRED" } });
     await expect(claimRankingAward({ awardId: award.id, userId: senderId })).rejects.toThrow("已过期");
     const shippingAward = await db.rankingAward.create({
@@ -329,5 +338,38 @@ describe.skipIf(!enabled)("积分事务并发", () => {
       actorId: receiverId,
     })).rejects.toThrow("积分余额不足");
     expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(105);
+  });
+
+  it("applies a batch atomically and deduplicates each member", async () => {
+    await db.pointAccount.updateMany({ where: { userId: { in: [senderId, receiverId] } }, data: { balance: 100 } });
+    const key = `integration-bulk-${Date.now()}`;
+    const first = await adminAdjustPointsBatch({
+      userIds: [senderId, receiverId],
+      amount: 25,
+      reason: "测试批量奖励",
+      idempotencyKey: key,
+      actorId: receiverId,
+    });
+    const duplicate = await adminAdjustPointsBatch({
+      userIds: [receiverId, senderId],
+      amount: 25,
+      reason: "测试批量奖励",
+      idempotencyKey: key,
+      actorId: receiverId,
+    });
+    expect(first.adjustments.map((item) => item.userId).sort()).toEqual([senderId, receiverId].sort());
+    expect(duplicate.adjustments.map((item) => item.ledger.id).sort()).toEqual(first.adjustments.map((item) => item.ledger.id).sort());
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(125);
+    expect(await db.pointAccount.findUnique({ where: { userId: receiverId } }).then((account) => account?.balance)).toBe(125);
+
+    await expect(adminAdjustPointsBatch({
+      userIds: [senderId, receiverId],
+      amount: -126,
+      reason: "测试整批扣分失败",
+      idempotencyKey: `${key}-overspend`,
+      actorId: receiverId,
+    })).rejects.toThrow("批量调整未执行");
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(125);
+    expect(await db.notification.count({ where: { entityType: "PointLedger", entityId: { in: first.adjustments.map((item) => item.ledger.id) } } })).toBe(2);
   });
 });

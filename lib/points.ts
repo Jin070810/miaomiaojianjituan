@@ -3,6 +3,7 @@ import { LedgerType, Prisma, PrismaClient } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { calculateVideoPoints } from "./kuaishou";
 import { getVideoPointRule } from "./point-rules";
+import { createNotification } from "./notifications";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -114,6 +115,26 @@ export async function completeTransfer(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: input.senderId,
+      type: "TRANSFER",
+      title: "积分转账已完成",
+      body: `已向 ${receiver.nickname} 转出 ${input.amount} 积分${input.note ? `：${input.note}` : ""}`,
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadata: { amount: -input.amount },
+      dedupeKey: `transfer:${transfer.id}:sender`,
+    });
+    await createNotification(tx, {
+      userId: input.receiverId,
+      type: "TRANSFER",
+      title: "收到积分转账",
+      body: `${sender.nickname} 向你转入 ${input.amount} 积分${input.note ? `：${input.note}` : ""}`,
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadata: { amount: input.amount },
+      dedupeKey: `transfer:${transfer.id}:receiver`,
+    });
     return transfer;
     });
   } catch (error) {
@@ -169,6 +190,16 @@ export async function adminAdjustPoints(input: {
           requestId: input.idempotencyKey,
         },
       });
+      await createNotification(tx, {
+        userId: input.userId,
+        type: "POINTS",
+        title: input.amount > 0 ? "管理员发放积分" : "管理员扣减积分",
+        body: `${input.amount > 0 ? "增加" : "扣减"} ${Math.abs(input.amount)} 积分，当前余额 ${account.balance} 分。原因：${reason}`,
+        entityType: "PointLedger",
+        entityId: ledger.id,
+        metadata: { amount: input.amount, balanceAfter: account.balance },
+        dedupeKey: `admin-points:${input.idempotencyKey}:${input.userId}`,
+      });
       return { ledger, balance: account.balance };
     });
   } catch (error) {
@@ -178,6 +209,125 @@ export async function adminAdjustPoints(input: {
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
       if (existing) return { ledger: existing, balance: existing.balanceAfter };
+    }
+    throw error;
+  }
+}
+
+export class BulkPointAdjustmentError extends Error {
+  blockers: Array<{ userId: string; reason: string }>;
+
+  constructor(message: string, blockers: Array<{ userId: string; reason: string }> = []) {
+    super(message);
+    this.name = "BulkPointAdjustmentError";
+    this.blockers = blockers;
+  }
+}
+
+export async function adminAdjustPointsBatch(input: {
+  userIds: string[];
+  amount: number;
+  reason: string;
+  idempotencyKey: string;
+  actorId: string;
+  ip?: string;
+}) {
+  if (!Number.isInteger(input.amount) || input.amount === 0 || Math.abs(input.amount) > 1_000_000) {
+    throw new BulkPointAdjustmentError("调整积分必须是绝对值不超过 1000000 的非零整数");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 2 || reason.length > 500) throw new BulkPointAdjustmentError("请填写 2 至 500 字的调整原因");
+  const userIds = [...new Set(input.userIds)].sort();
+  if (userIds.length < 1) throw new BulkPointAdjustmentError("批量调整至少需要选择一名成员");
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const keys = userIds.map((userId) => `${input.idempotencyKey}:${userId}`);
+      const existing = await tx.pointLedger.findMany({
+        where: { idempotencyKey: { in: keys } },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (existing.length === userIds.length) {
+        return {
+          idempotencyKey: input.idempotencyKey,
+          adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
+        };
+      }
+      if (existing.length > 0) throw new BulkPointAdjustmentError("该批量请求状态不完整，请使用新的请求标识重试");
+
+      const members = await tx.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, active: true, role: true },
+      });
+      const byId = new Map(members.map((member) => [member.id, member]));
+      const blockers = userIds
+        .filter((userId) => !byId.has(userId))
+        .map((userId) => ({ userId, reason: "成员不存在" }))
+        .concat(userIds.filter((userId) => byId.has(userId) && !byId.get(userId)?.active).map((userId) => ({ userId, reason: "成员已停用" })))
+        .concat(userIds.filter((userId) => byId.has(userId) && byId.get(userId)?.active && byId.get(userId)?.role !== "MEMBER").map((userId) => ({ userId, reason: "不是普通成员" })));
+      if (blockers.length) throw new BulkPointAdjustmentError("批量调整未执行", blockers);
+      if (input.amount < 0) {
+        const accounts = await tx.pointAccount.findMany({ where: { userId: { in: userIds } }, select: { userId: true, balance: true } });
+        const balances = new Map(accounts.map((account) => [account.userId, account.balance]));
+        const insufficient = userIds
+          .filter((userId) => (balances.get(userId) ?? 0) < Math.abs(input.amount))
+          .map((userId) => ({ userId, reason: "积分余额不足" }));
+        if (insufficient.length) throw new BulkPointAdjustmentError("批量调整未执行", insufficient);
+      }
+
+      const adjustments: Array<{ userId: string; ledger: Awaited<ReturnType<typeof tx.pointLedger.findUniqueOrThrow>>; balance: number }> = [];
+      for (const userId of userIds) {
+        const ledgerKey = `${input.idempotencyKey}:${userId}`;
+        let account;
+        try {
+          account = input.amount > 0
+            ? await credit(tx, userId, input.amount, "ADMIN_ADJUSTMENT", input.idempotencyKey, reason, ledgerKey)
+            : await debit(tx, userId, -input.amount, "ADMIN_ADJUSTMENT", input.idempotencyKey, reason, ledgerKey);
+        } catch (error) {
+          if (input.amount < 0 && error instanceof Error && error.message === "积分余额不足") {
+            throw new BulkPointAdjustmentError("批量调整未执行", [{ userId, reason: "积分余额不足或余额已发生并发变更" }]);
+          }
+          throw error;
+        }
+        const ledger = await tx.pointLedger.findUniqueOrThrow({
+          where: { idempotencyKey: ledgerKey },
+          include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorId: input.actorId,
+            action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED",
+            entity: "PointAccount",
+            entityId: account.id,
+            beforeValue: { balance: account.balance - input.amount, userId },
+            afterValue: { balance: account.balance, amount: input.amount, userId },
+            reason,
+            ip: input.ip,
+            requestId: input.idempotencyKey,
+          },
+        });
+        await createNotification(tx, {
+          userId,
+          type: "POINTS",
+          title: input.amount > 0 ? "管理员发放积分" : "管理员扣减积分",
+          body: `${input.amount > 0 ? "增加" : "扣减"} ${Math.abs(input.amount)} 积分，当前余额 ${account.balance} 分。原因：${reason}`,
+          entityType: "PointLedger",
+          entityId: ledger.id,
+          metadata: { amount: input.amount, balanceAfter: account.balance },
+          dedupeKey: `admin-points:${input.idempotencyKey}:${userId}`,
+        });
+        adjustments.push({ userId, ledger, balance: account.balance });
+      }
+      return { idempotencyKey: input.idempotencyKey, adjustments };
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const keys = userIds.map((userId) => `${input.idempotencyKey}:${userId}`);
+      const existing = await db.pointLedger.findMany({
+        where: { idempotencyKey: { in: keys } },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (existing.length === userIds.length) return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
     }
     throw error;
   }
@@ -269,6 +419,16 @@ export async function redeemGift(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: input.userId,
+      type: "REDEMPTION",
+      title: "兑换申请已提交",
+      body: `已使用 ${totalCost} 积分兑换 ${gift.name}，订单进入待发货状态`,
+      entityType: "RedemptionOrder",
+      entityId: order.id,
+      metadata: { amount: -totalCost, status: order.status },
+      dedupeKey: `redemption:${order.id}:created`,
+    });
     return order;
     });
   } catch (error) {
@@ -307,6 +467,16 @@ export async function creditVideoReward(input: {
           ip: input.ip,
         },
       });
+      await createNotification(tx, {
+        userId: input.userId,
+        type: "VIDEO_RESULT",
+        title: "视频积分已调整",
+        body: `视频积分由 ${video.points} 分调整为 ${input.points} 分，本次变动 ${delta >= 0 ? "+" : ""}${delta} 分`,
+        entityType: "VideoSubmission",
+        entityId: video.id,
+        metadata: { amount: delta, points: input.points, status: adjusted.status },
+        dedupeKey: `video:${video.id}:points:${input.points}`,
+      });
       return adjusted;
     }
     if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
@@ -335,6 +505,16 @@ export async function creditVideoReward(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: input.userId,
+      type: "VIDEO_RESULT",
+      title: "视频审核通过",
+      body: `视频已通过校验${input.points > 0 ? `，${input.points} 积分已到账` : ""}`,
+      entityType: "VideoSubmission",
+      entityId: video.id,
+      metadata: { amount: input.points, points: input.points, status: "APPROVED" },
+      dedupeKey: `video:${video.id}:approved`,
+    });
     return updated;
   });
 }
@@ -360,6 +540,16 @@ export async function rejectVideo(input: { videoId: string; reason: string; acto
         reason: input.reason,
         ip: input.ip,
       },
+    });
+    await createNotification(tx, {
+      userId: video.userId,
+      type: "VIDEO_RESULT",
+      title: "视频未通过审核",
+      body: input.reason,
+      entityType: "VideoSubmission",
+      entityId: video.id,
+      metadata: { status: "REJECTED" },
+      dedupeKey: `video:${video.id}:rejected:${updated.reviewedAt?.toISOString() ?? "manual"}`,
     });
     return updated;
   });
@@ -400,6 +590,16 @@ export async function resolveVideoAppeal(input: {
           reason,
           ip: input.ip,
         },
+      });
+      await createNotification(tx, {
+        userId: appeal.userId,
+        type: "APPEAL_RESULT",
+        title: "视频申诉未通过",
+        body: reason,
+        entityType: "VideoAppeal",
+        entityId: appeal.id,
+        metadata: { status: "REJECTED", videoId: appeal.videoId },
+        dedupeKey: `appeal:${appeal.id}:rejected`,
       });
       return updated;
     }
@@ -451,6 +651,16 @@ export async function resolveVideoAppeal(input: {
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: appeal.userId,
+      type: "APPEAL_RESULT",
+      title: "视频申诉已通过",
+      body: `申诉复查通过${points > 0 ? `，${points} 积分已到账` : ""}`,
+      entityType: "VideoAppeal",
+      entityId: appeal.id,
+      metadata: { amount: points, points, status: "APPROVED", videoId: appeal.videoId },
+      dedupeKey: `appeal:${appeal.id}:approved`,
+    });
     return updated;
   });
 }
@@ -481,6 +691,16 @@ export async function revokeVideoReward(input: { videoId: string; actorId: strin
         ip: input.ip,
       },
     });
+    await createNotification(tx, {
+      userId: video.userId,
+      type: "VIDEO_RESULT",
+      title: "视频奖励已撤销",
+      body: `${input.reason}${video.points > 0 ? `，已扣回 ${video.points} 积分` : ""}`,
+      entityType: "VideoSubmission",
+      entityId: video.id,
+      metadata: { amount: -video.points, status: "REVOKED" },
+      dedupeKey: `video:${video.id}:revoked`,
+    });
     return updated;
   });
 }
@@ -501,6 +721,16 @@ export async function updateRedemptionOrder(input: {
       await tx.auditLog.create({
         data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
       });
+      await createNotification(tx, {
+        userId: order.userId,
+        type: "REDEMPTION",
+        title: "兑换订单已确认",
+        body: `${order.gift.name} 已确认，等待发放`,
+        entityType: "RedemptionOrder",
+        entityId: order.id,
+        metadata: { status: "APPROVED" },
+        dedupeKey: `redemption:${order.id}:approved`,
+      });
       return updated;
     }
     if (input.action === "fulfill") {
@@ -514,6 +744,16 @@ export async function updateRedemptionOrder(input: {
       const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "FULFILLED", reviewedAt: new Date() } });
       await tx.auditLog.create({
         data: { actorId: input.actorId, action: "REDEMPTION_FULFILLED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
+      });
+      await createNotification(tx, {
+        userId: order.userId,
+        type: "REDEMPTION",
+        title: order.gift.kind === "CASH" ? "兑换已完成" : "礼品已发货",
+        body: `${order.gift.name} 已完成发放`,
+        entityType: "RedemptionOrder",
+        entityId: order.id,
+        metadata: { status: "FULFILLED" },
+        dedupeKey: `redemption:${order.id}:fulfilled`,
       });
       return updated;
     }
@@ -532,6 +772,16 @@ export async function updateRedemptionOrder(input: {
     const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
     await tx.auditLog.create({
       data: { actorId: input.actorId, action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status, refunded: order.totalCost }, reason: input.reason, ip: input.ip },
+    });
+    await createNotification(tx, {
+      userId: order.userId,
+      type: "REDEMPTION",
+      title: input.action === "refund" ? "兑换订单已退款" : "兑换订单已驳回",
+      body: `${order.gift.name} 已${input.action === "refund" ? "退款" : "驳回"}，${order.totalCost} 积分已退回${input.reason ? `。原因：${input.reason}` : ""}`,
+      entityType: "RedemptionOrder",
+      entityId: order.id,
+      metadata: { amount: order.totalCost, status: updated.status },
+      dedupeKey: `redemption:${order.id}:${updated.status.toLowerCase()}`,
     });
     return updated;
   });

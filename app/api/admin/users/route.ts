@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     await requireAdmin();
     const url = new URL(request.url);
-    const { page, take, skip } = parsePagination(url, 50, 100);
+    const { page, take, skip } = parsePagination(url, 50, 10000);
     const search = url.searchParams.get("search")?.trim();
     const guild = url.searchParams.get("guild");
     const where = {

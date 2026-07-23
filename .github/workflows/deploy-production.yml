@@ -17,6 +17,11 @@ on:
         required: true
         default: false
         type: boolean
+      solo_maintainer_confirmation:
+        description: "单人维护者已完成 PR 自审、staging 验收和回滚确认（多人协作时也可作为发布负责人确认）"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -36,6 +41,12 @@ jobs:
           CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
         run: |
           test "$CONFIRM_PRODUCTION" = "true"
+
+      - name: Require maintainer review and staging confirmation
+        env:
+          SOLO_MAINTAINER_CONFIRMATION: ${{ inputs.solo_maintainer_confirmation }}
+        run: |
+          test "$SOLO_MAINTAINER_CONFIRMATION" = "true"
 
       - name: Validate release commit
         env:

@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   ArrowUpRight,
   BadgeCheck,
-  Bell,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -33,6 +32,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import NotificationCenter, { clearNotificationPromptSession } from "./components/NotificationCenter";
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "ledger" | "transfers" | "orders";
 
@@ -311,10 +311,7 @@ function HomeView({
           <h1>你好，{data.user.nickname}</h1>
           <p>今天也来攒一点创作能量吧。</p>
         </div>
-        <button className="notification-button" aria-label="通知">
-          <Bell size={20} />
-          <i />
-        </button>
+        <span className="notification-heading-spacer" aria-hidden="true" />
       </section>
 
       <section className="balance-card">
@@ -1462,7 +1459,7 @@ export default function MemberApp() {
     if (view === "videos") return <VideosView onOpen={openDialog} data={dashboard} hasMore={historyMore.videos} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("videos")} />;
     if (view === "mall") return <MallView items={giftRows} balance={dashboard.user.balance} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? giftRows[0]); openDialog(type); }} />;
     if (view === "rank") return <RankView data={dashboard} />;
-    if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
+    if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { clearNotificationPromptSession(); await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
     if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} />;
     if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} />;
     if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} />;
@@ -1494,6 +1491,7 @@ export default function MemberApp() {
           <BrandMark />
           <div className="topbar-actions">
             <button className="icon-button" aria-label="搜索"><Search size={19} /></button>
+            <NotificationCenter />
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>
         </header>

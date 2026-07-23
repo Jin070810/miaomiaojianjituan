@@ -236,6 +236,8 @@ export async function redeemGift(input: {
         cashQrCodeUrl,
         note: input.note,
         idempotencyKey: input.idempotencyKey,
+        // 积分和库存已在同一事务内校验并扣除，兑换创建后直接进入待发货。
+        status: "APPROVED",
       },
     });
     if (input.recipient) {
@@ -503,11 +505,20 @@ export async function updateRedemptionOrder(input: {
     }
     if (input.action === "fulfill") {
       if (!["APPROVED", "PENDING"].includes(order.status)) return order;
+      if (order.gift.kind === "CASH" && !order.cashQrCodeUrl) {
+        throw new Error("现金订单缺少收款码，补齐后才能完成");
+      }
+      if (order.gift.kind === "PHYSICAL" && (!order.recipientName || !order.recipientPhoneEnc || !order.recipientAddressEnc)) {
+        throw new Error("实物订单缺少完整收货资料，补齐后才能发货");
+      }
       const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "FULFILLED", reviewedAt: new Date() } });
       await tx.auditLog.create({
         data: { actorId: input.actorId, action: "REDEMPTION_FULFILLED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
       });
       return updated;
+    }
+    if (input.action === "reject" && !["PENDING", "APPROVED"].includes(order.status)) {
+      throw new Error("只有待发货订单可以驳回");
     }
     if (["REJECTED", "REFUNDED"].includes(order.status)) return order;
     const nextStatus = input.action === "refund" ? "REFUNDED" : "REJECTED";

@@ -9,7 +9,7 @@ export async function GET() {
       db.user.count(),
       db.videoAppeal.count({ where: { status: "PENDING" } }),
       db.gift.count({ where: { active: true } }),
-      db.redemptionOrder.count({ where: { status: "PENDING" } }),
+      db.redemptionOrder.count({ where: { status: { in: ["PENDING", "APPROVED"] } } }),
       db.auditLog.findMany({
         orderBy: { createdAt: "desc" },
         take: 50,

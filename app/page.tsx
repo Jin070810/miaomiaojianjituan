@@ -874,8 +874,8 @@ function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }:
 
 function orderStatusLabel(status: string) {
   const labels: Record<string, string> = {
-    PENDING: "待处理",
-    APPROVED: "已通过",
+    PENDING: "待发货",
+    APPROVED: "待发货",
     FULFILLED: "已完成",
     REJECTED: "已驳回",
     REFUNDED: "已退款",

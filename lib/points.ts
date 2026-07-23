@@ -214,6 +214,125 @@ export async function adminAdjustPoints(input: {
   }
 }
 
+export class BulkPointAdjustmentError extends Error {
+  blockers: Array<{ userId: string; reason: string }>;
+
+  constructor(message: string, blockers: Array<{ userId: string; reason: string }> = []) {
+    super(message);
+    this.name = "BulkPointAdjustmentError";
+    this.blockers = blockers;
+  }
+}
+
+export async function adminAdjustPointsBatch(input: {
+  userIds: string[];
+  amount: number;
+  reason: string;
+  idempotencyKey: string;
+  actorId: string;
+  ip?: string;
+}) {
+  if (!Number.isInteger(input.amount) || input.amount === 0 || Math.abs(input.amount) > 1_000_000) {
+    throw new BulkPointAdjustmentError("调整积分必须是绝对值不超过 1000000 的非零整数");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 2 || reason.length > 500) throw new BulkPointAdjustmentError("请填写 2 至 500 字的调整原因");
+  const userIds = [...new Set(input.userIds)].sort();
+  if (userIds.length < 1 || userIds.length > 200) throw new BulkPointAdjustmentError("批量调整需要选择 1 至 200 名成员");
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const keys = userIds.map((userId) => `${input.idempotencyKey}:${userId}`);
+      const existing = await tx.pointLedger.findMany({
+        where: { idempotencyKey: { in: keys } },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (existing.length === userIds.length) {
+        return {
+          idempotencyKey: input.idempotencyKey,
+          adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
+        };
+      }
+      if (existing.length > 0) throw new BulkPointAdjustmentError("该批量请求状态不完整，请使用新的请求标识重试");
+
+      const members = await tx.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, active: true, role: true },
+      });
+      const byId = new Map(members.map((member) => [member.id, member]));
+      const blockers = userIds
+        .filter((userId) => !byId.has(userId))
+        .map((userId) => ({ userId, reason: "成员不存在" }))
+        .concat(userIds.filter((userId) => byId.has(userId) && !byId.get(userId)?.active).map((userId) => ({ userId, reason: "成员已停用" })))
+        .concat(userIds.filter((userId) => byId.has(userId) && byId.get(userId)?.active && byId.get(userId)?.role !== "MEMBER").map((userId) => ({ userId, reason: "不是普通成员" })));
+      if (blockers.length) throw new BulkPointAdjustmentError("批量调整未执行", blockers);
+      if (input.amount < 0) {
+        const accounts = await tx.pointAccount.findMany({ where: { userId: { in: userIds } }, select: { userId: true, balance: true } });
+        const balances = new Map(accounts.map((account) => [account.userId, account.balance]));
+        const insufficient = userIds
+          .filter((userId) => (balances.get(userId) ?? 0) < Math.abs(input.amount))
+          .map((userId) => ({ userId, reason: "积分余额不足" }));
+        if (insufficient.length) throw new BulkPointAdjustmentError("批量调整未执行", insufficient);
+      }
+
+      const adjustments: Array<{ userId: string; ledger: Awaited<ReturnType<typeof tx.pointLedger.findUniqueOrThrow>>; balance: number }> = [];
+      for (const userId of userIds) {
+        const ledgerKey = `${input.idempotencyKey}:${userId}`;
+        let account;
+        try {
+          account = input.amount > 0
+            ? await credit(tx, userId, input.amount, "ADMIN_ADJUSTMENT", input.idempotencyKey, reason, ledgerKey)
+            : await debit(tx, userId, -input.amount, "ADMIN_ADJUSTMENT", input.idempotencyKey, reason, ledgerKey);
+        } catch (error) {
+          if (input.amount < 0 && error instanceof Error && error.message === "积分余额不足") {
+            throw new BulkPointAdjustmentError("批量调整未执行", [{ userId, reason: "积分余额不足或余额已发生并发变更" }]);
+          }
+          throw error;
+        }
+        const ledger = await tx.pointLedger.findUniqueOrThrow({
+          where: { idempotencyKey: ledgerKey },
+          include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorId: input.actorId,
+            action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED",
+            entity: "PointAccount",
+            entityId: account.id,
+            beforeValue: { balance: account.balance - input.amount, userId },
+            afterValue: { balance: account.balance, amount: input.amount, userId },
+            reason,
+            ip: input.ip,
+            requestId: input.idempotencyKey,
+          },
+        });
+        await createNotification(tx, {
+          userId,
+          type: "POINTS",
+          title: input.amount > 0 ? "管理员发放积分" : "管理员扣减积分",
+          body: `${input.amount > 0 ? "增加" : "扣减"} ${Math.abs(input.amount)} 积分，当前余额 ${account.balance} 分。原因：${reason}`,
+          entityType: "PointLedger",
+          entityId: ledger.id,
+          metadata: { amount: input.amount, balanceAfter: account.balance },
+          dedupeKey: `admin-points:${input.idempotencyKey}:${userId}`,
+        });
+        adjustments.push({ userId, ledger, balance: account.balance });
+      }
+      return { idempotencyKey: input.idempotencyKey, adjustments };
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const keys = userIds.map((userId) => `${input.idempotencyKey}:${userId}`);
+      const existing = await db.pointLedger.findMany({
+        where: { idempotencyKey: { in: keys } },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (existing.length === userIds.length) return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
+    }
+    throw error;
+  }
+}
+
 export async function redeemGift(input: {
   userId: string;
   giftId: string;

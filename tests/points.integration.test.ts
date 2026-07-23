@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { adminAdjustPoints, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
+import { adminAdjustPoints, adminAdjustPointsBatch, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
 import { claimRankingAward, periodBounds, settleRanking } from "@/lib/rankings";
 import { prepareVideoReprocess } from "@/lib/video-jobs";
 
@@ -329,5 +329,38 @@ describe.skipIf(!enabled)("积分事务并发", () => {
       actorId: receiverId,
     })).rejects.toThrow("积分余额不足");
     expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(105);
+  });
+
+  it("applies a batch atomically and deduplicates each member", async () => {
+    await db.pointAccount.updateMany({ where: { userId: { in: [senderId, receiverId] } }, data: { balance: 100 } });
+    const key = `integration-bulk-${Date.now()}`;
+    const first = await adminAdjustPointsBatch({
+      userIds: [senderId, receiverId],
+      amount: 25,
+      reason: "测试批量奖励",
+      idempotencyKey: key,
+      actorId: receiverId,
+    });
+    const duplicate = await adminAdjustPointsBatch({
+      userIds: [receiverId, senderId],
+      amount: 25,
+      reason: "测试批量奖励",
+      idempotencyKey: key,
+      actorId: receiverId,
+    });
+    expect(first.adjustments.map((item) => item.userId).sort()).toEqual([senderId, receiverId].sort());
+    expect(duplicate.adjustments.map((item) => item.ledger.id).sort()).toEqual(first.adjustments.map((item) => item.ledger.id).sort());
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(125);
+    expect(await db.pointAccount.findUnique({ where: { userId: receiverId } }).then((account) => account?.balance)).toBe(125);
+
+    await expect(adminAdjustPointsBatch({
+      userIds: [senderId, receiverId],
+      amount: -126,
+      reason: "测试整批扣分失败",
+      idempotencyKey: `${key}-overspend`,
+      actorId: receiverId,
+    })).rejects.toThrow("批量调整未执行");
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(125);
+    expect(await db.notification.count({ where: { entityType: "PointLedger", entityId: { in: first.adjustments.map((item) => item.ledger.id) } } })).toBe(2);
   });
 });

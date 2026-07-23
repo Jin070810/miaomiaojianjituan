@@ -522,6 +522,74 @@ a {
   gap: 8px;
 }
 
+.member-picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.member-picker-toolbar .admin-search {
+  min-width: 210px;
+  flex: 1;
+}
+
+.member-picker-toolbar .text-button {
+  color: var(--brand-strong);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.points-member-list {
+  max-height: 245px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.points-member-list .checkbox-field {
+  min-height: 38px;
+  border-bottom: 1px solid #f0f1f2;
+  font-weight: 500;
+}
+
+.points-member-list .checkbox-field:last-child {
+  border-bottom: 0;
+}
+
+.points-member-list .checkbox-field b {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.points-confirmation {
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid #cce8e2;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  color: #0b766c;
+  background: #f4fbfa;
+  font-size: 12px;
+}
+
+.points-confirmation strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.points-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 5px;
+}
+
 .notification-heading-spacer {
   width: 42px;
   height: 42px;

@@ -539,11 +539,12 @@ function PointsAdmin({
   ledger: AdminPointLedgerRow[];
   rule: VideoPointRule;
   pagination: { page: number; pages: number; total: number };
-  onAdjust: (input: { userId: string; amount: number; reason: string }) => Promise<void>;
+  onAdjust: (input: { userIds: string[]; amount: number; reason: string }) => Promise<void>;
   onRuleSave: (input: VideoPointRule) => Promise<void>;
   onLoadMore: () => Promise<void>;
 }) {
-  const [userId, setUserId] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [ruleDraft, setRuleDraft] = useState(rule);
@@ -551,20 +552,36 @@ function PointsAdmin({
   const [ruleSaving, setRuleSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [confirming, setConfirming] = useState(false);
 
-  async function submitAdjustment() {
-    const numericAmount = Number(amount);
-    if (!userId || !Number.isInteger(numericAmount) || numericAmount === 0 || !reason.trim()) {
-      setError("请选择成员，输入非零整数积分，并填写调整原因");
+  const activeMembers = users.filter((user) => user.active && user.role === "MEMBER");
+  const filteredMembers = activeMembers.filter((user) => {
+    const query = memberSearch.trim().toLowerCase();
+    return !query || user.nickname.toLowerCase().includes(query) || user.kuaishouId.toLowerCase().includes(query);
+  });
+  const selectedUsers = selectedIds.map((id) => activeMembers.find((user) => user.id === id)).filter((user): user is AdminUserRow => Boolean(user));
+  const numericAmount = Number(amount);
+
+  function prepareAdjustment() {
+    if (!selectedIds.length || !Number.isInteger(numericAmount) || numericAmount === 0 || !reason.trim()) {
+      setError("请选择至少一名成员，输入非零整数积分，并填写调整原因");
       return;
     }
+    setError("");
+    setFeedback("");
+    setConfirming(true);
+  }
+
+  async function submitAdjustment() {
     setSaving(true);
     setError("");
     setFeedback("");
     try {
-      await onAdjust({ userId, amount: numericAmount, reason: reason.trim() });
+      await onAdjust({ userIds: selectedIds, amount: numericAmount, reason: reason.trim() });
+      setSelectedIds([]);
       setAmount("");
       setReason("");
+      setConfirming(false);
       setFeedback("积分调整已记录，余额和审计日志已更新。");
     } catch (adjustError) {
       setError(adjustError instanceof Error ? adjustError.message : "积分调整失败");
@@ -602,12 +619,11 @@ function PointsAdmin({
       <div className="admin-dashboard-grid">
         <section className="admin-panel audit-panel">
           <div className="admin-panel-head"><div><h2>人工增减积分</h2><p>扣减不能超过成员当前余额；撤销类补偿由系统专用流程处理。</p></div><CircleDollarSign size={19} color="#149e91" /></div>
-          <div className="admin-form-grid admin-panel-form">
-            <div className="field"><label htmlFor="points-user">成员</label><select id="points-user" value={userId} onChange={(event) => setUserId(event.target.value)}><option value="">选择成员</option>{users.filter((user) => user.active).map((user) => <option key={user.id} value={user.id}>{user.nickname} · {user.kuaishouId} · {(user.account?.balance ?? 0).toLocaleString()} 分</option>)}</select></div>
-            <div className="field"><label htmlFor="points-amount">积分变动</label><input id="points-amount" type="number" step="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="正数发放，负数扣除" /></div>
-          </div>
+          <div className="field admin-panel-form"><label htmlFor="points-member-search">成员（已选 {selectedIds.length} 人）</label><div className="member-picker-toolbar"><div className="admin-search"><Search size={15} /><input id="points-member-search" value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="搜索昵称或快手 ID" /></div><button className="text-button" onClick={() => setSelectedIds(filteredMembers.map((user) => user.id))}>选择当前结果</button><button className="text-button" onClick={() => setSelectedIds([])} disabled={!selectedIds.length}>清空</button></div><div className="points-member-list">{filteredMembers.map((user) => <label className="checkbox-field" key={user.id}><input type="checkbox" checked={selectedIds.includes(user.id)} onChange={() => setSelectedIds((current) => current.includes(user.id) ? current.filter((id) => id !== user.id) : [...current, user.id])} /><span>{user.nickname} · {user.kuaishouId}</span><b>{(user.account?.balance ?? 0).toLocaleString()} 分</b></label>)}{filteredMembers.length === 0 && <span className="field-hint">没有匹配的有效普通成员</span>}</div></div>
+          <div className="field admin-panel-form"><label htmlFor="points-amount">每人积分变动</label><input id="points-amount" type="number" step="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="正数发放，负数扣除" /></div>
           <div className="field admin-panel-form"><label htmlFor="points-reason">原因</label><textarea id="points-reason" rows={3} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="例如：活动补发、人工纠错、违规扣分" /></div>
-          <div className="admin-panel-actions"><button className="primary-button" disabled={saving} onClick={submitAdjustment}><CircleDollarSign size={16} />{saving ? "提交中..." : "提交积分调整"}</button></div>
+          {confirming && <div className="points-confirmation"><strong>请确认本次批量调整</strong><span>{selectedIds.length} 名成员，每人 {numericAmount > 0 ? "+" : ""}{numericAmount.toLocaleString()} 分，总变动 {Math.abs(numericAmount * selectedIds.length).toLocaleString()} 分</span><span>原因：{reason.trim()}</span><div><button className="secondary-button compact-button" onClick={() => setConfirming(false)}>返回修改</button><button className="primary-button compact-button" disabled={saving} onClick={() => void submitAdjustment()}>{saving ? "提交中..." : "确认调整"}</button></div></div>}
+          {!confirming && <div className="admin-panel-actions"><button className="primary-button" disabled={saving} onClick={prepareAdjustment}><CircleDollarSign size={16} />预览批量调整</button></div>}
         </section>
         <section className="admin-panel audit-panel">
           <div className="admin-panel-head"><div><h2>视频积分规则</h2><p>修改会留痕，不会重算历史视频。</p></div><SlidersHorizontal size={19} color="#ff5a3d" /></div>
@@ -1298,22 +1314,31 @@ export default function AdminPage() {
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
   }
-  async function handlePointAdjustment(input: { userId: string; amount: number; reason: string }) {
-    const response = await fetch("/api/admin/points", {
+  async function handlePointAdjustment(input: { userIds: string[]; amount: number; reason: string }) {
+    const response = await fetch("/api/admin/points/bulk", {
       method: "POST",
       headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
       body: JSON.stringify(input),
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error ?? "积分调整失败");
+    if (!response.ok) {
+      const blockerText = Array.isArray(result.blockers) && result.blockers.length
+        ? `：${result.blockers.map((blocker: { userId: string; reason: string }) => blocker.reason).join("、")}`
+        : "";
+      throw new Error(`${result.error ?? "积分调整失败"}${blockerText}`);
+    }
     setData((current) => {
       if (!current) return current;
+      const adjustments = result.adjustments as Array<{ userId: string; balance: number; ledger: AdminPointLedgerRow }>;
       return {
         ...current,
-        metrics: { ...current.metrics, totalBalance: current.metrics.totalBalance + input.amount },
-        users: current.users.map((user) => user.id === input.userId ? { ...user, account: { balance: result.balance } } : user),
-        pointLedger: [result.ledger, ...current.pointLedger.filter((row: AdminPointLedgerRow) => row.id !== result.ledger.id)],
-        pointPagination: { ...current.pointPagination, total: current.pointPagination.total + 1 },
+        metrics: { ...current.metrics, totalBalance: current.metrics.totalBalance + input.amount * input.userIds.length },
+        users: current.users.map((user) => {
+          const adjustment = adjustments.find((row) => row.userId === user.id);
+          return adjustment ? { ...user, account: { balance: adjustment.balance } } : user;
+        }),
+        pointLedger: [...adjustments.map((row) => row.ledger), ...current.pointLedger.filter((row) => !adjustments.some((item) => item.ledger.id === row.id))],
+        pointPagination: { ...current.pointPagination, total: current.pointPagination.total + adjustments.length },
       };
     });
   }

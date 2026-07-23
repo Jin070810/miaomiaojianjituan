@@ -59,6 +59,12 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 本阶段 migration 为 `prisma/migrations/20260724010000_notifications_announcements`，只新增通知、公告及收件人表。回滚应用版本时保留这些表和历史通知，不删除已执行 migration；如需停用功能，应以前向修复或配置关闭入口。
 
+## 批量积分
+
+- 管理后台支持一次选择 1–200 名有效普通成员，以相同的整数积分和原因批量增减。
+- 批量操作使用请求幂等键派生每名成员的积分流水和通知去重键；成员校验、余额条件扣减、流水、通知和审计在一个事务中完成。任一成员不存在、停用或余额不足，整批回滚。
+- 后台成员选择支持搜索、保留跨搜索选择、选择当前结果、清空选择和提交前确认摘要。单成员 `POST /api/admin/points` 接口保持兼容。
+
 ## 数据安全
 
 - 密码使用 Argon2id，Session 使用 HttpOnly、Secure（生产环境）和 SameSite Cookie。

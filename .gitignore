@@ -15,6 +15,7 @@ output/feishu/gift-assets-manifest.json
 output/feishu/assets/
 *.log
 backups/
+certs/
 output/backup-drill/
 output/audit/
 output/dev.*

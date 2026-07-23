@@ -24,6 +24,7 @@
 - 成员可查看转账/兑换记录，编辑昵称、确认入会、维护收货档案和修改密码；转账增加收款成员核对
 - 已生成 PostgreSQL 备份并验证归档可读，恢复脚本已就绪
 - CI 已加入数据对账、Web 镜像构建和 Worker 镜像构建；正式部署 workflow 会拒绝不属于 `main` 历史的 release SHA
+- 飞书礼品附件已下载到 `public/gifts/feishu` 并回填 53 个礼品；源表中 5 个礼品没有商品图，已保留占位图并记录在迁移清单
 - 视频入账使用数据库状态抢占，多个 Worker 并发只能生成一次奖励流水
 - Worker 提供带 TTL 的心跳、优雅停机和滞留 `PROCESSING` 任务恢复，生产健康检查会校验 Worker
 - HTTPS 代理来源校验使用外部协议和主机，Nginx 覆盖客户端转发头，避免伪造 IP 绕过限流
@@ -37,6 +38,7 @@
 
    ```powershell
    $env:ADMIN_KUAISHOU_IDS="已确认的快手ID"
+   $env:ADMIN_PASSWORD="仅在首次创建或重置时临时注入"
    npm run seed:admin
    ```
 

@@ -7,6 +7,7 @@ import { normalizeKuaishouLink } from "@/lib/kuaishou";
 import { enqueueVideo } from "@/lib/video-jobs";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { parsePagination, paginationResult } from "@/lib/pagination";
 
 const schema = z.object({ link: z.string().trim().min(8).max(2000) });
 
@@ -112,7 +113,11 @@ export async function GET(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const url = new URL(request.url);
-  const take = Math.min(Number(url.searchParams.get("take") ?? 50), 100);
-  const rows = await db.videoSubmission.findMany({ where: { userId: user.id }, orderBy: { submittedAt: "desc" }, take });
-  return NextResponse.json({ videos: rows });
+  const { page, take, skip } = parsePagination(url, 50, 100);
+  const where = { userId: user.id };
+  const [rows, total] = await Promise.all([
+    db.videoSubmission.findMany({ where, include: { appeals: { orderBy: { createdAt: "desc" }, take: 3 } }, orderBy: [{ submittedAt: "desc" }, { id: "desc" }], skip, take }),
+    db.videoSubmission.count({ where }),
+  ]);
+  return NextResponse.json({ videos: rows, pagination: paginationResult(page, take, total) });
 }

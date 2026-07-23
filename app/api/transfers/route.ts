@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { completeTransfer } from "@/lib/points";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { parsePagination, paginationResult } from "@/lib/pagination";
 
 const schema = z.object({ receiverKuaishouId: z.string().trim().min(2).max(80), amount: z.number().int().positive().max(500000), note: z.string().trim().max(200).optional() });
 
@@ -34,14 +35,18 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const { page, take, skip } = parsePagination(new URL(request.url), 50, 100);
+  const where = { OR: [{ senderId: user.id }, { receiverId: user.id }] };
+  const total = await db.transfer.count({ where });
   const transfers = await db.transfer.findMany({
-    where: { OR: [{ senderId: user.id }, { receiverId: user.id }] },
+    where,
     include: { sender: { select: { kuaishouId: true, nickname: true } }, receiver: { select: { kuaishouId: true, nickname: true } } },
-    orderBy: { createdAt: "desc" },
-    take: 100,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip,
+    take,
   });
-  return NextResponse.json({ transfers });
+  return NextResponse.json({ transfers, pagination: paginationResult(page, take, total) });
 }

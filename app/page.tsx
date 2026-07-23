@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   BadgeCheck,
   Bell,
+  ChevronDown,
   ChevronRight,
   CircleHelp,
   ClipboardCheck,
@@ -123,6 +124,15 @@ type MemberAward = {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+}
+
+function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
+  if (!hasMore) return null;
+  return (
+    <button className="secondary-button full-button" onClick={onClick} disabled={loading}>
+      <ChevronDown size={16} /> {loading ? "加载中..." : "加载更多记录"}
+    </button>
+  );
 }
 
 function ledgerLabel(type: string, note: string | null) {
@@ -399,9 +409,15 @@ function HomeView({
 function VideosView({
   onOpen,
   data,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: {
   onOpen: (dialog: DialogType) => void;
   data: DashboardData;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
   const [appealingVideo, setAppealingVideo] = useState<DashboardData["videos"][number] | null>(null);
   const [appealReason, setAppealReason] = useState("");
@@ -516,6 +532,7 @@ function VideosView({
         ))}
         {rows.length === 0 && <p className="empty-copy">还没有提交视频，先完成第一次创作吧</p>}
         </section>
+        <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
       </div>
       {appealingVideo && (
         <ModalShell title="提交视频申诉" eyebrow="VIDEO APPEAL" onClose={() => setAppealingVideo(null)}>
@@ -771,7 +788,7 @@ function RankView({ data }: { data: DashboardData }) {
   );
 }
 
-function LedgerView({ onBack, data }: { onBack: () => void; data: DashboardData }) {
+function LedgerView({ onBack, data, hasMore, loadingMore, onLoadMore }: { onBack: () => void; data: DashboardData; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
   const income = data.ledger.filter((item) => item.amount > 0).reduce((total, item) => total + item.amount, 0);
   const expense = Math.abs(data.ledger.filter((item) => item.amount < 0).reduce((total, item) => total + item.amount, 0));
   return (
@@ -819,11 +836,12 @@ function LedgerView({ onBack, data }: { onBack: () => void; data: DashboardData 
         })}
         {data.ledger.length === 0 && <p className="empty-copy">暂时没有积分流水</p>}
       </section>
+      <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
     </div>
   );
 }
 
-function TransferRecordsView({ onBack, data }: { onBack: () => void; data: DashboardData }) {
+function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }: { onBack: () => void; data: DashboardData; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
   return (
     <div className="member-content">
       <section className="page-header-row">
@@ -849,6 +867,7 @@ function TransferRecordsView({ onBack, data }: { onBack: () => void; data: Dashb
         })}
         {data.transfers.length === 0 && <p className="empty-copy">暂时没有转账记录</p>}
       </section>
+      <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
     </div>
   );
 }
@@ -864,7 +883,7 @@ function orderStatusLabel(status: string) {
   return labels[status] ?? status;
 }
 
-function RedemptionRecordsView({ onBack, data }: { onBack: () => void; data: DashboardData }) {
+function RedemptionRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }: { onBack: () => void; data: DashboardData; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
   return (
     <div className="member-content">
       <section className="page-header-row">
@@ -886,6 +905,7 @@ function RedemptionRecordsView({ onBack, data }: { onBack: () => void; data: Das
         ))}
         {data.orders.length === 0 && <p className="empty-copy">暂时没有兑换记录</p>}
       </section>
+      <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
     </div>
   );
 }
@@ -1320,6 +1340,8 @@ export default function MemberApp() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [loadError, setLoadError] = useState("");
   const [revision, setRevision] = useState(0);
+  const [historyMore, setHistoryMore] = useState({ ledger: false, videos: false, transfers: false, orders: false });
+  const [historyLoading, setHistoryLoading] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -1337,6 +1359,12 @@ export default function MemberApp() {
       .then((result) => {
         if (active && result) {
           setDashboard(result);
+          setHistoryMore({
+            ledger: result.ledger.length === 50,
+            videos: result.videos.length === 50,
+            transfers: result.transfers.length === 50,
+            orders: result.orders.length === 50,
+          });
           setLoadError("");
         }
       })
@@ -1354,7 +1382,7 @@ export default function MemberApp() {
       points: gift.pointsCost,
       stock: gift.stock,
       kind: gift.kind,
-      image: gift.imageUrl?.startsWith("http") ? gift.imageUrl : gifts[index % gifts.length].image,
+      image: gift.imageUrl && (gift.imageUrl.startsWith("http") || gift.imageUrl.startsWith("/")) ? gift.imageUrl : gifts[index % gifts.length].image,
       tag: gift.stock > 0 ? "可兑换" : "已售罄",
       tone: gifts[index % gifts.length].tone,
     }));
@@ -1369,15 +1397,34 @@ export default function MemberApp() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  async function loadMoreHistory(kind: "ledger" | "videos" | "transfers" | "orders") {
+    if (!dashboard || historyLoading || !historyMore[kind]) return;
+    const page = Math.floor(dashboard[kind].length / 50) + 1;
+    const endpoint = kind === "ledger" ? "/api/points" : kind === "videos" ? "/api/videos" : kind === "transfers" ? "/api/transfers" : "/api/redemptions";
+    setHistoryLoading(true);
+    try {
+      const response = await fetch(`${endpoint}?page=${page}&take=50`, { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "记录加载失败");
+      const rows = result[kind] ?? [];
+      setDashboard((current) => current ? { ...current, [kind]: [...current[kind], ...rows] } : current);
+      setHistoryMore((current) => ({ ...current, [kind]: rows.length === 50 }));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "记录加载失败");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
   const page = useMemo(() => {
     if (!dashboard) return null;
-    if (view === "videos") return <VideosView onOpen={openDialog} data={dashboard} />;
+    if (view === "videos") return <VideosView onOpen={openDialog} data={dashboard} hasMore={historyMore.videos} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("videos")} />;
     if (view === "mall") return <MallView items={giftRows} balance={dashboard.user.balance} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? giftRows[0]); openDialog(type); }} />;
     if (view === "rank") return <RankView data={dashboard} />;
     if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
-    if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} />;
-    if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} />;
-    if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} />;
+    if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} />;
+    if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} />;
+    if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} />;
     return <HomeView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} />;
   }, [dashboard, giftRows, router, view]);
 

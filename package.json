@@ -12,6 +12,7 @@
     "db:deploy": "prisma migrate deploy",
     "feishu:inspect": "tsx scripts/inspect-feishu.ts",
     "feishu:migrate": "tsx scripts/migrate-feishu.ts",
+    "feishu:gifts": "tsx scripts/migrate-feishu-gift-assets.ts",
     "video:reprocess-pending": "tsx scripts/reprocess-pending-videos.ts",
     "video:audit-approved": "tsx scripts/audit-approved-videos.ts",
     "video:probe-recovery": "tsx scripts/probe-fetch-recovery.ts",

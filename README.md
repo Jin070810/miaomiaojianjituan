@@ -10,9 +10,10 @@
 4. 初始化数据库：`npm run db:deploy`
 5. 先检查飞书数据：`npm run feishu:inspect`
 6. 业务负责人逐项确认冲突报告后，显式批准才执行迁移：`npm run feishu:migrate -- --apply --allow-conflicts`
-7. 设置 `ADMIN_KUAISHOU_IDS` 后执行 `npm run seed:admin` 初始化管理员角色。
-8. 启动 Web：`npm run dev`
-9. 启动抓取 Worker：`npm run worker`
+7. 飞书商品图是附件而不是 URL；迁移完成后执行 `npm run feishu:gifts`，它会从飞书下载附件到 `public/gifts/feishu`，并把礼品图片路径写入数据库。脚本可重复执行，不会重复下载或重复审计。
+8. 设置 `ADMIN_KUAISHOU_IDS`；首次创建管理员时同时通过环境变量设置 `ADMIN_PASSWORD`（可选 `ADMIN_NICKNAME`），执行 `npm run seed:admin`。密码只通过部署环境注入，不写入仓库或日志。
+9. 启动 Web：`npm run dev`
+10. 启动抓取 Worker：`npm run worker`
 
 完整 Docker 部署可使用 `docker compose up -d`。`migrate` 服务会等待 PostgreSQL 健康后执行版本化的 `prisma migrate deploy`。
 

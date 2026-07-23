@@ -11,6 +11,8 @@ output/feishu/*.fields.json
 output/feishu/*.page*.json
 output/feishu/migration-report.json
 output/feishu/inspect-report.json
+output/feishu/gift-assets-manifest.json
+output/feishu/assets/
 *.log
 backups/
 output/backup-drill/

@@ -288,8 +288,8 @@ export async function creditVideoReward(input: {
   return db.$transaction(async (tx) => {
     const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
     if (!video) throw new Error("视频记录不存在");
-    if (video.status === "APPROVED" && video.points === input.points) return video;
-    if (video.status === "APPROVED" && video.points !== input.points) {
+    if (video.status === "APPROVED" && (!input.actorId || video.points === input.points)) return video;
+    if (video.status === "APPROVED" && input.actorId && video.points !== input.points) {
       const delta = input.points - video.points;
       if (delta > 0) await credit(tx, input.userId, delta, "ADMIN_ADJUSTMENT", video.id, "管理员调整视频积分");
       if (delta < 0) await debitCompensating(tx, input.userId, -delta, "ADMIN_ADJUSTMENT", video.id, "管理员调整视频积分");
@@ -307,9 +307,17 @@ export async function creditVideoReward(input: {
       });
       return adjusted;
     }
+    if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
+      throw new Error("只有处理中视频可以自动入账");
+    }
+    const claimed = await tx.videoSubmission.updateMany({
+      where: { id: video.id, status: { in: ["PROCESSING", "PENDING_REVIEW", "FAILED"] } },
+      data: { status: "APPROVED", points: input.points, processedAt: new Date(), reviewedAt: new Date() },
+    });
+    if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
     const updated = await tx.videoSubmission.update({
       where: { id: video.id },
-      data: { status: "APPROVED", points: input.points, processedAt: new Date(), reviewedAt: new Date() },
+      data: { points: input.points },
     });
     if (input.points > 0) {
       await credit(tx, input.userId, input.points, "VIDEO_REWARD", video.id, "视频审核通过");

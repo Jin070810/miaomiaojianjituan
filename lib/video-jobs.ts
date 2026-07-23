@@ -26,8 +26,8 @@ async function autoRejectVideo(
     const current = await tx.videoSubmission.findUnique({ where: { id: videoId } });
     if (!current) throw new Error("视频记录不存在");
     if (["APPROVED", "REVOKED"].includes(current.status)) return current;
-    const updated = await tx.videoSubmission.update({
-      where: { id: videoId },
+    const claimed = await tx.videoSubmission.updateMany({
+      where: { id: videoId, status: { in: ["PROCESSING", "FAILED", "PENDING_REVIEW"] } },
       data: {
         ...data,
         status: "REJECTED",
@@ -37,6 +37,8 @@ async function autoRejectVideo(
         reviewedAt: new Date(),
       },
     });
+    if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
+    const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
     await tx.auditLog.create({
       data: {
         action: "VIDEO_AUTO_REJECTED",
@@ -64,9 +66,17 @@ async function autoRejectVideo(
 export async function processVideoSubmission(videoId: string) {
   const video = await db.videoSubmission.findUnique({ where: { id: videoId }, include: { user: true } });
   if (!video || !["PROCESSING", "FAILED", "PENDING_REVIEW"].includes(video.status)) return video;
-  try {
-    const pointRule = await getVideoPointRule();
-    const fetched = await fetchKuaishouVideo(video.sourceUrl, video.submittedNickname, pointRule);
+  const pointRule = await getVideoPointRule();
+    let fetched;
+    try {
+      fetched = await fetchKuaishouVideo(video.sourceUrl, video.submittedNickname, pointRule);
+    } catch (error) {
+      return autoRejectVideo(
+        video.id,
+        error instanceof Error ? `链接失效或视频不存在：${error.message}` : "链接失效或视频不存在，无法获取视频数据",
+        { rawPayload: { fetchFailed: true } },
+      );
+    }
     const duplicate = await db.videoSubmission.findFirst({
       where: { photoId: fetched.photoId, id: { not: video.id }, status: { in: ["APPROVED", "PENDING_REVIEW", "PROCESSING"] } },
     });
@@ -127,28 +137,48 @@ export async function processVideoSubmission(videoId: string) {
     if (fetched.ownerMatches) {
       return creditVideoReward({ videoId: video.id, userId: video.userId, points: fetched.points });
     }
-    return updated;
-  } catch (error) {
-    return autoRejectVideo(
-      video.id,
-      error instanceof Error ? `链接失效或视频不存在：${error.message}` : "链接失效或视频不存在，无法获取视频数据",
-      { rawPayload: { fetchFailed: true } },
-    );
-  }
+  return updated;
 }
 
 export async function enqueueVideo(videoId: string) {
   if (process.env.REDIS_URL) {
-    await getQueue().add("fetch", { videoId }, {
-      jobId: `${videoId}-${Date.now()}`,
+    const videoQueue = getQueue();
+    const jobId = `video-${videoId}`;
+    const existing = await videoQueue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === "failed") await existing.remove();
+      else return;
+    }
+    await videoQueue.add("fetch", { videoId }, {
+      jobId,
       attempts: 3,
       backoff: { type: "exponential", delay: 1500 },
-      removeOnComplete: 100,
+      removeOnComplete: true,
       removeOnFail: 100,
     });
   } else {
     void processVideoSubmission(videoId).catch(() => undefined);
   }
+}
+
+export async function recoverStaleVideoSubmissions(limit = 200) {
+  if (!process.env.REDIS_URL) return { found: 0, enqueued: 0 };
+  const rows = await db.videoSubmission.findMany({
+    where: {
+      status: "PROCESSING",
+      submittedAt: { lt: new Date(Date.now() - 60_000) },
+    },
+    orderBy: { submittedAt: "asc" },
+    take: Math.min(500, Math.max(1, limit)),
+    select: { id: true },
+  });
+  let enqueued = 0;
+  for (const row of rows) {
+    await enqueueVideo(row.id);
+    enqueued += 1;
+  }
+  return { found: rows.length, enqueued };
 }
 
 export { connection };

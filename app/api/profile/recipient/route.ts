@@ -35,36 +35,39 @@ export async function PUT(request: Request) {
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     await enforceRateLimit(`recipient-profile:${user.id}`, 10, 600);
     const input = schema.parse(await request.json());
-    const profile = await db.recipientProfile.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        recipientName: input.recipientName ?? null,
-        phoneEnc: input.phone ? encryptSensitive(input.phone) : null,
-        addressEnc: input.address ? encryptSensitive(input.address) : null,
-        cashQrCodeUrl: input.cashQrCodeUrl ?? null,
-      },
-      update: {
-        ...(input.recipientName !== undefined ? { recipientName: input.recipientName } : {}),
-        ...(input.phone !== undefined ? { phoneEnc: input.phone ? encryptSensitive(input.phone) : null } : {}),
-        ...(input.address !== undefined ? { addressEnc: input.address ? encryptSensitive(input.address) : null } : {}),
-        ...(input.cashQrCodeUrl !== undefined ? { cashQrCodeUrl: input.cashQrCodeUrl } : {}),
-      },
-    });
-    await db.auditLog.create({
-      data: {
-        actorId: user.id,
-        action: "RECIPIENT_PROFILE_UPDATED",
-        entity: "RecipientProfile",
-        entityId: profile.id,
-        afterValue: {
-          hasName: Boolean(profile.recipientName),
-          hasPhone: Boolean(profile.phoneEnc),
-          hasAddress: Boolean(profile.addressEnc),
-          hasCashQrCode: Boolean(profile.cashQrCodeUrl),
+    const profile = await db.$transaction(async (tx) => {
+      const saved = await tx.recipientProfile.upsert({
+        where: { userId: user.id },
+        create: {
+          userId: user.id,
+          recipientName: input.recipientName ?? null,
+          phoneEnc: input.phone ? encryptSensitive(input.phone) : null,
+          addressEnc: input.address ? encryptSensitive(input.address) : null,
+          cashQrCodeUrl: input.cashQrCodeUrl ?? null,
         },
-        ip: getClientIp(request),
-      },
+        update: {
+          ...(input.recipientName !== undefined ? { recipientName: input.recipientName } : {}),
+          ...(input.phone !== undefined ? { phoneEnc: input.phone ? encryptSensitive(input.phone) : null } : {}),
+          ...(input.address !== undefined ? { addressEnc: input.address ? encryptSensitive(input.address) : null } : {}),
+          ...(input.cashQrCodeUrl !== undefined ? { cashQrCodeUrl: input.cashQrCodeUrl } : {}),
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: "RECIPIENT_PROFILE_UPDATED",
+          entity: "RecipientProfile",
+          entityId: saved.id,
+          afterValue: {
+            hasName: Boolean(saved.recipientName),
+            hasPhone: Boolean(saved.phoneEnc),
+            hasAddress: Boolean(saved.addressEnc),
+            hasCashQrCode: Boolean(saved.cashQrCodeUrl),
+          },
+          ip: getClientIp(request),
+        },
+      });
+      return saved;
     });
     return NextResponse.json({ profile: safeProfile(profile) });
   } catch (error) {

@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       where: search ? { OR: [{ kuaishouId: { contains: search, mode: "insensitive" } }, { nickname: { contains: search, mode: "insensitive" } }] } : undefined,
       include: { account: true, _count: { select: { videos: true, redemptions: true } } },
       orderBy: { createdAt: "desc" },
-      take: 200,
+      take: 500,
     });
     return NextResponse.json({ users: users.map(({ passwordHash, boundPhoneEnc, ...user }) => user) });
   } catch (error) {

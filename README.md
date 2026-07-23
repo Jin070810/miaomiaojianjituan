@@ -53,8 +53,10 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 - 关键变更写入 `AuditLog`，包含前后值、操作者、IP 和请求标识。
 - 注册使用大小写不敏感的快手 ID 唯一校验；关键提交使用幂等键。
 - 生产健康检查会拒绝默认数据库密码、无效密钥、Redis 不可用或没有启用管理员的部署。
+- 生产健康检查同时校验 Worker 心跳；Worker 会定时恢复因入队或重启中断而滞留的视频任务。
 - 默认 Worker 并发为 4，可通过 `VIDEO_WORKER_CONCURRENCY` 调整；按约 200 名成员、峰值 20 人同时使用设计。
 - `output/feishu` 中的飞书导出文件已加入忽略规则，不应提交到代码仓库。
+- 上线前运行 `npm run data:reconcile` 只读核对积分余额与流水、重复有效视频、待处理申诉、库存及整数积分约束。
 
 ## 验证命令
 
@@ -64,6 +66,7 @@ npm test
 $env:RUN_DB_TESTS="1"; npm test
 npm run build
 npm audit --omit=dev
+docker compose config
 docker compose build app
 docker build --target worker -t miaomiao-points-worker:verify .
 ```

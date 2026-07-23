@@ -61,8 +61,11 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: "integration-video",
       },
     });
-    await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
-    await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
+    await Promise.all([
+      creditVideoReward({ videoId: video.id, userId: senderId, points: 50 }),
+      creditVideoReward({ videoId: video.id, userId: senderId, points: 50 }),
+      creditVideoReward({ videoId: video.id, userId: senderId, points: 50 }),
+    ]);
     expect(await db.pointLedger.count({ where: { referenceId: video.id } })).toBe(1);
     expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(50);
   });

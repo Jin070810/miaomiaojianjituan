@@ -93,10 +93,13 @@ type AdminOrderRow = {
   totalCost: number;
   status: string;
   createdAt: string;
-  recipientName: string | null;
-  recipientPhone: string | null;
-  recipientAddress: string | null;
-  cashQrCodeUrl: string | null;
+  recipientName?: string | null;
+  recipientPhone?: string | null;
+  recipientAddress?: string | null;
+  cashQrCodeUrl?: string | null;
+  hasRecipientPhone?: boolean;
+  hasRecipientAddress?: boolean;
+  hasCashQrCode?: boolean;
   gift: { name: string; kind: "PHYSICAL" | "CASH"; imageUrl: string | null };
   user: { kuaishouId: string; nickname: string };
 };
@@ -585,7 +588,7 @@ function GiftsAdmin({ rows, orders, onCreate, onEdit }: { rows: AdminGiftRow[]; 
   );
 }
 
-function OrderRecipientDetails({ order }: { order: AdminOrderRow }) {
+function OrderRecipientDetails({ order, onLoad }: { order: AdminOrderRow; onLoad: () => void }) {
   if (order.gift.kind === "CASH") {
     const safeQrCodeUrl = order.cashQrCodeUrl && /^(https?:\/\/|data:image\/)/i.test(order.cashQrCodeUrl)
       ? order.cashQrCodeUrl
@@ -595,13 +598,13 @@ function OrderRecipientDetails({ order }: { order: AdminOrderRow }) {
         收款信息：
         {safeQrCodeUrl
           ? <a href={safeQrCodeUrl} target="_blank" rel="noreferrer">查看收款码</a>
-          : "未填写收款码"}
+          : order.hasCashQrCode ? <button className="text-button" onClick={onLoad}>查看收款码</button> : "未填写收款码"}
       </span>
     );
   }
 
   if (!order.recipientName || !order.recipientPhone || !order.recipientAddress) {
-    return <span className="order-recipient">收货信息：尚未填写完整</span>;
+    return <span className="order-recipient">收货信息：{order.hasRecipientPhone || order.hasRecipientAddress ? <button className="text-button" onClick={onLoad}>查看详情</button> : "尚未填写完整"}</span>;
   }
 
   return (
@@ -614,6 +617,13 @@ function OrderRecipientDetails({ order }: { order: AdminOrderRow }) {
 function OrdersAdmin({ rows, onAction }: { rows: AdminOrderRow[]; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") => void }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "APPROVED" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
+  const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl">>>({});
+  const loadDetails = async (order: AdminOrderRow) => {
+    const response = await fetch(`/api/admin/orders/${order.id}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const result = await response.json();
+    setDetails((current) => ({ ...current, [order.id]: result.details }));
+  };
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = rows.filter((order) => {
     const matchesStatus = status === "ALL" || order.status === status;
@@ -624,7 +634,7 @@ function OrdersAdmin({ rows, onAction }: { rows: AdminOrderRow[]; onAction: (ord
     <>
       <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>处理礼品发货和订单状态变更。</p></div><button className="secondary-button"><FileText size={16} />导出订单</button></div>
       <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => setStatus("ALL")}>全部订单 <b>{rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => setStatus("PENDING")}>待处理 <b>{rows.filter((order) => order.status === "PENDING").length}</b></button><button className={status === "APPROVED" ? "active" : ""} onClick={() => setStatus("APPROVED")}>已通过 <b>{rows.filter((order) => order.status === "APPROVED").length}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => setStatus("FULFILLED")}>已完成 <b>{rows.filter((order) => order.status === "FULFILLED").length}</b></button></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条，取消订单会自动生成返还流水</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索订单号或快手 ID" /></div></div><div className="order-list">{filtered.map((order, i) => <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={order} /></div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${order.status === "PENDING" ? "warning" : "success"}`}>{order.status}</span><div className="table-actions-inline">{order.status === "PENDING" && <button className="secondary-button mini-button" onClick={() => onAction(order, "approve")}>通过</button>}{["PENDING", "APPROVED"].includes(order.status) && <button className="secondary-button mini-button" onClick={() => onAction(order, "fulfill")}>{order.gift.kind === "CASH" ? "完成" : "发货"}</button>}{!["REJECTED", "REFUNDED"].includes(order.status) && <button className="table-more" title="退款" aria-label="退款" onClick={() => onAction(order, "refund")}><X size={16} /></button>}</div></div>)}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div></section>
+      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条，取消订单会自动生成返还流水</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索订单号或快手 ID" /></div></div><div className="order-list">{filtered.map((order, i) => { const merged = { ...order, ...details[order.id] }; return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} /></div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${order.status === "PENDING" ? "warning" : "success"}`}>{order.status}</span><div className="table-actions-inline">{order.status === "PENDING" && <button className="secondary-button mini-button" onClick={() => onAction(order, "approve")}>通过</button>}{["PENDING", "APPROVED"].includes(order.status) && <button className="secondary-button mini-button" onClick={() => onAction(order, "fulfill")}>{order.gift.kind === "CASH" ? "完成" : "发货"}</button>}{!["REJECTED", "REFUNDED"].includes(order.status) && <button className="table-more" title="退款" aria-label="退款" onClick={() => onAction(order, "refund")}><X size={16} /></button>}</div></div>; })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div></section>
     </>
   );
 }

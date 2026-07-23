@@ -28,9 +28,12 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const admin = await requireAdmin();
     const input = schema.parse(await request.json());
-    const gift = await db.gift.create({ data: input });
-    await db.auditLog.create({
-      data: { actorId: admin.id, action: "GIFT_CREATED", entity: "Gift", entityId: gift.id, afterValue: input },
+    const gift = await db.$transaction(async (tx) => {
+      const created = await tx.gift.create({ data: input });
+      await tx.auditLog.create({
+        data: { actorId: admin.id, action: "GIFT_CREATED", entity: "Gift", entityId: created.id, afterValue: input },
+      });
+      return created;
     });
     return NextResponse.json({ gift }, { status: 201 });
   } catch (error) {

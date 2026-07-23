@@ -89,7 +89,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    stop_grace_period: 30s
+    stop_grace_period: 75s
     logging: *default-logging
   nginx:
     image: nginx:1.27-alpine

@@ -20,8 +20,8 @@ export function requestId() {
 }
 
 export function getClientIp(request: Request) {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    request.headers.get("x-real-ip") ??
+  return request.headers.get("x-real-ip") ??
+    request.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim() ??
     "unknown";
 }
 
@@ -40,7 +40,10 @@ export function isSafeCashQrCodeUrl(value: string) {
 export function assertSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin) return;
-  const expected = new URL(request.url).origin;
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const requestUrl = new URL(request.url);
+  const expected = `${forwardedProto || requestUrl.protocol.replace(":", "")}://${forwardedHost || requestUrl.host}`;
   if (origin !== expected) throw new Error("跨站请求已拒绝");
 }
 

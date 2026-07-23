@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { decryptSensitive } from "@/lib/security";
 
 export async function GET() {
   try {
@@ -9,13 +8,14 @@ export async function GET() {
     const orders = await db.redemptionOrder.findMany({
       include: { gift: true, user: { select: { kuaishouId: true, nickname: true } } },
       orderBy: { createdAt: "desc" },
-      take: 300,
+      take: 500,
     });
     return NextResponse.json({
-      orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, ...order }) => ({
+      orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
         ...order,
-        recipientPhone: recipientPhoneEnc ? decryptSensitive(recipientPhoneEnc) : null,
-        recipientAddress: recipientAddressEnc ? decryptSensitive(recipientAddressEnc) : null,
+        hasRecipientPhone: Boolean(recipientPhoneEnc),
+        hasRecipientAddress: Boolean(recipientAddressEnc),
+        hasCashQrCode: Boolean(cashQrCodeUrl),
       })),
     });
   } catch (error) {

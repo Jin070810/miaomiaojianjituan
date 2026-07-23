@@ -28,5 +28,6 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json worker.ts ./
 COPY lib ./lib
 COPY prisma ./prisma
+COPY scripts/seed-admin.ts ./scripts/seed-admin.ts
 RUN npx prisma generate
 CMD ["npx", "tsx", "worker.ts"]

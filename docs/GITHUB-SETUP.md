@@ -25,13 +25,14 @@
 
 在 Settings → Environments 新建 `production`：
 
-1. Required reviewers 添加业务负责人和技术负责人；
-2. Deployment branches 只允许 `main`；
-3. 配置 Secrets：
+1. 如果仓库套餐支持，Required reviewers 添加业务负责人和技术负责人；
+2. 如果当前私有仓库套餐不支持 Environment protection，正式 workflow 的 `confirm_production` 输入必须保持默认 `false`，只有发布负责人明确勾选 `true` 才能继续；
+3. Deployment branches 只允许 `main`；
+4. 配置 Secrets：
    - `PRODUCTION_HOST`
    - `PRODUCTION_USER`
    - `PRODUCTION_SSH_KEY`
-4. 配置 Variables：
+5. 配置 Variables：
    - `PRODUCTION_PATH`
    - `PRODUCTION_DOMAIN`
 
@@ -41,8 +42,8 @@
 
 1. PR 合并到 `main` 后记录完整 commit SHA；
 2. Actions → Deploy Production → Run workflow；
-3. 输入已合并的 40 位 commit SHA；
-4. `production` 环境审查者人工确认；
+3. 输入已合并的 40 位 commit SHA，并明确勾选 `confirm_production`；
+4. 如果配置了 Environment 审查者，等待人工批准；
 5. 工作流备份数据库、构建并部署；
 6. `/api/health` 通过后记录发布结果。
 

@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      confirm_production:
+        description: "我已确认 release SHA、备份、证书和回滚点，可以发布到正式环境"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -26,6 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Require explicit production confirmation
+        env:
+          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
+        run: |
+          test "$CONFIRM_PRODUCTION" = "true"
+
       - name: Validate release commit
         env:
           RELEASE_COMMIT: ${{ inputs.release_commit }}

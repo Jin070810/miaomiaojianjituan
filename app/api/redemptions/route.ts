@@ -40,10 +40,11 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const orders = await db.redemptionOrder.findMany({ where: { userId: user.id }, include: { gift: true }, orderBy: { createdAt: "desc" }, take: 100 });
   return NextResponse.json({
-    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, ...order }) => ({
+    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
       ...order,
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
+      hasCashQrCode: Boolean(cashQrCodeUrl),
     })),
   });
 }

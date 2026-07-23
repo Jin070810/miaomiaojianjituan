@@ -30,11 +30,31 @@ jobs:
             exit 1
           fi
 
+      - name: Verify commit is merged into main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release ancestry
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          git fetch --no-tags origin main
+          git cat-file -e "$RELEASE_COMMIT^{commit}"
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
+            echo "release_commit 不是 origin/main 的祖先，拒绝部署未合并版本"
+            exit 1
+          fi
+
       - name: Configure SSH
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
         run: |
+          test -n "$PRODUCTION_HOST"
+          test -n "$PRODUCTION_USER"
+          test -n "$PRODUCTION_PATH"
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"

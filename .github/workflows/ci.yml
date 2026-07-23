@@ -51,6 +51,8 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
       - run: docker compose config
+      - run: docker compose build app
       - run: docker build --target worker -t miaomiao-points-worker:ci .

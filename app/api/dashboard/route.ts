@@ -83,10 +83,11 @@ export async function GET() {
     ledger,
     videos,
     gifts,
-    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, ...order }) => ({
+    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
       ...order,
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
+      hasCashQrCode: Boolean(cashQrCodeUrl),
     })),
     transfers,
     leaderboard: totalRank.map((item, index) => ({

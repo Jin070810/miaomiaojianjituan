@@ -49,7 +49,7 @@ PR 必须填写 `.github/pull_request_template.md`，并包含：
 - 自动视频通过/驳回、作者昵称兼容、成员申诉、管理员申诉复查和申诉并发幂等；
 - 390×844、1440×900 关键页面及 Redis/Worker 重启恢复；
 - `npm run data:reconcile` 无余额、重复有效视频、库存或整数积分异常；
-- 峰值 20 个并发请求的登录态读取和关键写入幂等烟测。
+- `npm run smoke:concurrency` 默认以 20 并发请求 staging 健康接口，关键写入仍需使用测试账号做幂等验收。
 
 验收记录写入发布单，附版本 commit、截图和失败项。
 
@@ -58,6 +58,7 @@ PR 必须填写 `.github/pull_request_template.md`，并包含：
 正式发布必须由人工确认以下条件后执行：
 
 - PR 已合并到 `main`，commit 已打 tag；
+- 部署 workflow 已验证 release SHA 是 `main` 的祖先，禁止从未合并分支直接发布；
 - 生产管理员账号已确认，`/api/health` 返回 200；
 - `SESSION_SECRET`、`PHONE_ENCRYPTION_KEY`、数据库密码和 Redis 配置已由密钥管理系统注入；
 - HTTPS 证书、域名 DNS、备份和恢复演练通过；

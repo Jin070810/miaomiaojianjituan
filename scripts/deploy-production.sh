@@ -33,5 +33,8 @@ if [[ "$database_ready" != "true" ]]; then
 fi
 
 bash scripts/backup-db.sh backups "$env_file"
-docker compose --env-file "$env_file" --profile production up -d --build
-docker compose --env-file "$env_file" --profile production ps
+# Start Web and Worker first. Nginx is deliberately started after the
+# one-time administrator bootstrap because the health check requires an
+# active administrator account.
+docker compose --env-file "$env_file" up -d --build app worker
+docker compose --env-file "$env_file" ps

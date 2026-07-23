@@ -7,8 +7,8 @@
 - 禁止直接向 `main`、`master` 或正式发布分支提交代码。
 - 每个任务必须从最新主分支创建独立分支，命名使用 `feature/`、`fix/`、`security/`、`chore/` 或 `hotfix/` 前缀，例如 `fix/video-dedup-20260723`。
 - 一个分支只解决一个业务目标；无关格式化和大规模重构不得混入。
-- 只能通过 Pull Request 合并。至少一名人工审查者确认后才能合并；涉及积分、权限、数据库、认证或部署时，需要业务负责人和技术负责人共同确认。
-- 合并前必须通过 CI、代码审查、数据库迁移检查和关键流程验收。未经人工确认，不得合并或部署正式环境。
+- 只能通过 Pull Request 合并。多人协作时至少一名非作者审查者确认；单人维护时由仓库所有者完成 PR 自审清单并明确确认，不要求虚构第二名开发者。
+- 涉及积分、权限、数据库、认证或部署时，必须通过 CI、数据库迁移检查、关键流程验收和 staging 自验收；有业务或技术负责人时应邀请其审查，没有时记录单人维护者决定。
 
 ## 数据和安全不变量
 
@@ -49,7 +49,7 @@ docker build --target worker -t miaomiao-points-worker:verify .
 
 ## 发布和回滚
 
-- 正式部署只使用已审查并合并的 release commit，不直接在服务器编辑代码。
+- 正式部署只使用已审查（多人审查或单人维护者自审）并合并的 release commit，不直接在服务器编辑代码。
 - 发布前必须确认管理员账号、生产密钥、HTTPS 证书、数据库备份、Redis、Worker 和监控告警。
 - 数据库 migration 先执行，健康检查通过后再切换 Web；Worker 与 Web 必须使用同一版本。
 - 每次发布记录版本号、commit、migration、操作者、时间和回滚点。
@@ -58,4 +58,4 @@ docker build --target worker -t miaomiao-points-worker:verify .
 
 ## 完成定义
 
-任务只有同时满足“代码完成、测试通过、文档更新、人工审查、staging 验收、正式发布记录”才算完成。任何一个环节缺失都只能标记为 `Ready for review` 或 `Ready for deploy`，不能宣称已上线。
+任务只有同时满足“代码完成、测试通过、文档更新、人工审查或单人维护者自审、staging 验收、正式发布记录”才算完成。任何一个环节缺失都只能标记为 `Ready for review` 或 `Ready for deploy`，不能宣称已上线。

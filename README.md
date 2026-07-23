@@ -23,6 +23,8 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 新服务器首次准备可由 root 执行 `bash scripts/bootstrap-server.sh`，它会安装 Docker/Compose、配置 2GB Swap、限制入站端口并创建 `/opt/miaomiaojianjituan`。正式 workflow 会在备份和启动容器前执行 `bash scripts/production-preflight.sh`，检查生产密钥、非默认数据库密码、Docker Compose 和 HTTPS 证书。
 
+正式发布由 `scripts/deploy-production.sh` 编排：先启动基础 PostgreSQL/Redis 并等待数据库就绪，再生成发布前备份，最后执行 migration 并启动 Web、Worker 和 Nginx。首次空机发布也不会因为数据库容器尚未存在而跳过或阻塞备份。
+
 ## 快手视频抓取
 
 成员可以粘贴短链接、长链接或包含链接的分享文本。服务端只接受 `kuaishou.com` 域名，Worker 使用参数数组调用 `curl -sS -L -A "Mozilla/5.0" --max-time 10`，从页面源码解析 `likeCount`、`viewCount`、`photoId` 和 `userName`。

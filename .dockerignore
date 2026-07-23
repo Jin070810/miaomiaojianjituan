@@ -2,6 +2,11 @@ node_modules
 .next
 .env
 .env.*
-output/feishu
+backups
+certs
+output
+.playwright-cli
+*.dump
+*.sha256
 *.log
 .git

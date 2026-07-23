@@ -25,7 +25,7 @@
 - 成员可查看转账/兑换记录，编辑昵称、确认入会、维护收货档案和修改密码；转账增加收款成员核对
 - 成员默认使用统一品牌头像，可上传 5MB 以内的 JPG、PNG 或 WebP；服务端裁剪并压缩为 `256×256` WebP，支持恢复默认头像并记录审计日志
 - 已生成 PostgreSQL 备份并验证归档可读，恢复脚本已就绪
-- CI 已加入数据对账、Web 镜像构建和 Worker 镜像构建；正式部署 workflow 会拒绝不属于 `main` 历史的 release SHA
+- CI 已加入数据对账、Web 镜像构建和 Worker 镜像构建；正式部署 workflow 会拒绝不属于 `main` 历史的 release SHA，并要求手动勾选 `confirm_production=true`
 - 飞书礼品附件已下载到 `public/gifts/feishu` 并回填 53 个礼品；源表中 5 个礼品没有商品图，已保留占位图并记录在迁移清单
 - 视频入账使用数据库状态抢占，多个 Worker 并发只能生成一次奖励流水
 - Worker 提供带 TTL 的心跳、优雅停机和滞留 `PROCESSING` 任务恢复，生产健康检查会校验 Worker
@@ -55,7 +55,7 @@
 
 4. 飞书迁移报告中的历史冲突仍需保留业务确认记录。当前数据库唯一约束已保证快手 ID 大小写不敏感唯一、有效视频不可重复结算，历史积分不得自动重算。
 
-5. 尚未完成异机恢复演练、监控告警接入和公网 HTTPS 验收；部署工作流需要在 GitHub 配置 production 审查者和 SSH Secrets。
+5. 尚未完成异机恢复演练、监控告警接入和公网 HTTPS 验收；GitHub 当前私有仓库套餐不支持 Environment required reviewers 和 main 分支保护，已用 `confirm_production` 人工输入作为补偿门禁，升级套餐后应补回平台级保护。
 
 6. 生产服务器目前是空 Ubuntu 主机，尚未执行 `scripts/bootstrap-server.sh`，也尚未创建部署账号、配置 SSH 公钥和生产环境文件。
 

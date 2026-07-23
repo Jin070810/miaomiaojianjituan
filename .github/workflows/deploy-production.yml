@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      confirm_production:
+        description: "我已确认 release SHA、备份、证书和回滚点，可以发布到正式环境"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -26,6 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Require explicit production confirmation
+        env:
+          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
+        run: |
+          test "$CONFIRM_PRODUCTION" = "true"
+
       - name: Validate release commit
         env:
           RELEASE_COMMIT: ${{ inputs.release_commit }}
@@ -88,7 +99,7 @@ jobs:
           test -n "$ADMIN_KUAISHOU_IDS"
           test -n "$ADMIN_PASSWORD"
           test "${#ADMIN_PASSWORD}" -ge 8
-          admin_script="$(printf 'set -e\ncd %q\nexport ADMIN_KUAISHOU_IDS=%q\nexport ADMIN_PASSWORD=%q\nexport ADMIN_NICKNAME=%q\ndocker compose --env-file .env.production run --rm --no-deps worker npm run seed:admin\n' \
+          admin_script="$(printf 'set -e\ncd %q\nexport ADMIN_KUAISHOU_IDS=%q\nexport ADMIN_PASSWORD=%q\nexport ADMIN_NICKNAME=%q\ndocker compose --env-file .env.production run --rm --no-deps -e ADMIN_KUAISHOU_IDS -e ADMIN_PASSWORD -e ADMIN_NICKNAME worker npm run seed:admin\n' \
             "$PRODUCTION_PATH" "$ADMIN_KUAISHOU_IDS" "$ADMIN_PASSWORD" "${ADMIN_NICKNAME:-管理员}")"
           printf '%s\n' "$admin_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
 

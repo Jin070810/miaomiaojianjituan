@@ -623,7 +623,7 @@ function PointsAdmin({
       <div className="admin-dashboard-grid">
         <section className="admin-panel audit-panel">
           <div className="admin-panel-head"><div><h2>人工增减积分</h2><p>扣减不能超过成员当前余额；撤销类补偿由系统专用流程处理。</p></div><CircleDollarSign size={19} color="#149e91" /></div>
-          <div className="field admin-panel-form"><label htmlFor="points-member-search">成员（已选 {selectedIds.length} 人）</label><div className="member-picker-toolbar"><div className="admin-search"><Search size={15} /><input id="points-member-search" value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="搜索昵称或快手 ID" /></div><button className="text-button" onClick={() => { setSelectedIds(activeMembers.slice(0, 200).map((user) => user.id)); if (activeMembers.length > 200) setError("批量调整最多选择 200 名成员，已选择前 200 名。"); }}>选择全体</button><button className="text-button" onClick={() => setSelectedIds(filteredMembers.map((user) => user.id))}>选择当前结果</button><button className="text-button" onClick={() => setSelectedIds([])} disabled={!selectedIds.length}>清空</button></div>{activeMembers.length > 200 && <span className="field-hint">当前有 {activeMembers.length} 名有效普通成员，单批最多 200 人；可搜索后分批调整。</span>}<div className="points-member-list">{filteredMembers.map((user) => <label className="checkbox-field" key={user.id}><input type="checkbox" checked={selectedIds.includes(user.id)} onChange={() => setSelectedIds((current) => current.includes(user.id) ? current.filter((id) => id !== user.id) : [...current, user.id])} /><span>{user.nickname} · {user.kuaishouId}</span><b>{(user.account?.balance ?? 0).toLocaleString()} 分</b></label>)}{filteredMembers.length === 0 && <span className="field-hint">没有匹配的有效普通成员</span>}</div></div>
+          <div className="field admin-panel-form"><label htmlFor="points-member-search">成员（已选 {selectedIds.length} 人）</label><div className="member-picker-toolbar"><div className="admin-search"><Search size={15} /><input id="points-member-search" value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="搜索昵称或快手 ID" /></div><button className="text-button" onClick={() => setSelectedIds(activeMembers.map((user) => user.id))}>选择全体</button><button className="text-button" onClick={() => setSelectedIds(filteredMembers.map((user) => user.id))}>选择当前结果</button><button className="text-button" onClick={() => setSelectedIds([])} disabled={!selectedIds.length}>清空</button></div><div className="points-member-list">{filteredMembers.map((user) => <label className="checkbox-field" key={user.id}><input type="checkbox" checked={selectedIds.includes(user.id)} onChange={() => setSelectedIds((current) => current.includes(user.id) ? current.filter((id) => id !== user.id) : [...current, user.id])} /><span>{user.nickname} · {user.kuaishouId}</span><b>{(user.account?.balance ?? 0).toLocaleString()} 分</b></label>)}{filteredMembers.length === 0 && <span className="field-hint">没有匹配的有效普通成员</span>}</div></div>
           <div className="field admin-panel-form"><label htmlFor="points-amount">每人积分变动</label><input id="points-amount" type="number" step="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="正数发放，负数扣除" /></div>
           <div className="field admin-panel-form"><label htmlFor="points-reason">原因</label><textarea id="points-reason" rows={3} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} placeholder="例如：活动补发、人工纠错、违规扣分" /></div>
           {confirming && <div className="points-confirmation"><strong>请确认本次批量调整</strong><span>{selectedIds.length} 名成员，每人 {numericAmount > 0 ? "+" : ""}{numericAmount.toLocaleString()} 分，总变动 {Math.abs(numericAmount * selectedIds.length).toLocaleString()} 分</span><span>原因：{reason.trim()}</span><div><button className="secondary-button compact-button" onClick={() => setConfirming(false)}>返回修改</button><button className="primary-button compact-button" disabled={saving} onClick={() => void submitAdjustment()}>{saving ? "提交中..." : "确认调整"}</button></div></div>}
@@ -727,10 +727,12 @@ function OrderRecipientDetails({ order, onLoad }: { order: AdminOrderRow; onLoad
   );
 }
 
-function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") => void; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
+function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl">>>({});
+  const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const loadDetails = async (order: AdminOrderRow) => {
     const response = await fetch(`/api/admin/orders/${order.id}`, { cache: "no-store" });
     if (!response.ok) return;
@@ -744,18 +746,41 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
     setStatus(next);
     void onFilter(next);
   }
+  async function runAction(order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund", canFulfill = true) {
+    if (processingOrderId) return;
+    if (action === "fulfill" && !canFulfill) {
+      setFeedback({ type: "error", message: order.gift.kind === "CASH" ? "该订单尚未填写收款码，无法完成" : "该订单尚未填写完整收货资料，无法发货" });
+      return;
+    }
+    setProcessingOrderId(order.id);
+    setFeedback(null);
+    try {
+      const changed = await onAction(order, action);
+      if (changed) {
+        const message = action === "fulfill"
+          ? (order.gift.kind === "CASH" ? "订单已完成" : "订单已发货")
+          : action === "reject" ? "订单已驳回并退回积分" : action === "refund" ? "订单已退款" : "订单已确认";
+        setFeedback({ type: "success", message });
+      }
+    } catch (error) {
+      setFeedback({ type: "error", message: error instanceof Error ? error.message : "订单操作失败，请稍后重试" });
+    } finally {
+      setProcessingOrderId(null);
+    }
+  }
   const filtered = rows;
   return (
     <>
       <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>处理礼品发货和订单状态变更。</p></div><button className="secondary-button"><FileText size={16} />导出订单</button></div>
       <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => changeStatus("ALL")}>全部订单 <b>{status === "ALL" ? pagination.total : rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => changeStatus("PENDING")}>待发货 <b>{status === "PENDING" ? pagination.total : "—"}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => changeStatus("FULFILLED")}>已完成 <b>{status === "FULFILLED" ? pagination.total : "—"}</b></button></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条已加载订单，共 {pagination.total} 条；驳回订单会自动退回积分和库存</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索订单号或快手 ID" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div><div className="order-list">{filtered.map((order, i) => {
+      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条已加载订单，共 {pagination.total} 条；驳回订单会自动退回积分和库存</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索订单号或快手 ID" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>{feedback && <p className={feedback.type === "success" ? "form-success" : "form-error"} role="alert">{feedback.message}</p>}<div className="order-list">{filtered.map((order, i) => {
         const merged = { ...order, ...details[order.id] };
         const readyToFulfill = order.gift.kind === "CASH"
           ? Boolean(merged.cashQrCodeUrl || merged.hasCashQrCode)
           : Boolean(merged.recipientName && (merged.recipientPhone || merged.hasRecipientPhone) && (merged.recipientAddress || merged.hasRecipientAddress));
         const pendingShipment = ["PENDING", "APPROVED"].includes(order.status);
-        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") || order.gift.imageUrl?.startsWith("/") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} /></div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : "success"}`}>{pendingShipment ? "待发货" : order.status === "FULFILLED" ? "已完成" : order.status}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={!readyToFulfill} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => onAction(order, "fulfill")}>{order.gift.kind === "CASH" ? "完成" : "发货"}</button>}{pendingShipment && <button className="table-more" title="驳回并退回积分" aria-label="驳回订单" onClick={() => onAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" title="退款" aria-label="退款" onClick={() => onAction(order, "refund")}><X size={16} /></button>}</div></div>;
+        const processing = processingOrderId === order.id;
+        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") || order.gift.imageUrl?.startsWith("/") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} /></div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : "success"}`}>{pendingShipment ? "待发货" : order.status === "FULFILLED" ? "已完成" : order.status}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "完成" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
       })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多订单 <ChevronDown size={15} /></button></div>}</section>
     </>
   );
@@ -998,7 +1023,7 @@ export default function AdminPage() {
       fetch("/api/admin/dashboard", { cache: "no-store" }),
       fetch("/api/admin/videos", { cache: "no-store" }),
       fetch("/api/admin/video-appeals", { cache: "no-store" }),
-      fetch("/api/admin/users?take=200", { cache: "no-store" }),
+      fetch("/api/admin/users?take=10000", { cache: "no-store" }),
       fetch("/api/admin/gifts", { cache: "no-store" }),
       fetch("/api/admin/orders", { cache: "no-store" }),
       fetch("/api/admin/audit-logs?take=50", { cache: "no-store" }),
@@ -1023,7 +1048,7 @@ export default function AdminPage() {
           appeals: appeals.appeals ?? [],
           appealsPagination: appeals.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
           users: users.users ?? [],
-          usersPagination: users.pagination ?? { page: 1, take: 200, total: 0, pages: 1 },
+          usersPagination: users.pagination ?? { page: 1, take: 10000, total: 0, pages: 1 },
           gifts: gifts.gifts ?? [],
           orders: orders.orders ?? [],
           ordersPagination: orders.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
@@ -1251,24 +1276,24 @@ export default function AdminPage() {
       metrics: { ...current.metrics, pendingVideos: Math.max(0, current.metrics.pendingVideos - 1) },
     } : current);
   }
-  async function handleOrderAction(order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") {
+  async function handleOrderAction(order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund"): Promise<boolean> {
     const reason = ["reject", "refund"].includes(action) ? window.prompt("请输入处理原因") : undefined;
-    if (["reject", "refund"].includes(action) && !reason) return;
+    if (["reject", "refund"].includes(action) && !reason) return false;
     const response = await fetch(`/api/admin/orders/${order.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, reason }),
     });
-    const result = await response.json();
+    const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      window.alert(result.error ?? "订单操作失败");
-      return;
+      throw new Error(result.error ?? "订单操作失败");
     }
     setData((current) => current ? {
       ...current,
       orders: current.orders.map((item) => item.id === order.id ? { ...item, status: result.order.status } : item),
       metrics: { ...current.metrics, pendingOrders: ["approve", "fulfill", "reject", "refund"].includes(action) && ["PENDING", "APPROVED"].includes(order.status) ? Math.max(0, current.metrics.pendingOrders - 1) : current.metrics.pendingOrders },
     } : current);
+    return true;
   }
   async function handleUserUpdate(user: AdminUserRow, input: { active?: boolean; role?: "MEMBER" | "ADMIN"; guildStatus?: string }) {
     const response = await fetch(`/api/admin/users/${user.id}`, {

@@ -6,7 +6,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 
 const schema = z.object({
-  userIds: z.array(z.string().min(1)).min(1).max(200),
+  userIds: z.array(z.string().min(1)).min(1),
   amount: z.number().int().min(-1_000_000).max(1_000_000).refine((amount) => amount !== 0),
   reason: z.string().trim().min(2).max(500),
 });

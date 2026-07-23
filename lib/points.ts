@@ -238,7 +238,7 @@ export async function adminAdjustPointsBatch(input: {
   const reason = input.reason.trim();
   if (reason.length < 2 || reason.length > 500) throw new BulkPointAdjustmentError("请填写 2 至 500 字的调整原因");
   const userIds = [...new Set(input.userIds)].sort();
-  if (userIds.length < 1 || userIds.length > 200) throw new BulkPointAdjustmentError("批量调整需要选择 1 至 200 名成员");
+  if (userIds.length < 1) throw new BulkPointAdjustmentError("批量调整至少需要选择一名成员");
 
   try {
     return await db.$transaction(async (tx) => {

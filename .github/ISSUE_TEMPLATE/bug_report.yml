@@ -1,0 +1,40 @@
+name: Bug 报告
+description: 报告线上或测试环境缺陷
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响
+      description: 受影响用户、积分、订单或数据范围
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期与实际结果
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: 风险类型
+      options:
+        - 普通功能
+        - 积分或余额
+        - 认证或越权
+        - 敏感数据
+        - 数据库或部署
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志、截图和版本

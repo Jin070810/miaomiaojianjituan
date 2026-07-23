@@ -1,0 +1,110 @@
+name: miaomiao-points
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-miaomiao}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      # 仅供宿主机备份/维护使用，不暴露到公网网卡。
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - miaomiao_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: *default-logging
+  redis:
+    image: redis:7-alpine
+    ports:
+      # Redis 只通过 Docker 内网和本机维护访问。
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    logging: *default-logging
+  app:
+    build:
+      context: .
+      target: runner
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-miaomiao}?schema=public}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
+      SESSION_SECRET: ${SESSION_SECRET}
+      PHONE_ENCRYPTION_KEY: ${PHONE_ENCRYPTION_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      # 正式环境由 Nginx 反向代理，应用端口不直接对公网开放。
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+  migrate:
+    build:
+      context: .
+      target: worker
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-miaomiao}?schema=public}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-miaomiao}?schema=public}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
+      VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-4}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["production"]
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+volumes:
+  miaomiao_pg:

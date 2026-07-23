@@ -1,0 +1,49 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { currentUser } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { redeemGift } from "@/lib/points";
+import { assertSameOrigin, getClientIp, isSafeCashQrCodeUrl, MAX_CASH_QR_CODE_LENGTH, rateLimitResponse, requireIdempotency } from "@/lib/security";
+import { enforceRateLimit } from "@/lib/rate-limit";
+
+const schema = z.object({
+  giftId: z.string().min(1),
+  quantity: z.number().int().min(1).max(20),
+  shippingInfo: z.string().trim().max(500).optional(),
+  note: z.string().trim().max(200).optional(),
+  recipient: z.object({
+    recipientName: z.string().trim().min(1).max(80).optional(),
+    phone: z.string().trim().regex(/^1\d{10}$/).optional(),
+    address: z.string().trim().min(5).max(300).optional(),
+    cashQrCodeUrl: z.string().trim().max(MAX_CASH_QR_CODE_LENGTH).refine(isSafeCashQrCodeUrl).optional(),
+  }).optional(),
+});
+
+export async function POST(request: Request) {
+  try {
+    assertSameOrigin(request);
+    const user = await currentUser();
+    if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    await enforceRateLimit(`redemption:${user.id}`, 10, 60);
+    const input = schema.parse(await request.json());
+    const order = await redeemGift({ ...input, userId: user.id, idempotencyKey: requireIdempotency(request), ip: getClientIp(request) });
+    return NextResponse.json({ order }, { status: 201 });
+  } catch (error) {
+    const limited = rateLimitResponse(error);
+    if (limited) return limited;
+    return NextResponse.json({ error: error instanceof Error ? error.message : "兑换失败" }, { status: 400 });
+  }
+}
+
+export async function GET() {
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const orders = await db.redemptionOrder.findMany({ where: { userId: user.id }, include: { gift: true }, orderBy: { createdAt: "desc" }, take: 100 });
+  return NextResponse.json({
+    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, ...order }) => ({
+      ...order,
+      hasRecipientPhone: Boolean(recipientPhoneEnc),
+      hasRecipientAddress: Boolean(recipientAddressEnc),
+    })),
+  });
+}

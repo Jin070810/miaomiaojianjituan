@@ -1,0 +1,46 @@
+{
+  "name": "miaomiao-points-center",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "tsc --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "feishu:inspect": "tsx scripts/inspect-feishu.ts",
+    "feishu:migrate": "tsx scripts/migrate-feishu.ts",
+    "seed:admin": "tsx scripts/seed-admin.ts",
+    "worker": "tsx worker.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.8.2",
+    "argon2": "^0.41.1",
+    "bullmq": "^5.55.0",
+    "dotenv": "^16.5.0",
+    "ioredis": "^5.6.1",
+    "lucide-react": "^0.468.0",
+    "next": "^16.2.11",
+    "postcss": "^8.5.22",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.25.76",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.3",
+    "@types/react-dom": "^19.0.2",
+    "prisma": "^6.8.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "postcss": "^8.5.22",
+    "sharp": "^0.35.3"
+  }
+}

@@ -1,0 +1,63 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: "已审查并合并到 main 的完整 commit SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Validate release commit
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_commit 必须是完整的 40 位 SHA"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Deploy approved commit
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "set -e; cd '$PRODUCTION_PATH'; git fetch origin; git checkout --detach '$RELEASE_COMMIT'; bash scripts/backup-db.sh backups .env.production; docker compose --env-file .env.production --profile production up -d --build; docker compose ps"
+
+      - name: Verify production health
+        env:
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+        run: |
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1

@@ -1,0 +1,2 @@
+ALTER TABLE "RankingAward" ADD COLUMN IF NOT EXISTS "cashQrCodeUrl" TEXT;
+ALTER TABLE "RecipientProfile" ADD COLUMN IF NOT EXISTS "cashQrCodeUrl" TEXT;

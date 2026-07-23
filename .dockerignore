@@ -1,0 +1,7 @@
+node_modules
+.next
+.env
+.env.*
+output/feishu
+*.log
+.git

@@ -1,0 +1,193 @@
+import { beforeAll, afterAll, describe, expect, it } from "vitest";
+import { db } from "@/lib/db";
+import { completeTransfer, creditVideoReward, redeemGift, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
+import { periodBounds, settleRanking } from "@/lib/rankings";
+
+const enabled = process.env.RUN_DB_TESTS === "1";
+
+describe.skipIf(!enabled)("积分事务并发", () => {
+  let senderId = "";
+  let receiverId = "";
+  let giftId = "";
+  let cashGiftId = "";
+  const rankingPeriodIds: string[] = [];
+
+  beforeAll(async () => {
+    const suffix = Date.now().toString();
+    const sender = await db.user.create({
+      data: { kuaishouId: `test-sender-${suffix}`, nickname: "测试转出", passwordHash: "test", account: { create: { balance: 500 } } },
+    });
+    const receiver = await db.user.create({
+      data: { kuaishouId: `test-receiver-${suffix}`, nickname: "测试转入", passwordHash: "test", account: { create: { balance: 0 } } },
+    });
+    senderId = sender.id;
+    receiverId = receiver.id;
+  });
+
+  afterAll(async () => {
+    await db.redemptionOrder.deleteMany({ where: { giftId: { in: [giftId, cashGiftId].filter(Boolean) } } });
+    await db.transfer.deleteMany({ where: { OR: [{ senderId }, { receiverId }] } });
+    const accounts = await db.pointAccount.findMany({ where: { userId: { in: [senderId, receiverId] } }, select: { id: true } });
+    await db.pointLedger.deleteMany({ where: { accountId: { in: accounts.map((item) => item.id) } } });
+    await db.user.deleteMany({ where: { id: { in: [senderId, receiverId] } } });
+    if (rankingPeriodIds.length) await db.rankingPeriod.deleteMany({ where: { id: { in: rankingPeriodIds } } });
+    if (giftId) await db.gift.deleteMany({ where: { id: giftId } });
+    if (cashGiftId) await db.gift.deleteMany({ where: { id: cashGiftId } });
+    await db.$disconnect();
+  });
+
+  it("is idempotent and never overspends under concurrent requests", async () => {
+    const duplicate = await Promise.all([
+      completeTransfer({ senderId, receiverId, amount: 100, idempotencyKey: "integration-duplicate" }),
+      completeTransfer({ senderId, receiverId, amount: 100, idempotencyKey: "integration-duplicate" }),
+    ]);
+    expect(duplicate[0].id).toBe(duplicate[1].id);
+    const results = await Promise.allSettled(
+      Array.from({ length: 6 }, (_, index) => completeTransfer({ senderId, receiverId, amount: 100, idempotencyKey: `integration-${index}` })),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(4);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(0);
+  });
+
+  it("credits a video only once", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
+    const video = await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/integration",
+        requestUrl: "https://v.kuaishou.com/integration",
+        sourceKind: "short-link",
+        submittedNickname: "测试转出",
+        idempotencyKey: "integration-video",
+      },
+    });
+    await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
+    await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
+    expect(await db.pointLedger.count({ where: { referenceId: video.id } })).toBe(1);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(50);
+  });
+
+  it("reverses an approved video exactly once", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
+    const video = await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/reversal",
+        requestUrl: "https://v.kuaishou.com/reversal",
+        sourceKind: "short-link",
+        submittedNickname: "测试转出",
+        idempotencyKey: "integration-reversal-video",
+      },
+    });
+    await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
+    await Promise.all([
+      revokeVideoReward({ videoId: video.id, actorId: senderId, reason: "测试撤销" }),
+      revokeVideoReward({ videoId: video.id, actorId: senderId, reason: "测试撤销" }),
+    ]);
+    expect(await db.videoSubmission.findUnique({ where: { id: video.id } }).then((item) => item?.status)).toBe("REVOKED");
+    expect(await db.pointLedger.count({ where: { referenceId: video.id, type: "REVERSAL" } })).toBe(1);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(-50);
+  });
+
+  it("allows a rejected photoId to be submitted again but blocks another active copy", async () => {
+    const photoId = `integration-photo-${Date.now()}`;
+    await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/rejected-copy",
+        requestUrl: "https://v.kuaishou.com/rejected-copy",
+        sourceKind: "short-link",
+        status: "REJECTED",
+        photoId,
+        submittedNickname: "测试转出",
+        idempotencyKey: `integration-rejected-${photoId}`,
+      },
+    });
+    await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/active-copy",
+        requestUrl: "https://v.kuaishou.com/active-copy",
+        sourceKind: "short-link",
+        status: "APPROVED",
+        photoId,
+        submittedNickname: "测试转出",
+        idempotencyKey: `integration-active-${photoId}`,
+      },
+    });
+    await expect(db.videoSubmission.create({
+      data: {
+        userId: receiverId,
+        sourceUrl: "https://v.kuaishou.com/duplicate-active",
+        requestUrl: "https://v.kuaishou.com/duplicate-active",
+        sourceKind: "short-link",
+        status: "PENDING_REVIEW",
+        photoId,
+        submittedNickname: "测试转入",
+        idempotencyKey: `integration-duplicate-active-${photoId}`,
+      },
+    })).rejects.toThrow();
+  });
+
+  it("settles a weekly video-count ranking once and creates top-five awards", async () => {
+    const reference = new Date("2026-04-15T12:00:00.000Z");
+    const bounds = periodBounds("week", reference);
+    await db.rankingPeriod.deleteMany({ where: { type: "WEEK", periodStart: bounds.start } });
+    await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/ranking",
+        requestUrl: "https://v.kuaishou.com/ranking",
+        sourceKind: "short-link",
+        status: "APPROVED",
+        likes: 500,
+        submittedNickname: "测试转出",
+        submittedAt: new Date(bounds.start.getTime() + 60_000),
+        idempotencyKey: "integration-ranking-video",
+      },
+    });
+    const first = await settleRanking("week", reference, new Date(bounds.end.getTime() + 1));
+    rankingPeriodIds.push(first.period.id);
+    const second = await settleRanking("week", reference, new Date(bounds.end.getTime() + 2));
+    expect(first.settled).toBe(true);
+    expect(second.settled).toBe(false);
+    expect(await db.rankingEntry.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
+    expect(await db.rankingAward.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
+  });
+
+  it("refunds an order and restores stock only once", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 50 } });
+    const gift = await db.gift.create({ data: { name: "测试礼品", pointsCost: 10, stock: 1 } });
+    giftId = gift.id;
+    const order = await redeemGift({
+      userId: senderId,
+      giftId,
+      quantity: 1,
+      idempotencyKey: "integration-redemption",
+      recipient: { recipientName: "测试成员", phone: "13800138000", address: "上海市测试区测试路 1 号" },
+    });
+    await Promise.all([
+      updateRedemptionOrder({ orderId: order.id, action: "refund", actorId: senderId, reason: "并发测试" }),
+      updateRedemptionOrder({ orderId: order.id, action: "refund", actorId: senderId, reason: "并发测试" }),
+    ]);
+    expect(await db.gift.findUnique({ where: { id: giftId } }).then((item) => item?.stock)).toBe(1);
+    expect(await db.pointLedger.count({ where: { referenceId: order.id, type: "REDEMPTION_REFUND" } })).toBe(1);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(50);
+  });
+
+  it("requires a QR code for cash redemption and stores a reusable recipient profile", async () => {
+    const gift = await db.gift.create({ data: { name: "测试现金", kind: "CASH", pointsCost: 5, stock: 2 } });
+    cashGiftId = gift.id;
+    await expect(redeemGift({ userId: senderId, giftId: gift.id, quantity: 1, idempotencyKey: "integration-cash-missing" })).rejects.toThrow("收款码");
+    const order = await redeemGift({
+      userId: senderId,
+      giftId: gift.id,
+      quantity: 1,
+      idempotencyKey: "integration-cash",
+      recipient: { cashQrCodeUrl: "https://example.com/qr.png" },
+    });
+    expect(order.cashQrCodeUrl).toBe("https://example.com/qr.png");
+    expect(await db.recipientProfile.findUnique({ where: { userId: senderId } }).then((profile) => profile?.cashQrCodeUrl)).toBe("https://example.com/qr.png");
+  });
+});

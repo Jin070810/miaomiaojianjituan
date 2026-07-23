@@ -1,0 +1,72 @@
+# 妙妙剪辑团积分中心
+
+这是“妙妙剪辑团积分中心”的可部署版本，包含成员端、管理员端、认证、积分账户、视频审核、转账、积分商城、榜单结算和飞书迁移工具。
+
+## 本地运行
+
+1. 安装依赖：`npm install`
+2. 复制 `.env.example` 为 `.env`，设置 `DATABASE_URL`、`SESSION_SECRET` 和 32 字节的 `PHONE_ENCRYPTION_KEY`。
+3. 启动 PostgreSQL 与 Redis：`docker compose up -d postgres redis`
+4. 初始化数据库：`npm run db:deploy`
+5. 先检查飞书数据：`npm run feishu:inspect`
+6. 业务负责人逐项确认冲突报告后，显式批准才执行迁移：`npm run feishu:migrate -- --apply --allow-conflicts`
+7. 设置 `ADMIN_KUAISHOU_IDS` 后执行 `npm run seed:admin` 初始化管理员角色。
+8. 启动 Web：`npm run dev`
+9. 启动抓取 Worker：`npm run worker`
+
+完整 Docker 部署可使用 `docker compose up -d`。`migrate` 服务会等待 PostgreSQL 健康后执行版本化的 `prisma migrate deploy`。
+
+生产环境准备证书到 `certs/fullchain.pem` 和 `certs/privkey.pem` 后，使用 `docker compose --profile production up -d` 启动 Nginx HTTPS 入口。
+
+Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份，恢复使用 `bash scripts/restore-db.sh <备份文件> .env.production`；Windows 运维可使用对应的 `.ps1` 脚本。备份会生成 SHA-256 校验文件，应保存到独立存储，不要放进代码仓库。
+
+## 快手视频抓取
+
+成员可以粘贴短链接、长链接或包含链接的分享文本。服务端只接受 `kuaishou.com` 域名，Worker 使用参数数组调用 `curl -sS -L -A "Mozilla/5.0" --max-time 10`，从页面源码解析 `likeCount`、`viewCount`、`photoId` 和 `userName`。
+
+作者名会先去除首尾空格，再与提交时的成员昵称快照精确匹配。匹配成功才自动入账；作者不一致进入管理员异常审核队列。
+
+视频提交规则：
+
+- 只结算提交时发布时间不超过 7 天、点赞量至少 200 的视频。
+- 200–1000 赞兑换 50 积分；超过 1000 赞按 `floor(点赞量 / 2)` 计算，最高 5000 积分。
+- `photoId` 对处理中、待审核和已通过记录全局唯一，同一视频不能重复结算。
+- 已驳回记录不占用唯一约束，修正问题后可以重新提交。
+
+## 榜单与领奖
+
+- 周更新排行榜：按当周提交且通过的视频数量排序。
+- 月点赞量排行榜：按当月提交且通过视频在提交时抓取的点赞量总和排序。
+- 总积分排行榜：按成员当前可用积分排序。
+- Worker 自动补结算已结束的周榜和月榜，每期前五名生成领奖记录。
+- 现金礼品必须填写收款码；实物兑换和实物榜单奖励必须填写收货姓名、手机号和详细地址。
+- 收款码和收货档案可保存复用；手机号和地址加密存储，管理员后台按权限解密查看。
+
+## 数据安全
+
+- 密码使用 Argon2id，Session 使用 HttpOnly、Secure（生产环境）和 SameSite Cookie。
+- 手机号使用 AES-256-GCM 加密保存。
+- 转账、兑换和视频入账在数据库事务内完成，余额使用条件更新防止并发超扣。
+- 关键变更写入 `AuditLog`，包含前后值、操作者、IP 和请求标识。
+- 注册使用大小写不敏感的快手 ID 唯一校验；关键提交使用幂等键。
+- 生产健康检查会拒绝默认数据库密码、无效密钥、Redis 不可用或没有启用管理员的部署。
+- 默认 Worker 并发为 4，可通过 `VIDEO_WORKER_CONCURRENCY` 调整；按约 200 名成员、峰值 20 人同时使用设计。
+- `output/feishu` 中的飞书导出文件已加入忽略规则，不应提交到代码仓库。
+
+## 验证命令
+
+```powershell
+npm run lint
+npm test
+$env:RUN_DB_TESTS="1"; npm test
+npm run build
+npm audit --omit=dev
+docker compose build app
+docker build --target worker -t miaomiao-points-worker:verify .
+```
+
+正式上线前的外部准备和验收顺序见 `PRODUCTION-READINESS.md`。
+
+## 工程协作
+
+开发约束见 [`AGENTS.md`](AGENTS.md)，完整分支、PR、测试、发布和回滚流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)。任何正式部署必须经过人工审查和 GitHub `production` 环境批准。

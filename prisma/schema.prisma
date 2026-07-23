@@ -1,0 +1,321 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  MEMBER
+  ADMIN
+}
+
+enum VideoStatus {
+  PROCESSING
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  REVOKED
+  FAILED
+}
+
+enum LedgerType {
+  VIDEO_REWARD
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADMIN_ADJUSTMENT
+  REDEMPTION
+  REDEMPTION_REFUND
+  REVERSAL
+}
+
+enum TransferStatus {
+  COMPLETED
+  REJECTED
+}
+
+enum RedemptionStatus {
+  PENDING
+  APPROVED
+  FULFILLED
+  REJECTED
+  REFUNDED
+}
+
+enum GiftKind {
+  PHYSICAL
+  CASH
+}
+
+enum RankingPeriodType {
+  WEEK
+  MONTH
+}
+
+enum RankingPeriodStatus {
+  OPEN
+  SETTLED
+}
+
+enum RankingAwardStatus {
+  PENDING
+  CLAIMED
+  FULFILLED
+  EXPIRED
+}
+
+model User {
+  id               String               @id @default(cuid())
+  kuaishouId       String               @unique
+  nickname         String
+  passwordHash     String
+  role             Role                 @default(MEMBER)
+  active           Boolean              @default(true)
+  guildStatus      String?
+  boundPhoneEnc    String?
+  invited          Boolean              @default(false)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  account          PointAccount?
+  recipientProfile RecipientProfile?
+  videos           VideoSubmission[]
+  rankingEntries   RankingEntry[]
+  rankingAwards    RankingAward[]
+  outgoing         Transfer[]           @relation("sender")
+  incoming         Transfer[]           @relation("receiver")
+  redemptions      RedemptionOrder[]
+  auditLogs        AuditLog[]           @relation("actor")
+  guildHistory     GuildStatusHistory[]
+  sessions         Session[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model GuildStatusHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  status    String
+  reason    String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model PointAccount {
+  id        String        @id @default(cuid())
+  userId    String        @unique
+  balance   Int           @default(0)
+  version   Int           @default(0)
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledger    PointLedger[]
+}
+
+model PointLedger {
+  id             String       @id @default(cuid())
+  accountId      String
+  type           LedgerType
+  amount         Int
+  balanceAfter   Int
+  referenceId    String?
+  note           String?
+  idempotencyKey String?      @unique
+  createdAt      DateTime     @default(now())
+  account        PointAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
+  @@index([referenceId])
+}
+
+model VideoSubmission {
+  id                String      @id @default(cuid())
+  userId            String
+  sourceUrl         String
+  requestUrl        String
+  sourceKind        String
+  status            VideoStatus @default(PROCESSING)
+  shortCode         String?
+  photoId           String?
+  likes             Int?
+  views             Int?
+  publishedAt       DateTime?
+  fetchedOwner      String?
+  matchedOwner      Boolean?
+  points            Int         @default(0)
+  submittedNickname String
+  submittedAt       DateTime    @default(now())
+  processedAt       DateTime?
+  reviewedAt        DateTime?
+  reviewReason      String?
+  rawPayload        Json?
+  idempotencyKey    String      @unique
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, submittedAt])
+  @@index([status, submittedAt])
+  @@index([photoId, status])
+}
+
+model Transfer {
+  id             String         @id @default(cuid())
+  senderId       String
+  receiverId     String
+  amount         Int
+  status         TransferStatus @default(COMPLETED)
+  note           String?
+  idempotencyKey String         @unique
+  createdAt      DateTime       @default(now())
+  sender         User           @relation("sender", fields: [senderId], references: [id])
+  receiver       User           @relation("receiver", fields: [receiverId], references: [id])
+
+  @@index([senderId, createdAt])
+  @@index([receiverId, createdAt])
+}
+
+model Gift {
+  id            String            @id @default(cuid())
+  name          String
+  kind          GiftKind          @default(PHYSICAL)
+  pointsCost    Int
+  stock         Int               @default(0)
+  imageUrl      String?
+  description   String?
+  active        Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  orders        RedemptionOrder[]
+  rankingAwards RankingAward[]
+}
+
+model RedemptionOrder {
+  id                  String           @id @default(cuid())
+  userId              String
+  giftId              String
+  quantity            Int              @default(1)
+  unitCost            Int
+  totalCost           Int
+  status              RedemptionStatus @default(PENDING)
+  shippingInfo        String?
+  recipientName       String?
+  recipientPhoneEnc   String?
+  recipientAddressEnc String?
+  cashQrCodeUrl       String?
+  note                String?
+  idempotencyKey      String           @unique
+  createdAt           DateTime         @default(now())
+  reviewedAt          DateTime?
+  user                User             @relation(fields: [userId], references: [id])
+  gift                Gift             @relation(fields: [giftId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model RecipientProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  recipientName String?
+  phoneEnc      String?
+  addressEnc    String?
+  cashQrCodeUrl String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RankingPeriod {
+  id          String              @id @default(cuid())
+  type        RankingPeriodType
+  periodStart DateTime
+  periodEnd   DateTime
+  status      RankingPeriodStatus @default(OPEN)
+  settledAt   DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  entries     RankingEntry[]
+  awards      RankingAward[]
+
+  @@unique([type, periodStart])
+  @@index([type, status, periodStart])
+}
+
+model RankingEntry {
+  id         String        @id @default(cuid())
+  periodId   String
+  userId     String
+  rank       Int
+  value      Int
+  videoCount Int           @default(0)
+  likes      Int           @default(0)
+  createdAt  DateTime      @default(now())
+  period     RankingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([periodId, userId])
+  @@unique([periodId, rank])
+  @@index([periodId, rank])
+}
+
+model RankingAward {
+  id                  String             @id @default(cuid())
+  periodId            String
+  userId              String
+  rank                Int
+  value               Int
+  giftId              String?
+  status              RankingAwardStatus @default(PENDING)
+  recipientName       String?
+  recipientPhoneEnc   String?
+  recipientAddressEnc String?
+  cashQrCodeUrl       String?
+  claimedAt           DateTime?
+  fulfilledAt         DateTime?
+  createdAt           DateTime           @default(now())
+  period              RankingPeriod      @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gift                Gift?              @relation(fields: [giftId], references: [id], onDelete: SetNull)
+
+  @@unique([periodId, userId])
+  @@unique([periodId, rank])
+  @@index([userId, status])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorId     String?
+  action      String
+  entity      String
+  entityId    String?
+  beforeValue Json?
+  afterValue  Json?
+  reason      String?
+  ip          String?
+  requestId   String?
+  createdAt   DateTime @default(now())
+  actor       User?    @relation("actor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+model LegacyImport {
+  id          String   @id @default(cuid())
+  sourceTable String
+  sourceId    String
+  rawValue    Json
+  importedAt  DateTime @default(now())
+
+  @@unique([sourceTable, sourceId])
+}

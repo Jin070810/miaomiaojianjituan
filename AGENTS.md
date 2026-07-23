@@ -1,0 +1,59 @@
+# 妙妙剪辑团积分中心工程约束
+
+本文件是仓库级约束，适用于所有新增功能、缺陷修复、依赖升级和部署变更。详细流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)。
+
+## 分支与合并
+
+- 禁止直接向 `main`、`master` 或正式发布分支提交代码。
+- 每个任务必须从最新主分支创建独立分支，命名使用 `feature/`、`fix/`、`security/`、`chore/` 或 `hotfix/` 前缀，例如 `fix/video-dedup-20260723`。
+- 一个分支只解决一个业务目标；无关格式化和大规模重构不得混入。
+- 只能通过 Pull Request 合并。至少一名人工审查者确认后才能合并；涉及积分、权限、数据库、认证或部署时，需要业务负责人和技术负责人共同确认。
+- 合并前必须通过 CI、代码审查、数据库迁移检查和关键流程验收。未经人工确认，不得合并或部署正式环境。
+
+## 数据和安全不变量
+
+- 快手 ID 是大小写不敏感的唯一身份标识；不得提供成员自行修改快手 ID 的接口。
+- 视频 `photoId` 对处理中、待审核和已通过记录全局去重；驳回记录才允许重新提交。
+- 积分增减、转账、兑换、退款、视频入账、撤销和榜单领奖必须在事务中完成，并写入审计日志。
+- 余额校验必须使用数据库条件更新或行锁；任何重试都必须幂等。
+- 手机号、地址等敏感字段必须加密保存；接口和日志只返回脱敏值或权限允许的明文。
+- 所有管理接口必须服务端执行 RBAC；不能只依赖前端隐藏按钮。
+- 密码使用 Argon2id；Session 使用 HttpOnly、SameSite Cookie，正式环境必须 HTTPS。
+- 不得把密码、密钥、服务器凭据、收款码、飞书原始导出或生产数据提交到 Git。
+
+## 数据库与兼容性
+
+- Prisma migration 只允许新增，不得修改已经执行过的 migration。
+- 破坏性变更必须拆成“兼容读取 -> 数据迁移 -> 删除旧字段”多个发布阶段，并提供回滚方案。
+- 任何涉及积分、状态机、唯一约束或历史数据的 migration，必须有集成测试和生产副本演练。
+- API 响应变更优先向后兼容；成员端和后台端不能因字段缺失直接崩溃。
+
+## 测试门禁
+
+提交 PR 前至少执行：
+
+```powershell
+npm run lint
+npm test
+$env:RUN_DB_TESTS="1"; npm test
+npm run build
+npm audit --omit=dev
+docker compose config
+docker compose build app
+docker build --target worker -t miaomiao-points-worker:verify .
+```
+
+涉及 UI 时还必须用 Playwright 验证 `390×844` 和 `1440×900`，检查登录、核心提交、成功、失败、空数据、禁用和加载状态，不得有溢出或遮挡。
+
+## 发布和回滚
+
+- 正式部署只使用已审查并合并的 release commit，不直接在服务器编辑代码。
+- 发布前必须确认管理员账号、生产密钥、HTTPS 证书、数据库备份、Redis、Worker 和监控告警。
+- 数据库 migration 先执行，健康检查通过后再切换 Web；Worker 与 Web 必须使用同一版本。
+- 每次发布记录版本号、commit、migration、操作者、时间和回滚点。
+- 回滚应用版本前先评估 migration 是否可逆；不可逆 migration 必须使用前向修复，不得直接回退数据库。
+- 正式事故优先停止积分发放/兑换入口，保留审计日志和备份，再按应急流程处理。
+
+## 完成定义
+
+任务只有同时满足“代码完成、测试通过、文档更新、人工审查、staging 验收、正式发布记录”才算完成。任何一个环节缺失都只能标记为 `Ready for review` 或 `Ready for deploy`，不能宣称已上线。

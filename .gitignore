@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+.playwright-cli/
+output/playwright/
+*.tsbuildinfo
+output/feishu/*.records.json
+output/feishu/*.fields.json
+output/feishu/*.page*.json
+output/feishu/migration-report.json
+output/feishu/inspect-report.json
+*.log
+backups/
+output/backup-drill/

@@ -1,0 +1,369 @@
+import { db } from "./db";
+import { LedgerType, Prisma, PrismaClient } from "@prisma/client";
+import { decryptSensitive, encryptSensitive } from "./security";
+
+export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
+  return tx.pointAccount.upsert({
+    where: { userId },
+    create: { userId, balance: 0 },
+    update: {},
+  });
+}
+
+async function credit(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  amount: number,
+  type: LedgerType,
+  referenceId: string,
+  note?: string,
+  idempotencyKey?: string,
+) {
+  if (!Number.isInteger(amount) || amount <= 0) throw new Error("积分数量必须为正整数");
+  const account = await ensureAccount(userId, tx);
+  const updated = await tx.pointAccount.update({
+    where: { id: account.id },
+    data: { balance: { increment: amount }, version: { increment: 1 } },
+  });
+  await tx.pointLedger.create({
+    data: { accountId: account.id, amount, balanceAfter: updated.balance, type, referenceId, note, idempotencyKey },
+  });
+  return updated;
+}
+
+async function debit(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  amount: number,
+  type: LedgerType,
+  referenceId: string,
+  note?: string,
+  idempotencyKey?: string,
+) {
+  if (!Number.isInteger(amount) || amount <= 0) throw new Error("积分数量必须为正整数");
+  const account = await ensureAccount(userId, tx);
+  const changed = await tx.pointAccount.updateMany({
+    where: { id: account.id, balance: { gte: amount } },
+    data: { balance: { decrement: amount }, version: { increment: 1 } },
+  });
+  if (changed.count !== 1) throw new Error("积分余额不足");
+  const updated = await tx.pointAccount.findUniqueOrThrow({ where: { id: account.id } });
+  await tx.pointLedger.create({
+    data: { accountId: account.id, amount: -amount, balanceAfter: updated.balance, type, referenceId, note, idempotencyKey },
+  });
+  return updated;
+}
+
+async function debitCompensating(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  amount: number,
+  type: LedgerType,
+  referenceId: string,
+  note?: string,
+) {
+  if (!Number.isInteger(amount) || amount <= 0) throw new Error("积分数量必须为正整数");
+  const account = await ensureAccount(userId, tx);
+  const updated = await tx.pointAccount.update({
+    where: { id: account.id },
+    data: { balance: { decrement: amount }, version: { increment: 1 } },
+  });
+  await tx.pointLedger.create({
+    data: { accountId: account.id, amount: -amount, balanceAfter: updated.balance, type, referenceId, note },
+  });
+  return updated;
+}
+
+export async function completeTransfer(input: {
+  senderId: string;
+  receiverId: string;
+  amount: number;
+  note?: string;
+  idempotencyKey: string;
+  actorId?: string;
+  ip?: string;
+}) {
+  if (input.senderId === input.receiverId) throw new Error("不能向自己转账");
+  try {
+    return await db.$transaction(async (tx) => {
+    const existing = await tx.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (existing) return existing;
+    const sender = await tx.user.findUnique({ where: { id: input.senderId } });
+    const receiver = await tx.user.findUnique({ where: { id: input.receiverId } });
+    if (!sender || !receiver || !sender.active || !receiver.active) throw new Error("转出或转入成员不存在或已停用");
+    const transfer = await tx.transfer.create({
+      data: {
+        senderId: input.senderId,
+        receiverId: input.receiverId,
+        amount: input.amount,
+        note: input.note,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    await debit(tx, input.senderId, input.amount, "TRANSFER_OUT", transfer.id, input.note);
+    await credit(tx, input.receiverId, input.amount, "TRANSFER_IN", transfer.id, input.note);
+    await tx.auditLog.create({
+      data: {
+        actorId: input.actorId ?? input.senderId,
+        action: "TRANSFER_COMPLETED",
+        entity: "Transfer",
+        entityId: transfer.id,
+        afterValue: { amount: input.amount, senderId: input.senderId, receiverId: input.receiverId },
+        ip: input.ip,
+      },
+    });
+    return transfer;
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const existing = await db.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+      if (existing) return existing;
+    }
+    throw error;
+  }
+}
+
+export async function redeemGift(input: {
+  userId: string;
+  giftId: string;
+  quantity: number;
+  shippingInfo?: string;
+  note?: string;
+  recipient?: {
+    recipientName?: string;
+    phone?: string;
+    address?: string;
+    cashQrCodeUrl?: string;
+  };
+  idempotencyKey: string;
+  ip?: string;
+}) {
+  try {
+    return await db.$transaction(async (tx) => {
+    const existing = await tx.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (existing) return existing;
+    if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 20) {
+      throw new Error("兑换数量不合法");
+    }
+    const gift = await tx.gift.findUnique({ where: { id: input.giftId } });
+    if (!gift || !gift.active) throw new Error("礼品不存在或已下架");
+    const profile = await tx.recipientProfile.findUnique({ where: { userId: input.userId } });
+    const recipientName = input.recipient?.recipientName?.trim() || profile?.recipientName || null;
+    const recipientPhone = input.recipient?.phone?.trim() || (profile?.phoneEnc ? decryptSensitive(profile.phoneEnc) : null);
+    const recipientAddress = input.recipient?.address?.trim() || (profile?.addressEnc ? decryptSensitive(profile.addressEnc) : null);
+    const cashQrCodeUrl = input.recipient?.cashQrCodeUrl?.trim() || profile?.cashQrCodeUrl || null;
+    if (gift.kind === "CASH" && !cashQrCodeUrl) throw new Error("兑换现金必须提供收款码");
+    if (gift.kind === "PHYSICAL" && (!recipientName || !recipientPhone || !recipientAddress)) {
+      throw new Error("兑换实物商品需要完整的收货姓名、手机号和详细地址");
+    }
+    const reserved = await tx.gift.updateMany({
+      where: { id: gift.id, stock: { gte: input.quantity }, active: true },
+      data: { stock: { decrement: input.quantity } },
+    });
+    if (reserved.count !== 1) throw new Error("礼品库存不足");
+    const totalCost = gift.pointsCost * input.quantity;
+    const order = await tx.redemptionOrder.create({
+      data: {
+        userId: input.userId,
+        giftId: gift.id,
+        quantity: input.quantity,
+        unitCost: gift.pointsCost,
+        totalCost,
+        shippingInfo: input.shippingInfo,
+        recipientName,
+        recipientPhoneEnc: recipientPhone ? encryptSensitive(recipientPhone) : null,
+        recipientAddressEnc: recipientAddress ? encryptSensitive(recipientAddress) : null,
+        cashQrCodeUrl,
+        note: input.note,
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    if (input.recipient) {
+      await tx.recipientProfile.upsert({
+        where: { userId: input.userId },
+        create: {
+          userId: input.userId,
+          recipientName: input.recipient.recipientName?.trim() || null,
+          phoneEnc: input.recipient.phone?.trim() ? encryptSensitive(input.recipient.phone.trim()) : null,
+          addressEnc: input.recipient.address?.trim() ? encryptSensitive(input.recipient.address.trim()) : null,
+          cashQrCodeUrl: input.recipient.cashQrCodeUrl?.trim() || null,
+        },
+        update: {
+          ...(input.recipient.recipientName !== undefined ? { recipientName: input.recipient.recipientName.trim() || null } : {}),
+          ...(input.recipient.phone !== undefined ? { phoneEnc: input.recipient.phone.trim() ? encryptSensitive(input.recipient.phone.trim()) : null } : {}),
+          ...(input.recipient.address !== undefined ? { addressEnc: input.recipient.address.trim() ? encryptSensitive(input.recipient.address.trim()) : null } : {}),
+          ...(input.recipient.cashQrCodeUrl !== undefined ? { cashQrCodeUrl: input.recipient.cashQrCodeUrl.trim() || null } : {}),
+        },
+      });
+    }
+    await debit(tx, input.userId, totalCost, "REDEMPTION", order.id, `兑换${gift.name}`);
+    await tx.auditLog.create({
+      data: {
+        actorId: input.userId,
+        action: "REDEMPTION_CREATED",
+        entity: "RedemptionOrder",
+        entityId: order.id,
+        afterValue: { giftId: gift.id, quantity: input.quantity, totalCost },
+        ip: input.ip,
+      },
+    });
+    return order;
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const existing = await db.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+      if (existing) return existing;
+    }
+    throw error;
+  }
+}
+
+export async function creditVideoReward(input: {
+  videoId: string;
+  userId: string;
+  points: number;
+  actorId?: string;
+  ip?: string;
+}) {
+  return db.$transaction(async (tx) => {
+    const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
+    if (!video) throw new Error("视频记录不存在");
+    if (video.status === "APPROVED" && video.points === input.points) return video;
+    if (video.status === "APPROVED" && video.points !== input.points) {
+      const delta = input.points - video.points;
+      if (delta > 0) await credit(tx, input.userId, delta, "ADMIN_ADJUSTMENT", video.id, "管理员调整视频积分");
+      if (delta < 0) await debitCompensating(tx, input.userId, -delta, "ADMIN_ADJUSTMENT", video.id, "管理员调整视频积分");
+      const adjusted = await tx.videoSubmission.update({ where: { id: video.id }, data: { points: input.points, reviewedAt: new Date() } });
+      await tx.auditLog.create({
+        data: {
+          actorId: input.actorId,
+          action: "VIDEO_POINTS_ADJUSTED",
+          entity: "VideoSubmission",
+          entityId: video.id,
+          beforeValue: { points: video.points },
+          afterValue: { points: input.points },
+          ip: input.ip,
+        },
+      });
+      return adjusted;
+    }
+    const updated = await tx.videoSubmission.update({
+      where: { id: video.id },
+      data: { status: "APPROVED", points: input.points, processedAt: new Date(), reviewedAt: new Date() },
+    });
+    if (input.points > 0) {
+      await credit(tx, input.userId, input.points, "VIDEO_REWARD", video.id, "视频审核通过");
+    }
+    await tx.auditLog.create({
+      data: {
+        actorId: input.actorId,
+        action: "VIDEO_APPROVED",
+        entity: "VideoSubmission",
+        entityId: video.id,
+        beforeValue: { status: video.status, points: video.points },
+        afterValue: { status: updated.status, points: updated.points },
+        ip: input.ip,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function rejectVideo(input: { videoId: string; reason: string; actorId: string; ip?: string }) {
+  return db.$transaction(async (tx) => {
+    const video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: input.videoId } });
+    if (video.status === "APPROVED" || video.status === "REVOKED") {
+      throw new Error("已到账视频请使用撤销操作");
+    }
+    const updated = await tx.videoSubmission.update({
+      where: { id: input.videoId },
+      data: { status: "REJECTED", reviewReason: input.reason, reviewedAt: new Date() },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: input.actorId,
+        action: "VIDEO_REJECTED",
+        entity: "VideoSubmission",
+        entityId: input.videoId,
+        beforeValue: { status: video.status },
+        afterValue: { status: updated.status, reason: input.reason },
+        reason: input.reason,
+        ip: input.ip,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function revokeVideoReward(input: { videoId: string; actorId: string; reason: string; ip?: string }) {
+  return db.$transaction(async (tx) => {
+    const video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: input.videoId } });
+    if (video.status === "REVOKED") return video;
+    if (video.status !== "APPROVED") throw new Error("只有已到账视频可以撤销");
+    const claimed = await tx.videoSubmission.updateMany({
+      where: { id: video.id, status: "APPROVED" },
+      data: { status: "REVOKED", reviewReason: input.reason, reviewedAt: new Date() },
+    });
+    if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    if (video.points > 0) {
+      await debitCompensating(tx, video.userId, video.points, "REVERSAL", video.id, `撤销视频奖励：${input.reason}`);
+    }
+    const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    await tx.auditLog.create({
+      data: {
+        actorId: input.actorId,
+        action: "VIDEO_REVOKED",
+        entity: "VideoSubmission",
+        entityId: video.id,
+        beforeValue: { status: video.status, points: video.points },
+        afterValue: { status: updated.status, points: 0 },
+        reason: input.reason,
+        ip: input.ip,
+      },
+    });
+    return updated;
+  });
+}
+
+export async function updateRedemptionOrder(input: {
+  orderId: string;
+  action: "approve" | "fulfill" | "reject" | "refund";
+  actorId: string;
+  reason?: string;
+  ip?: string;
+}) {
+  return db.$transaction(async (tx) => {
+    const order = await tx.redemptionOrder.findUnique({ where: { id: input.orderId }, include: { gift: true } });
+    if (!order) throw new Error("兑换订单不存在");
+    if (input.action === "approve") {
+      if (order.status !== "PENDING") return order;
+      const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "APPROVED", reviewedAt: new Date() } });
+      await tx.auditLog.create({
+        data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
+      });
+      return updated;
+    }
+    if (input.action === "fulfill") {
+      if (!["APPROVED", "PENDING"].includes(order.status)) return order;
+      const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "FULFILLED", reviewedAt: new Date() } });
+      await tx.auditLog.create({
+        data: { actorId: input.actorId, action: "REDEMPTION_FULFILLED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
+      });
+      return updated;
+    }
+    if (["REJECTED", "REFUNDED"].includes(order.status)) return order;
+    const nextStatus = input.action === "refund" ? "REFUNDED" : "REJECTED";
+    const claimed = await tx.redemptionOrder.updateMany({
+      where: { id: order.id, status: { in: ["PENDING", "APPROVED", "FULFILLED"] } },
+      data: { status: nextStatus, reviewedAt: new Date(), note: input.reason ?? order.note },
+    });
+    if (claimed.count !== 1) return tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+    await tx.gift.update({ where: { id: order.giftId }, data: { stock: { increment: order.quantity } } });
+    await credit(tx, order.userId, order.totalCost, "REDEMPTION_REFUND", order.id, input.reason ?? "兑换订单退款");
+    const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+    await tx.auditLog.create({
+      data: { actorId: input.actorId, action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status, refunded: order.totalCost }, reason: input.reason, ip: input.ip },
+    });
+    return updated;
+  });
+}

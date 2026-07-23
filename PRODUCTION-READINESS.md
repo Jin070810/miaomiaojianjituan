@@ -38,6 +38,8 @@
 - 正式部署 workflow 已增加服务器前置检查，拒绝缺失证书、默认数据库密码、弱密钥或未安装 Docker Compose 的主机
 - 首次空机发布会先启动 PostgreSQL/Redis、等待数据库就绪并生成空库基线备份，再执行 migration 和完整容器启动；后续发布沿用同一流程生成真实发布前备份
 - Docker 构建上下文已排除生产证书、数据库备份、环境文件和运行时输出，避免私钥或备份进入 BuildKit 缓存
+- 首次发布按“数据库/备份 → migration/Web/Worker → 管理员初始化 → Nginx”顺序执行，避免健康检查在管理员初始化前阻塞公网入口
+- Worker 镜像包含一次性管理员初始化脚本，CI 会在镜像内断言 `scripts/seed-admin.ts` 存在
 
 ## 当前阻塞
 

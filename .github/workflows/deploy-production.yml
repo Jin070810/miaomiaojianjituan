@@ -103,6 +103,15 @@ jobs:
             "$PRODUCTION_PATH" "$ADMIN_KUAISHOU_IDS" "$ADMIN_PASSWORD" "${ADMIN_NICKNAME:-管理员}")"
           printf '%s\n' "$admin_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
 
+      - name: Start production ingress
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+        run: |
+          ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "set -e; cd '$PRODUCTION_PATH'; docker compose --env-file .env.production --profile production up -d nginx; docker compose --env-file .env.production --profile production ps"
+
       - name: Verify production health
         env:
           PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}

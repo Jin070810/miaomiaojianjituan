@@ -56,3 +56,4 @@ jobs:
       - run: docker compose config
       - run: docker compose build app
       - run: docker build --target worker -t miaomiao-points-worker:ci .
+      - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts"

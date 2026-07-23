@@ -20,9 +20,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const admin = await requireAdmin();
     const { id } = await context.params;
     const input = schema.parse(await request.json());
-    const before = await db.gift.findUnique({ where: { id } });
-    if (!before) return NextResponse.json({ error: "礼品不存在" }, { status: 404 });
     const gift = await db.$transaction(async (tx) => {
+      const before = await tx.gift.findUnique({ where: { id } });
+      if (!before) throw new Error("礼品不存在");
+      if (input.kind && input.kind !== before.kind) {
+        const [orderCount, awardCount] = await Promise.all([
+          tx.redemptionOrder.count({ where: { giftId: id } }),
+          tx.rankingAward.count({ where: { giftId: id } }),
+        ]);
+        if (orderCount > 0 || awardCount > 0) {
+          throw new Error("已有兑换或榜单奖励引用该礼品，不能修改礼品类型");
+        }
+      }
       const updated = await tx.gift.update({ where: { id }, data: input });
       await tx.auditLog.create({
         data: {
@@ -39,6 +48,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     });
     return NextResponse.json({ gift });
   } catch (error) {
+    if (error instanceof Error && error.message === "礼品不存在") {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
     return NextResponse.json({ error: error instanceof z.ZodError ? "礼品参数不正确" : error instanceof Error ? error.message : "更新失败" }, { status: 400 });
   }
 }

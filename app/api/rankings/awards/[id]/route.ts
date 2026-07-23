@@ -2,14 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { claimRankingAward } from "@/lib/rankings";
-import { assertSameOrigin, getClientIp, isSafeCashQrCodeUrl, MAX_CASH_QR_CODE_LENGTH, rateLimitResponse } from "@/lib/security";
+import { assertSameOrigin, getClientIp, rateLimitResponse } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 
 const schema = z.object({
   recipientName: z.string().trim().min(1).max(80).optional(),
   phone: z.string().trim().regex(/^1\d{10}$/).optional(),
   address: z.string().trim().min(5).max(300).optional(),
-  cashQrCodeUrl: z.string().trim().max(MAX_CASH_QR_CODE_LENGTH).refine(isSafeCashQrCodeUrl).optional(),
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {

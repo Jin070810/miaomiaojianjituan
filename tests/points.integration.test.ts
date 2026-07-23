@@ -1,7 +1,8 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { adminAdjustPoints, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
-import { periodBounds, settleRanking } from "@/lib/rankings";
+import { claimRankingAward, periodBounds, settleRanking } from "@/lib/rankings";
+import { prepareVideoReprocess } from "@/lib/video-jobs";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 
@@ -166,6 +167,28 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     })).rejects.toThrow();
   });
 
+  it("claims a rejected video for reprocessing only once", async () => {
+    const video = await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/reprocess",
+        requestUrl: "https://v.kuaishou.com/reprocess",
+        sourceKind: "short-link",
+        status: "REJECTED",
+        reviewReason: "临时抓取失败",
+        submittedNickname: "测试转出",
+        idempotencyKey: `integration-reprocess-${Date.now()}`,
+      },
+    });
+    const results = await Promise.all([
+      prepareVideoReprocess({ videoId: video.id, actorId: receiverId }),
+      prepareVideoReprocess({ videoId: video.id, actorId: receiverId }),
+      prepareVideoReprocess({ videoId: video.id, actorId: receiverId }),
+    ]);
+    expect(results.every((item) => item.status === "PROCESSING")).toBe(true);
+    expect(await db.auditLog.count({ where: { action: "VIDEO_REPROCESS_REQUESTED", entityId: video.id } })).toBe(1);
+  });
+
   it("settles a weekly video-count ranking once and creates top-five awards", async () => {
     const reference = new Date("2026-04-15T12:00:00.000Z");
     const bounds = periodBounds("week", reference);
@@ -190,6 +213,21 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     expect(second.settled).toBe(false);
     expect(await db.rankingEntry.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
     expect(await db.rankingAward.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
+    const award = await db.rankingAward.findFirstOrThrow({ where: { periodId: first.period.id, userId: senderId } });
+    await db.rankingAward.update({ where: { id: award.id }, data: { status: "EXPIRED" } });
+    await expect(claimRankingAward({ awardId: award.id, userId: senderId })).rejects.toThrow("已过期");
+    const shippingAward = await db.rankingAward.create({
+      data: { periodId: first.period.id, userId: receiverId, rank: 99, value: 0 },
+    });
+    const claimed = await claimRankingAward({
+      awardId: shippingAward.id,
+      userId: receiverId,
+      recipientName: "测试收货人",
+      phone: "13800138000",
+      address: "上海市测试区榜单奖励地址 1 号",
+    });
+    expect(claimed.status).toBe("CLAIMED");
+    expect(claimed.giftId).toBeNull();
   });
 
   it("refunds an order and restores stock only once", async () => {
@@ -224,7 +262,44 @@ describe.skipIf(!enabled)("积分事务并发", () => {
       recipient: { cashQrCodeUrl: "https://example.com/qr.png" },
     });
     expect(order.cashQrCodeUrl).toBe("https://example.com/qr.png");
+    expect(order.status).toBe("APPROVED");
     expect(await db.recipientProfile.findUnique({ where: { userId: senderId } }).then((profile) => profile?.cashQrCodeUrl)).toBe("https://example.com/qr.png");
+  });
+
+  it("rejects an automatically approved order and restores points and stock", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 100 } });
+    const gift = await db.gift.create({ data: { name: "测试驳回礼品", kind: "PHYSICAL", pointsCost: 20, stock: 2 } });
+    const order = await redeemGift({
+      userId: senderId,
+      giftId: gift.id,
+      quantity: 1,
+      idempotencyKey: "integration-redemption-reject",
+      recipient: { recipientName: "测试成员", phone: "13800138000", address: "上海市测试区测试路 1 号" },
+    });
+    expect(order.status).toBe("APPROVED");
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(80);
+    const rejected = await updateRedemptionOrder({ orderId: order.id, action: "reject", actorId: receiverId, reason: "暂不发放" });
+    expect(rejected.status).toBe("REJECTED");
+    expect(await db.gift.findUnique({ where: { id: gift.id } }).then((item) => item?.stock)).toBe(2);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(100);
+    expect(await db.pointLedger.count({ where: { referenceId: order.id, type: "REDEMPTION_REFUND" } })).toBe(1);
+    await db.redemptionOrder.delete({ where: { id: order.id } });
+    await db.gift.delete({ where: { id: gift.id } });
+  });
+
+  it("blocks fulfillment when legacy recipient details are missing", async () => {
+    const cash = await db.gift.create({ data: { name: "测试缺资料现金", kind: "CASH", pointsCost: 1, stock: 1 } });
+    const physical = await db.gift.create({ data: { name: "测试缺资料实物", kind: "PHYSICAL", pointsCost: 1, stock: 1 } });
+    const cashOrder = await db.redemptionOrder.create({
+      data: { userId: senderId, giftId: cash.id, unitCost: 1, totalCost: 1, status: "APPROVED", idempotencyKey: `integration-missing-cash-${Date.now()}` },
+    });
+    const physicalOrder = await db.redemptionOrder.create({
+      data: { userId: senderId, giftId: physical.id, unitCost: 1, totalCost: 1, status: "APPROVED", idempotencyKey: `integration-missing-physical-${Date.now()}` },
+    });
+    await expect(updateRedemptionOrder({ orderId: cashOrder.id, action: "fulfill", actorId: receiverId })).rejects.toThrow("收款码");
+    await expect(updateRedemptionOrder({ orderId: physicalOrder.id, action: "fulfill", actorId: receiverId })).rejects.toThrow("收货资料");
+    await db.redemptionOrder.deleteMany({ where: { id: { in: [cashOrder.id, physicalOrder.id] } } });
+    await db.gift.deleteMany({ where: { id: { in: [cash.id, physical.id] } } });
   });
 
   it("applies integer admin adjustments once and prevents overspending", async () => {

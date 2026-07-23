@@ -140,6 +140,52 @@ export async function processVideoSubmission(videoId: string) {
   return updated;
 }
 
+export async function prepareVideoReprocess(input: { videoId: string; actorId: string; ip?: string }) {
+  return db.$transaction(async (tx) => {
+    const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
+    if (!video) throw new Error("视频记录不存在");
+    if (video.status === "PROCESSING") return video;
+    if (!["REJECTED", "FAILED"].includes(video.status)) {
+      throw new Error("只有已驳回或抓取失败的视频可以重新抓取");
+    }
+    if (video.photoId) {
+      const duplicate = await tx.videoSubmission.findFirst({
+        where: {
+          id: { not: video.id },
+          photoId: video.photoId,
+          status: { in: ["PROCESSING", "PENDING_REVIEW", "APPROVED"] },
+        },
+        select: { id: true },
+      });
+      if (duplicate) throw new Error("同一视频已有有效提交记录，不能重新抓取旧记录");
+    }
+    const claimed = await tx.videoSubmission.updateMany({
+      where: { id: video.id, status: { in: ["REJECTED", "FAILED"] } },
+      data: {
+        status: "PROCESSING",
+        points: 0,
+        processedAt: null,
+        reviewedAt: null,
+        reviewReason: null,
+      },
+    });
+    if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    await tx.auditLog.create({
+      data: {
+        actorId: input.actorId,
+        action: "VIDEO_REPROCESS_REQUESTED",
+        entity: "VideoSubmission",
+        entityId: video.id,
+        beforeValue: { status: video.status, reviewReason: video.reviewReason },
+        afterValue: { status: updated.status },
+        ip: input.ip,
+      },
+    });
+    return updated;
+  });
+}
+
 export async function enqueueVideo(videoId: string) {
   if (process.env.REDIS_URL) {
     const videoQueue = getQueue();

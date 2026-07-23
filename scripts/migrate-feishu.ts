@@ -4,6 +4,7 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import { db } from "../lib/db";
 import { encryptPhone, hashPassword } from "../lib/security";
+import { inferGiftKind } from "../lib/gifts";
 
 const root = path.resolve(process.cwd(), "output", "feishu");
 const apply = process.argv.includes("--apply");
@@ -149,7 +150,7 @@ async function main() {
     for (const row of gifts) {
       const name = text(row["商品名"]).trim();
       if (!name) continue;
-      const gift = await db.gift.create({ data: { name, pointsCost: number(row["所需积分"]), stock: number(row["库存"]), imageUrl: text(row["商品图"]) || null } });
+      const gift = await db.gift.create({ data: { name, kind: inferGiftKind(name), pointsCost: number(row["所需积分"]), stock: number(row["库存"]), imageUrl: text(row["商品图"]) || null } });
       giftByName.set(name, gift.id);
       giftByLegacyId.set(String(row._recordId), gift.id);
       await legacy("gifts", String(row._recordId), { ...row, importedId: gift.id });

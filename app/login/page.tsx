@@ -85,20 +85,20 @@ export default function LoginPage() {
                 <>
                   <div className="field">
                     <label htmlFor="nickname">快手昵称</label>
-                    <div className="auth-input"><UserRound size={17} /><input id="nickname" value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="输入你的快手昵称" /></div>
+                    <div className="auth-input"><UserRound size={17} /><input id="nickname" autoComplete="name" value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="输入你的快手昵称" /></div>
                   </div>
                 </>
               )}
               <div className="field">
                 <label htmlFor="ksid">快手 ID</label>
-                <div className="auth-input"><UserRound size={17} /><input id="ksid" value={kuaishouId} onChange={(event) => setKuaishouId(event.target.value)} placeholder="例如 MIAO_2025" /></div>
+                <div className="auth-input"><UserRound size={17} /><input id="ksid" autoComplete="username" value={kuaishouId} onChange={(event) => setKuaishouId(event.target.value)} placeholder="例如 MIAO_2025" /></div>
                 <span className="field-hint">快手 ID 是你的唯一登录标识</span>
               </div>
               <div className="field">
                 <label htmlFor="password">密码</label>
                 <div className="auth-input">
                   <LockKeyhole size={17} />
-                  <input id="password" value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} minLength={mode === "register" ? 8 : 6} placeholder={mode === "register" ? "至少 8 位密码" : "请输入密码"} />
+                  <input id="password" autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} minLength={mode === "register" ? 8 : 6} placeholder={mode === "register" ? "至少 8 位密码" : "请输入密码"} />
                   <button type="button" className="toggle-password" aria-label="显示密码" onClick={() => setShowPassword(!showPassword)}>
                     {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                   </button>
@@ -111,7 +111,7 @@ export default function LoginPage() {
                     <span className="check-box" />
                     <span>我已绑定公会</span>
                   </label>
-                  {!guild && <input className="phone-input" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="未绑定时填写快手绑定手机号" />}
+                    {!guild && <input className="phone-input" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="未绑定时填写快手绑定手机号" />}
                 </div>
               )}
               {error && <p className="form-error" role="alert">{error}</p>}

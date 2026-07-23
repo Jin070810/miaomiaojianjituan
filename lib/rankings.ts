@@ -85,7 +85,7 @@ async function computeRows(tx: Prisma.TransactionClient | typeof db, kind: Ranki
 async function userMap(tx: Prisma.TransactionClient | typeof db, ids: string[]) {
   const users = await tx.user.findMany({
     where: { id: { in: ids } },
-    select: { id: true, kuaishouId: true, nickname: true },
+    select: { id: true, kuaishouId: true, nickname: true, avatarUrl: true },
   });
   return new Map(users.map((user) => [user.id, user]));
 }
@@ -102,6 +102,7 @@ export async function getLiveRanking(kind: RankingKind, userId?: string, referen
       userId: row.userId,
       kuaishouId: byId.get(row.userId)?.kuaishouId ?? "",
       nickname: byId.get(row.userId)?.nickname ?? "未知成员",
+      avatarUrl: byId.get(row.userId)?.avatarUrl ?? null,
       value: row.value,
       videoCount: row.videoCount,
       likes: row.likes,
@@ -170,23 +171,18 @@ export async function claimRankingAward(input: {
   recipientName?: string;
   phone?: string;
   address?: string;
-  cashQrCodeUrl?: string;
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
     const award = await tx.rankingAward.findUnique({ where: { id: input.awardId }, include: { gift: true, period: true } });
     if (!award || award.userId !== input.userId) throw new Error("领奖记录不存在");
     if (award.status === "CLAIMED" || award.status === "FULFILLED") return award;
-    if (!award.gift) throw new Error("奖励礼品尚未配置，请联系管理员");
+    if (award.status === "EXPIRED") throw new Error("该榜单奖励已过期");
     const profile = await tx.recipientProfile.findUnique({ where: { userId: input.userId } });
     const recipientName = input.recipientName?.trim() || profile?.recipientName || null;
     const phone = input.phone?.trim() || (profile?.phoneEnc ? decryptSensitive(profile.phoneEnc) : null);
     const address = input.address?.trim() || (profile?.addressEnc ? decryptSensitive(profile.addressEnc) : null);
-    const cashQrCodeUrl = input.cashQrCodeUrl?.trim() || profile?.cashQrCodeUrl || null;
-    if (award.gift.kind === "CASH" && !cashQrCodeUrl) throw new Error("现金奖励必须提供收款码");
-    if (award.gift.kind === "PHYSICAL" && (!recipientName || !phone || !address)) {
-      throw new Error("领奖需要完整的收货姓名、手机号和详细地址");
-    }
+    if (!recipientName || !phone || !address) throw new Error("领奖需要完整的收货姓名、手机号和详细地址");
     const claimed = await tx.rankingAward.updateMany({
       where: { id: award.id, status: "PENDING" },
       data: {
@@ -194,7 +190,6 @@ export async function claimRankingAward(input: {
         recipientName,
         recipientPhoneEnc: phone ? encryptSensitive(phone) : null,
         recipientAddressEnc: address ? encryptSensitive(address) : null,
-        cashQrCodeUrl,
         claimedAt: new Date(),
       },
     });
@@ -206,13 +201,11 @@ export async function claimRankingAward(input: {
         recipientName,
         phoneEnc: phone ? encryptSensitive(phone) : null,
         addressEnc: address ? encryptSensitive(address) : null,
-        cashQrCodeUrl,
       },
       update: {
         recipientName,
         phoneEnc: phone ? encryptSensitive(phone) : null,
         addressEnc: address ? encryptSensitive(address) : null,
-        cashQrCodeUrl,
       },
     });
     await tx.auditLog.create({

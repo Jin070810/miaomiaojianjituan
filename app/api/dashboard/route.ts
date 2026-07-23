@@ -9,7 +9,7 @@ export async function GET() {
 
   const startOfMonth = periodBounds("month").start;
 
-  const [ledger, videos, gifts, orders, transfers, totalRank, monthlyIncome, videoStats, higherBalanceCount] = await Promise.all([
+  const [ledger, videos, gifts, orders, transfers, totalRank, monthlyIncome, videoStats, monthlyVideoStats, videoStatusGroups, higherBalanceCount] = await Promise.all([
     user.account
       ? db.pointLedger.findMany({
           where: { accountId: user.account.id },
@@ -45,7 +45,7 @@ export async function GET() {
     }),
     db.pointAccount.findMany({
       where: { user: { active: true } },
-      include: { user: { select: { id: true, kuaishouId: true, nickname: true } } },
+      include: { user: { select: { id: true, kuaishouId: true, nickname: true, avatarUrl: true } } },
       orderBy: { balance: "desc" },
       take: 20,
     }),
@@ -60,14 +60,34 @@ export async function GET() {
       _count: { id: true },
       _sum: { points: true, likes: true },
     }),
+    db.videoSubmission.aggregate({
+      where: { userId: user.id, status: "APPROVED", submittedAt: { gte: startOfMonth } },
+      _count: { id: true },
+    }),
+    db.videoSubmission.groupBy({
+      by: ["status"],
+      where: { userId: user.id },
+      _count: { id: true },
+    }),
     db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true } } }),
   ]);
+  const videoCounts = videoStatusGroups.reduce(
+    (counts, row) => {
+      counts.all += row._count.id;
+      if (row.status === "APPROVED") counts.approved += row._count.id;
+      if (row.status === "PROCESSING") counts.processing += row._count.id;
+      if (["REJECTED", "FAILED", "PENDING_REVIEW", "REVOKED"].includes(row.status)) counts.exception += row._count.id;
+      return counts;
+    },
+    { all: 0, approved: 0, processing: 0, exception: 0 },
+  );
 
   return NextResponse.json({
     user: {
       id: user.id,
       kuaishouId: user.kuaishouId,
       nickname: user.nickname,
+      avatarUrl: user.avatarUrl,
       role: user.role,
       guildStatus: user.guildStatus,
       invited: user.invited,
@@ -76,9 +96,12 @@ export async function GET() {
     summary: {
       monthlyIncome: monthlyIncome?._sum.amount ?? 0,
       approvedVideos: videoStats._count.id,
+      monthlyApprovedVideos: monthlyVideoStats._count.id,
       videoPoints: videoStats._sum.points ?? 0,
       totalLikes: videoStats._sum.likes ?? 0,
+      averageLikes: videoStats._count.id > 0 ? Math.floor((videoStats._sum.likes ?? 0) / videoStats._count.id) : 0,
       rank: higherBalanceCount + 1,
+      videoCounts,
     },
     ledger,
     videos,
@@ -95,6 +118,7 @@ export async function GET() {
       userId: item.user.id,
       kuaishouId: item.user.kuaishouId,
       nickname: item.user.nickname,
+      avatarUrl: item.user.avatarUrl,
       points: item.balance,
       current: item.user.id === user.id,
     })),

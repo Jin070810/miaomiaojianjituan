@@ -73,7 +73,7 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
           ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
-            "set -e; cd '$PRODUCTION_PATH'; git fetch origin; git checkout --detach '$RELEASE_COMMIT'; bash scripts/backup-db.sh backups .env.production; docker compose --env-file .env.production --profile production up -d --build; docker compose ps"
+            "set -e; cd '$PRODUCTION_PATH'; git fetch origin; git checkout --detach '$RELEASE_COMMIT'; bash scripts/production-preflight.sh .env.production '$PRODUCTION_PATH'; bash scripts/backup-db.sh backups .env.production; docker compose --env-file .env.production --profile production up -d --build; docker compose ps"
 
       - name: Bootstrap production administrator
         if: inputs.bootstrap_admin

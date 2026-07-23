@@ -14,6 +14,7 @@ function safeUser(user: {
   id: string;
   kuaishouId: string;
   nickname: string;
+  avatarUrl: string | null;
   role: string;
   guildStatus: string | null;
   invited: boolean;
@@ -23,6 +24,7 @@ function safeUser(user: {
     id: user.id,
     kuaishouId: user.kuaishouId,
     nickname: user.nickname,
+    avatarUrl: user.avatarUrl,
     role: user.role,
     guildStatus: user.guildStatus,
     invited: user.invited,

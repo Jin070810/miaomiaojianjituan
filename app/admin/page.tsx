@@ -61,6 +61,7 @@ type AdminUserRow = {
   id: string;
   kuaishouId: string;
   nickname: string;
+  avatarUrl: string | null;
   guildStatus: string | null;
   role: string;
   active: boolean;
@@ -136,6 +137,7 @@ type AdminRankingPeriod = {
 type AdminPagination = { page: number; take: number; total: number; pages: number };
 type AdminData = {
   metrics: { users: number; pendingVideos: number; activeGifts: number; pendingOrders: number; totalBalance: number };
+  pointsTrend: Array<{ label: string; videoReward: number; adminAdjustment: number }>;
   audit: AdminAuditRow[];
   videos: AdminVideo[];
   appeals: AdminAppeal[];
@@ -298,6 +300,7 @@ function StatCard({
 }
 
 function Overview({ data }: { data: AdminData }) {
+  const trendMax = Math.max(1, ...data.pointsTrend.flatMap((item) => [item.videoReward, item.adminAdjustment]));
   return (
     <>
       <div className="admin-page-title">
@@ -315,10 +318,8 @@ function Overview({ data }: { data: AdminData }) {
           <div className="admin-panel-head"><div><h2>积分发放趋势</h2><p>过去 7 天的每日积分发放情况</p></div><button className="panel-menu"><MoreHorizontal size={18} /></button></div>
           <div className="chart-legend"><span><i className="legend-dot coral-dot" />视频奖励</span><span><i className="legend-dot teal-dot" />管理员调整</span><button>近 7 天 <ChevronDown size={14} /></button></div>
           <div className="bar-chart">
-            {[
-              ["17", 46, 19], ["18", 66, 25], ["19", 53, 16], ["20", 78, 28], ["21", 61, 22], ["22", 89, 31], ["23", 76, 26],
-            ].map(([day, coral, teal]) => (
-              <div className="bar-column" key={day}><div className="bar-stack"><i style={{ height: `${Number(coral) * 1.8}px` }} /><b style={{ height: `${Number(teal) * 1.8}px` }} /></div><span>{day}</span></div>
+            {data.pointsTrend.map((item) => (
+              <div className="bar-column" key={item.label}><div className="bar-stack"><i style={{ height: `${Math.max(3, (item.videoReward / trendMax) * 140)}px` }} /><b style={{ height: `${Math.max(3, (item.adminAdjustment / trendMax) * 140)}px` }} /></div><span>{item.label}</span></div>
             ))}
           </div>
           <div className="chart-total"><span>当前账户积分</span><strong>{data.metrics.totalBalance.toLocaleString()} <small>积分</small></strong><span className="trend-up"><ArrowUpRight size={13} /> 实时</span></div>
@@ -484,25 +485,26 @@ function VideoManagement({
   );
 }
 
-function UsersAdmin({ rows, pagination, onToggle, onUpdate, onResetPassword, onLoadMore }: { rows: AdminUserRow[]; pagination: AdminPagination; onToggle: (user: AdminUserRow) => void; onUpdate: (user: AdminUserRow, input: { role?: "MEMBER" | "ADMIN"; guildStatus?: string }) => void; onResetPassword: (user: AdminUserRow) => void; onLoadMore: () => Promise<void> }) {
+function UsersAdmin({ rows, pagination, onToggle, onUpdate, onResetPassword, onLoadMore, onSearch, onFilter }: { rows: AdminUserRow[]; pagination: AdminPagination; onToggle: (user: AdminUserRow) => void; onUpdate: (user: AdminUserRow, input: { role?: "MEMBER" | "ADMIN"; guildStatus?: string }) => void; onResetPassword: (user: AdminUserRow) => void; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (filter: "all" | "joined" | "pending") => Promise<void> }) {
   const [filter, setFilter] = useState<"all" | "joined" | "pending">("all");
   const [query, setQuery] = useState("");
-  const normalizedQuery = query.trim().toLowerCase();
-  const filtered = rows.filter((user) => {
-    const matchesFilter = filter === "all" || (filter === "joined" ? user.guildStatus === "已入会" : user.guildStatus !== "已入会");
-    const matchesQuery = !normalizedQuery || `${user.kuaishouId} ${user.nickname}`.toLowerCase().includes(normalizedQuery);
-    return matchesFilter && matchesQuery;
-  });
+  async function submitSearch() {
+    await onSearch(query.trim());
+  }
+  function changeFilter(next: "all" | "joined" | "pending") {
+    setFilter(next);
+    void onFilter(next);
+  }
   return (
     <>
       <div className="admin-page-title">
         <div><span className="eyebrow">MEMBER DIRECTORY</span><h1>用户与公会</h1><p>管理成员身份、邀请状态和积分档案。</p></div>
         <button className="primary-button"><Users size={16} />邀请成员</button>
       </div>
-      <div className="admin-tabs"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部成员<span>{filter === "all" ? pagination.total : rows.length}</span></button><button className={filter === "joined" ? "active" : ""} onClick={() => setFilter("joined")}>已入会<span>{rows.filter((user) => user.guildStatus === "已入会").length}</span></button><button className={filter === "pending" ? "active" : ""} onClick={() => setFilter("pending")}>待处理<span>{rows.filter((user) => user.guildStatus !== "已入会").length}</span></button></div>
+      <div className="admin-tabs"><button className={filter === "all" ? "active" : ""} onClick={() => changeFilter("all")}>全部成员{filter === "all" && <span>{pagination.total}</span>}</button><button className={filter === "joined" ? "active" : ""} onClick={() => changeFilter("joined")}>已入会{filter === "joined" && <span>{pagination.total}</span>}</button><button className={filter === "pending" ? "active" : ""} onClick={() => changeFilter("pending")}>待处理{filter === "pending" && <span>{pagination.total}</span>}</button></div>
       <section className="admin-panel audit-panel">
-        <div className="admin-panel-head"><div><h2>成员列表</h2><p>显示 {filtered.length} 名已加载成员，共 {pagination.total} 名，快手 ID 是唯一身份标识</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索快手 ID 或昵称" /></div></div></div>
-        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>角色</th><th>公会状态</th><th>当前积分</th><th>有效视频</th><th>注册时间</th><th /></tr></thead><tbody>{filtered.map((user) => <tr key={user.id}><td><div className="table-main"><span className="table-avatar">{user.nickname.slice(0, 1)}</span><div><strong>{user.nickname}</strong><small>{user.kuaishouId}</small></div></div></td><td><select value={user.role} onChange={(event) => onUpdate(user, { role: event.target.value as "MEMBER" | "ADMIN" })} aria-label={`${user.nickname}角色`}><option value="MEMBER">普通成员</option><option value="ADMIN">管理员</option></select></td><td><select value={user.guildStatus ?? "未设置"} onChange={(event) => onUpdate(user, { guildStatus: event.target.value })} aria-label={`${user.nickname}公会状态`}><option>未设置</option><option>已邀请</option><option>已入会</option><option>已绑定</option><option>未绑定</option></select></td><td>{(user.account?.balance ?? 0).toLocaleString()}</td><td>{user._count.videos}</td><td>{formatAdminDate(user.createdAt)}</td><td><div className="table-actions-inline"><button className="table-more" title="重置密码" aria-label={`重置${user.nickname}密码`} onClick={() => onResetPassword(user)}><KeyRound size={15} /></button><button className="table-more" title={user.active ? "停用账号" : "启用账号"} aria-label={user.active ? "停用账号" : "启用账号"} onClick={() => onToggle(user)}>{user.active ? <X size={16} /> : <Check size={16} />}</button></div></td></tr>)}{filtered.length === 0 && <tr><td colSpan={7}>没有匹配的成员</td></tr>}</tbody></table></div>
+        <div className="admin-panel-head"><div><h2>成员列表</h2><p>显示 {rows.length} 名已加载成员，共 {pagination.total} 名，快手 ID 是唯一身份标识</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索快手 ID 或昵称" /></div><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>
+        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>角色</th><th>公会状态</th><th>当前积分</th><th>有效视频</th><th>注册时间</th><th /></tr></thead><tbody>{rows.map((user) => <tr key={user.id}><td><div className="table-main"><span className="table-avatar"><img src={user.avatarUrl || "/avatars/default.webp"} alt="" /></span><div><strong>{user.nickname}</strong><small>{user.kuaishouId}</small></div></div></td><td><select value={user.role} onChange={(event) => onUpdate(user, { role: event.target.value as "MEMBER" | "ADMIN" })} aria-label={`${user.nickname}角色`}><option value="MEMBER">普通成员</option><option value="ADMIN">管理员</option></select></td><td><select value={user.guildStatus ?? "未设置"} onChange={(event) => onUpdate(user, { guildStatus: event.target.value })} aria-label={`${user.nickname}公会状态`}><option>未设置</option><option>已邀请</option><option>已入会</option><option>已绑定</option><option>未绑定</option></select></td><td>{(user.account?.balance ?? 0).toLocaleString()}</td><td>{user._count.videos}</td><td>{formatAdminDate(user.createdAt)}</td><td><div className="table-actions-inline"><button className="table-more" title="重置密码" aria-label={`重置${user.nickname}密码`} onClick={() => onResetPassword(user)}><KeyRound size={15} /></button><button className="table-more" title={user.active ? "停用账号" : "启用账号"} aria-label={user.active ? "停用账号" : "启用账号"} onClick={() => onToggle(user)}>{user.active ? <X size={16} /> : <Check size={16} />}</button></div></td></tr>)}{rows.length === 0 && <tr><td colSpan={7}>没有匹配的成员</td></tr>}</tbody></table></div>
         {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多成员 <ChevronDown size={15} /></button></div>}
       </section>
     </>
@@ -690,7 +692,7 @@ function OrderRecipientDetails({ order, onLoad }: { order: AdminOrderRow; onLoad
   );
 }
 
-function OrdersAdmin({ rows, pagination, onAction, onLoadMore }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") => void; onLoadMore: () => Promise<void> }) {
+function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") => void; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl">>>({});
@@ -700,17 +702,19 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore }: { rows: AdminOr
     const result = await response.json();
     setDetails((current) => ({ ...current, [order.id]: result.details }));
   };
-  const normalizedQuery = query.trim().toLowerCase();
-  const filtered = rows.filter((order) => {
-    const matchesStatus = status === "ALL" || (status === "PENDING" ? ["PENDING", "APPROVED"].includes(order.status) : order.status === status);
-    const matchesQuery = !normalizedQuery || `${order.id} ${order.user.kuaishouId} ${order.user.nickname} ${order.gift.name}`.toLowerCase().includes(normalizedQuery);
-    return matchesStatus && matchesQuery;
-  });
+  async function submitSearch() {
+    await onSearch(query.trim());
+  }
+  function changeStatus(next: "ALL" | "PENDING" | "FULFILLED") {
+    setStatus(next);
+    void onFilter(next);
+  }
+  const filtered = rows;
   return (
     <>
       <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>处理礼品发货和订单状态变更。</p></div><button className="secondary-button"><FileText size={16} />导出订单</button></div>
-      <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => setStatus("ALL")}>全部订单 <b>{status === "ALL" ? pagination.total : rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => setStatus("PENDING")}>待发货 <b>{rows.filter((order) => ["PENDING", "APPROVED"].includes(order.status)).length}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => setStatus("FULFILLED")}>已完成 <b>{rows.filter((order) => order.status === "FULFILLED").length}</b></button></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条已加载订单，共 {pagination.total} 条；取消订单会自动生成返还流水</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索订单号或快手 ID" /></div></div><div className="order-list">{filtered.map((order, i) => {
+      <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => changeStatus("ALL")}>全部订单 <b>{status === "ALL" ? pagination.total : rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => changeStatus("PENDING")}>待发货 <b>{status === "PENDING" ? pagination.total : "—"}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => changeStatus("FULFILLED")}>已完成 <b>{status === "FULFILLED" ? pagination.total : "—"}</b></button></div>
+      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条已加载订单，共 {pagination.total} 条；驳回订单会自动退回积分和库存</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索订单号或快手 ID" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div><div className="order-list">{filtered.map((order, i) => {
         const merged = { ...order, ...details[order.id] };
         const readyToFulfill = order.gift.kind === "CASH"
           ? Boolean(merged.cashQrCodeUrl || merged.hasCashQrCode)
@@ -724,14 +728,12 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore }: { rows: AdminOr
 
 function RankingsAdmin({
   periods,
-  gifts: giftRows,
   onSettle,
   onAwardUpdate,
 }: {
   periods: AdminRankingPeriod[];
-  gifts: AdminGiftRow[];
   onSettle: (type: "week" | "month") => void;
-  onAwardUpdate: (award: AdminRankingAward, input: { giftId?: string; status?: "FULFILLED" }) => void;
+  onAwardUpdate: (award: AdminRankingAward, input: { status?: "FULFILLED" }) => void;
 }) {
   return (
     <>
@@ -750,18 +752,13 @@ function RankingsAdmin({
           </div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>名次与成员</th><th>成绩</th><th>奖励礼品</th><th>领奖状态</th><th>收货信息</th><th /></tr></thead>
+              <thead><tr><th>名次与成员</th><th>成绩</th><th>奖励</th><th>领奖状态</th><th>收货信息</th><th /></tr></thead>
               <tbody>
                 {period.awards.map((award) => (
                   <tr key={award.id}>
                     <td><div className="table-main"><span className="table-avatar">{award.rank}</span><div><strong>{award.user.nickname}</strong><small>{award.user.kuaishouId}</small></div></div></td>
                     <td>{award.value.toLocaleString()} {period.type === "WEEK" ? "个视频" : "赞"}</td>
-                    <td>
-                      <select value={award.giftId ?? ""} onChange={(event) => event.target.value && onAwardUpdate(award, { giftId: event.target.value })} aria-label={`为第 ${award.rank} 名选择礼品`}>
-                        <option value="">待配置</option>
-                        {giftRows.filter((gift) => gift.active && gift.stock > 0).map((gift) => <option key={gift.id} value={gift.id}>{gift.name}</option>)}
-                      </select>
-                    </td>
+                    <td>榜单奖励</td>
                     <td><span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "待领奖" : award.status === "CLAIMED" ? "已填写" : award.status === "FULFILLED" ? "已完成" : award.status}</span></td>
                     <td>{award.recipientName ? <><strong>{award.recipientName}</strong><small>{award.recipientPhone}<br />{award.recipientAddress}</small></> : "尚未填写"}</td>
                     <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" onClick={() => onAwardUpdate(award, { status: "FULFILLED" })}>完成发放</button>}</td>
@@ -778,11 +775,15 @@ function RankingsAdmin({
   );
 }
 
-function LogsAdmin({ rows, pagination, onLoadMore }: { rows: AdminAuditRow[]; pagination: AdminPagination; onLoadMore: () => Promise<void> }) {
+function LogsAdmin({ rows, pagination, onLoadMore, onSearch }: { rows: AdminAuditRow[]; pagination: AdminPagination; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void> }) {
+  const [query, setQuery] = useState("");
+  async function submitSearch() {
+    await onSearch(query.trim());
+  }
   return (
     <>
       <div className="admin-page-title"><div><span className="eyebrow">AUDIT TRAIL</span><h1>审计日志</h1><p>所有积分、身份和订单变更都在这里留痕。</p></div><button className="icon-button" title="只读日志" aria-label="只读日志"><SlidersHorizontal size={19} /></button></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>系统操作记录</h2><p>只读记录 · 共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="admin-search"><Search size={16} /><input placeholder="搜索操作人或对象" /></div></div><div className="data-table-wrap"><table className="data-table"><thead><tr><th>操作</th><th>操作人</th><th>对象类型</th><th>对象 ID</th><th>时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><span className="log-action"><ShieldCheck size={15} />{row.action}</span></td><td>{row.actor?.nickname ?? "系统"}<small>{row.actor?.kuaishouId}</small></td><td>{row.entity}</td><td>{row.entityId ?? "—"}</td><td>{formatAdminDate(row.createdAt)}</td></tr>)}</tbody></table></div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多日志 <ChevronDown size={15} /></button></div>}</section>
+      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>系统操作记录</h2><p>只读记录 · 共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索操作人或对象" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div><div className="data-table-wrap"><table className="data-table"><thead><tr><th>操作</th><th>操作人</th><th>对象类型</th><th>对象 ID</th><th>时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><span className="log-action"><ShieldCheck size={15} />{row.action}</span></td><td>{row.actor?.nickname ?? "系统"}<small>{row.actor?.kuaishouId}</small></td><td>{row.entity}</td><td>{row.entityId ?? "—"}</td><td>{formatAdminDate(row.createdAt)}</td></tr>)}</tbody></table></div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多日志 <ChevronDown size={15} /></button></div>}</section>
     </>
   );
 }
@@ -794,6 +795,9 @@ export default function AdminPage() {
   const [giftEditor, setGiftEditor] = useState<{ gift: AdminGiftRow | null } | null>(null);
   const [videoFilters, setVideoFilters] = useState({ search: "", status: "" });
   const [appealSearch, setAppealSearch] = useState("");
+  const [userFilters, setUserFilters] = useState({ search: "", guild: "" });
+  const [orderFilters, setOrderFilters] = useState({ search: "", status: "" });
+  const [auditSearch, setAuditSearch] = useState("");
   const router = useRouter();
   useEffect(() => {
     let activeRequest = true;
@@ -830,6 +834,7 @@ export default function AdminPage() {
           orders: orders.orders ?? [],
           ordersPagination: orders.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
           audit: audit.audit ?? dashboard.audit ?? [],
+          pointsTrend: dashboard.pointsTrend ?? [],
           auditPagination: audit.pagination ?? { page: 1, take: 50, total: (audit.audit ?? dashboard.audit ?? []).length, pages: 1 },
           periods: rankings.periods ?? [],
           pointLedger: points.ledger ?? [],
@@ -896,42 +901,74 @@ export default function AdminPage() {
     if (!data || data.appealsPagination.page >= data.appealsPagination.pages) return;
     await loadAppeals({ page: data.appealsPagination.page + 1, append: true });
   }
-  async function loadMoreUsers() {
-    if (!data || data.usersPagination.page >= data.usersPagination.pages) return;
+  async function loadUsers(input: { page?: number; search?: string; guild?: string; append?: boolean }) {
+    if (!data) return;
+    const nextFilters = {
+      search: input.search ?? userFilters.search,
+      guild: input.guild ?? userFilters.guild,
+    };
+    const page = input.page ?? 1;
+    const params = new URLSearchParams({ page: String(page), take: String(data.usersPagination.take) });
+    if (nextFilters.search) params.set("search", nextFilters.search);
+    if (nextFilters.guild) params.set("guild", nextFilters.guild);
     try {
-      const nextPage = data.usersPagination.page + 1;
-      const result = await fetchAdminPage(`/api/admin/users?page=${nextPage}&take=${data.usersPagination.take}`, "成员记录加载失败");
+      const result = await fetchAdminPage(`/api/admin/users?${params}`, "成员记录加载失败");
+      setUserFilters(nextFilters);
       setData((current) => current ? {
         ...current,
-        users: [...current.users, ...(result.users ?? [])],
+        users: input.append ? [...current.users, ...(result.users ?? [])] : (result.users ?? []),
         usersPagination: result.pagination,
       } : current);
     } catch (loadError) {
       window.alert(loadError instanceof Error ? loadError.message : "成员记录加载失败");
     }
   }
-  async function loadMoreOrders() {
-    if (!data || data.ordersPagination.page >= data.ordersPagination.pages) return;
+  async function loadMoreUsers() {
+    if (!data || data.usersPagination.page >= data.usersPagination.pages) return;
+    await loadUsers({ page: data.usersPagination.page + 1, append: true });
+  }
+  async function loadOrders(input: { page?: number; search?: string; status?: string; append?: boolean }) {
+    if (!data) return;
+    const nextFilters = {
+      search: input.search ?? orderFilters.search,
+      status: input.status ?? orderFilters.status,
+    };
+    const page = input.page ?? 1;
+    const params = new URLSearchParams({ page: String(page), take: String(data.ordersPagination.take) });
+    if (nextFilters.search) params.set("search", nextFilters.search);
+    if (nextFilters.status) params.set("status", nextFilters.status);
     try {
-      const nextPage = data.ordersPagination.page + 1;
-      const result = await fetchAdminPage(`/api/admin/orders?page=${nextPage}&take=${data.ordersPagination.take}`, "订单记录加载失败");
+      const result = await fetchAdminPage(`/api/admin/orders?${params}`, "订单记录加载失败");
+      setOrderFilters(nextFilters);
       setData((current) => current ? {
         ...current,
-        orders: [...current.orders, ...(result.orders ?? [])],
+        orders: input.append ? [...current.orders, ...(result.orders ?? [])] : (result.orders ?? []),
         ordersPagination: result.pagination,
       } : current);
     } catch (loadError) {
       window.alert(loadError instanceof Error ? loadError.message : "订单记录加载失败");
     }
   }
+  async function loadMoreOrders() {
+    if (!data || data.ordersPagination.page >= data.ordersPagination.pages) return;
+    await loadOrders({ page: data.ordersPagination.page + 1, append: true });
+  }
   async function loadMoreAudit() {
     if (!data || data.auditPagination.page >= data.auditPagination.pages) return;
+    await loadAudit({ page: data.auditPagination.page + 1, append: true });
+  }
+  async function loadAudit(input: { page?: number; search?: string; append?: boolean }) {
+    if (!data) return;
+    const search = input.search ?? auditSearch;
+    const page = input.page ?? 1;
+    const params = new URLSearchParams({ page: String(page), take: String(data.auditPagination.take) });
+    if (search) params.set("search", search);
     try {
-      const nextPage = data.auditPagination.page + 1;
-      const result = await fetchAdminPage(`/api/admin/audit-logs?page=${nextPage}&take=${data.auditPagination.take}`, "审计日志加载失败");
+      const result = await fetchAdminPage(`/api/admin/audit-logs?${params}`, "审计日志加载失败");
+      setAuditSearch(search);
       setData((current) => current ? {
         ...current,
-        audit: [...current.audit, ...(result.audit ?? [])],
+        audit: input.append ? [...current.audit, ...(result.audit ?? [])] : (result.audit ?? []),
         auditPagination: result.pagination,
       } : current);
     } catch (loadError) {
@@ -1068,7 +1105,7 @@ export default function AdminPage() {
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
     if (!result.settled) window.alert(result.reason ?? "该周期尚未结束");
   }
-  async function handleRankingAwardUpdate(award: AdminRankingAward, input: { giftId?: string; status?: "FULFILLED" }) {
+  async function handleRankingAwardUpdate(award: AdminRankingAward, input: { status?: "FULFILLED" }) {
     const response = await fetch(`/api/admin/rankings/awards/${award.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -1141,12 +1178,12 @@ export default function AdminPage() {
   const render = () => {
     if (!data) return null;
     if (active === "videos") return <VideoManagement videos={data.videos} appeals={data.appeals} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} />;
-    if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} />;
+    if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} />;
     if (active === "points") return <PointsAdmin users={data.users} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} />;
-    if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} />;
-    if (active === "rankings") return <RankingsAdmin periods={data.periods} gifts={data.gifts} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
-    if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} />;
+    if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
+    if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
+    if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} onSearch={(search) => loadAudit({ search })} />;
     return <Overview data={data} />;
   };
   if (!data) {

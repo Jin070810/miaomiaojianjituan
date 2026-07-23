@@ -43,6 +43,7 @@ type DashboardData = {
     id: string;
     kuaishouId: string;
     nickname: string;
+    avatarUrl: string | null;
     role: "MEMBER" | "ADMIN";
     guildStatus: string | null;
     invited: boolean;
@@ -51,9 +52,12 @@ type DashboardData = {
   summary: {
     monthlyIncome: number;
     approvedVideos: number;
+    monthlyApprovedVideos: number;
     videoPoints: number;
     totalLikes: number;
+    averageLikes: number;
     rank: number | null;
+    videoCounts: { all: number; approved: number; processing: number; exception: number };
   };
   ledger: Array<{
     id: string;
@@ -99,7 +103,7 @@ type DashboardData = {
     sender: { kuaishouId: string; nickname: string };
     receiver: { kuaishouId: string; nickname: string };
   }>;
-  leaderboard: Array<{ rank: number; userId: string; kuaishouId: string; nickname: string; points: number; current: boolean }>;
+  leaderboard: Array<{ rank: number; userId: string; kuaishouId: string; nickname: string; avatarUrl: string | null; points: number; current: boolean }>;
 };
 
 type DisplayGift = {
@@ -124,6 +128,15 @@ type MemberAward = {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+}
+
+function formatTodayLabel() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    weekday: "short",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Shanghai",
+  }).format(new Date()).replace(/\s/g, "");
 }
 
 function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
@@ -207,8 +220,8 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function Avatar({ text = "妙", tone = "coral" }: { text?: string; tone?: string }) {
-  return <span className={`avatar avatar-${tone}`}>{text}</span>;
+function Avatar({ text = "妙", tone = "coral", imageUrl }: { text?: string; tone?: string; imageUrl?: string | null }) {
+  return <span className={`avatar avatar-${tone}`}><img src={imageUrl || "/avatars/default.webp"} alt={`${text}的头像`} /></span>;
 }
 
 function ModalShell({
@@ -294,7 +307,7 @@ function HomeView({
     <div className="member-content">
       <section className="welcome-row">
         <div>
-          <span className="eyebrow">WED · 07月23日</span>
+          <span className="eyebrow">{formatTodayLabel()}</span>
           <h1>你好，{data.user.nickname}</h1>
           <p>今天也来攒一点创作能量吧。</p>
         </div>
@@ -393,7 +406,7 @@ function HomeView({
 
       <section className="mini-rank-card">
         <div>
-          <span className="eyebrow">本周创作榜</span>
+          <span className="eyebrow">总积分榜</span>
           <h2>{data.summary.rank ? `你当前第 ${data.summary.rank} 名` : "榜单正在统计"}</h2>
           <p>按当前可用积分实时更新排名</p>
         </div>
@@ -420,6 +433,7 @@ function VideosView({
   onLoadMore: () => void;
 }) {
   const [appealingVideo, setAppealingVideo] = useState<DashboardData["videos"][number] | null>(null);
+  const [filter, setFilter] = useState<"ALL" | "APPROVED" | "PROCESSING" | "EXCEPTION">("ALL");
   const [appealReason, setAppealReason] = useState("");
   const [appealError, setAppealError] = useState("");
   const [appealSaving, setAppealSaving] = useState(false);
@@ -445,7 +459,13 @@ function VideosView({
       setAppealSaving(false);
     }
   }
-  const rows = data.videos.map((video) => ({
+  const filteredVideos = data.videos.filter((video) => {
+    if (filter === "ALL") return true;
+    if (filter === "APPROVED") return video.status === "APPROVED";
+    if (filter === "PROCESSING") return video.status === "PROCESSING";
+    return ["REJECTED", "FAILED", "PENDING_REVIEW", "REVOKED"].includes(video.status);
+  });
+  const rows = filteredVideos.map((video) => ({
     ...video,
     title: video.sourceUrl,
     date: formatDate(video.submittedAt),
@@ -468,7 +488,7 @@ function VideosView({
       <section className="video-summary">
         <div>
           <span>本月有效视频</span>
-          <strong>{data.summary.approvedVideos}</strong>
+          <strong>{data.summary.monthlyApprovedVideos}</strong>
         </div>
         <div>
           <span>视频贡献积分</span>
@@ -476,15 +496,15 @@ function VideosView({
         </div>
         <div>
           <span>平均点赞</span>
-          <strong>{data.summary.totalLikes.toLocaleString()}</strong>
+          <strong>{data.summary.averageLikes.toLocaleString()}</strong>
         </div>
       </section>
 
       <div className="filter-row">
-        <button className="filter-pill active">全部 <span>18</span></button>
-        <button className="filter-pill">已到账 <span>15</span></button>
-        <button className="filter-pill">处理中 <span>2</span></button>
-        <button className="filter-pill">异常 <span>1</span></button>
+        <button className={`filter-pill ${filter === "ALL" ? "active" : ""}`} onClick={() => setFilter("ALL")}>全部 <span>{data.summary.videoCounts.all}</span></button>
+        <button className={`filter-pill ${filter === "APPROVED" ? "active" : ""}`} onClick={() => setFilter("APPROVED")}>已到账 <span>{data.summary.videoCounts.approved}</span></button>
+        <button className={`filter-pill ${filter === "PROCESSING" ? "active" : ""}`} onClick={() => setFilter("PROCESSING")}>处理中 <span>{data.summary.videoCounts.processing}</span></button>
+        <button className={`filter-pill ${filter === "EXCEPTION" ? "active" : ""}`} onClick={() => setFilter("EXCEPTION")}>异常 <span>{data.summary.videoCounts.exception}</span></button>
       </div>
 
       <section className="video-list">
@@ -530,7 +550,7 @@ function VideosView({
             </div>
           </article>
         ))}
-        {rows.length === 0 && <p className="empty-copy">还没有提交视频，先完成第一次创作吧</p>}
+        {rows.length === 0 && <p className="empty-copy">{filter === "ALL" ? "还没有提交视频，先完成第一次创作吧" : "没有符合条件的视频"}</p>}
         </section>
         <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
       </div>
@@ -624,7 +644,6 @@ function AwardClaimDialog({ award, onClose, onClaimed }: { award: MemberAward; o
   const [recipientName, setRecipientName] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
-  const [cashQrCodeUrl, setCashQrCodeUrl] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
@@ -634,20 +653,9 @@ function AwardClaimDialog({ award, onClose, onClaimed }: { award: MemberAward; o
         setRecipientName(result.profile?.recipientName ?? "");
         setPhone(result.profile?.phone ?? "");
         setAddress(result.profile?.address ?? "");
-        setCashQrCodeUrl(result.profile?.cashQrCodeUrl ?? "");
       })
       .catch(() => undefined);
   }, []);
-  function readQrCode(file?: File) {
-    if (!file) return;
-    if (file.size > 2_000_000) {
-      setError("收款码图片不能超过 2MB");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => setCashQrCodeUrl(String(reader.result ?? ""));
-    reader.readAsDataURL(file);
-  }
   async function claim() {
     setSubmitting(true);
     setError("");
@@ -655,7 +663,7 @@ function AwardClaimDialog({ award, onClose, onClaimed }: { award: MemberAward; o
       const response = await fetch(`/api/rankings/awards/${award.id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(award.gift?.kind === "CASH" ? { cashQrCodeUrl } : { recipientName, phone, address }),
+        body: JSON.stringify({ recipientName, phone, address }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "领奖失败");
@@ -671,20 +679,14 @@ function AwardClaimDialog({ award, onClose, onClaimed }: { award: MemberAward; o
     <ModalShell title="填写领奖信息" eyebrow="RANKING REWARD" onClose={onClose}>
       <div className="redeem-preview">
         <span className="success-symbol yellow-symbol"><Trophy size={28} /></span>
-        <div><strong>{award.gift?.name ?? "奖励礼品待配置"}</strong><span>第 {award.rank} 名 · {award.period.type === "WEEK" ? "周更新排行榜" : "月点赞量排行榜"}</span></div>
+        <div><strong>榜单奖励</strong><span>第 {award.rank} 名 · {award.period.type === "WEEK" ? "周更新排行榜" : "月点赞量排行榜"}</span></div>
       </div>
-      {!award.gift && <p className="form-error">管理员尚未配置本期礼品，请稍后再来。</p>}
-      {award.gift?.kind === "CASH" ? (
-        <div className="field"><label htmlFor="award-qr">收款码</label><input id="award-qr" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => readQrCode(event.target.files?.[0])} /><span className="field-hint">{cashQrCodeUrl ? "已选择收款码。" : "请上传收款码，图片不超过 2MB。"}</span></div>
-      ) : award.gift ? (
-        <>
-          <div className="field"><label htmlFor="award-name">收货姓名</label><input id="award-name" value={recipientName} onChange={(event) => setRecipientName(event.target.value)} /></div>
-          <div className="field"><label htmlFor="award-phone">手机号</label><input id="award-phone" value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" /></div>
-          <div className="field"><label htmlFor="award-address">详细地址</label><textarea id="award-address" value={address} onChange={(event) => setAddress(event.target.value)} rows={3} /></div>
-        </>
-      ) : null}
+      <p className="modal-lead">请填写收货信息，榜单奖励由管理员统一发放。</p>
+      <div className="field"><label htmlFor="award-name">收货姓名</label><input id="award-name" value={recipientName} onChange={(event) => setRecipientName(event.target.value)} /></div>
+      <div className="field"><label htmlFor="award-phone">手机号</label><input id="award-phone" value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" /></div>
+      <div className="field"><label htmlFor="award-address">详细地址</label><textarea id="award-address" value={address} onChange={(event) => setAddress(event.target.value)} rows={3} /></div>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <button className="primary-button full-button modal-submit" disabled={!award.gift || submitting || (award.gift.kind === "CASH" ? !cashQrCodeUrl : !recipientName || !phone || !address)} onClick={claim}>{submitting ? "正在提交..." : "确认领奖"}</button>
+      <button className="primary-button full-button modal-submit" disabled={submitting || !recipientName || !phone || !address} onClick={claim}>{submitting ? "正在提交..." : "确认领奖"}</button>
     </ModalShell>
   );
 }
@@ -760,7 +762,7 @@ function RankView({ data }: { data: DashboardData }) {
         {!loading && !error && ranking.map((user) => (
           <div className={`rank-row ${user.current ? "current" : ""}`} key={user.userId}>
             <span className={`rank-number rank-${user.rank}`}>{user.rank}</span>
-            <Avatar text={user.nickname.slice(0, 1)} tone={user.current ? "coral" : "teal"} />
+            <Avatar text={user.nickname.slice(0, 1)} tone={user.current ? "coral" : "teal"} imageUrl={user.avatarUrl} />
             <div className="rank-name">
               <strong>{user.nickname}</strong>
               {user.current && <span>这是你</span>}
@@ -776,7 +778,7 @@ function RankView({ data }: { data: DashboardData }) {
           <div className="profile-menu">
             {awards.map((award) => (
               <button key={award.id} disabled={award.status !== "PENDING"} onClick={() => setSelectedAward(award)}>
-                <span><Trophy size={19} />{award.period.type === "WEEK" ? "周榜" : "月榜"}第 {award.rank} 名 · {award.gift?.name ?? "礼品待配置"}</span>
+                <span><Trophy size={19} />{award.period.type === "WEEK" ? "周榜" : "月榜"}第 {award.rank} 名 · 榜单奖励</span>
                 <span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "填写信息" : award.status === "CLAIMED" ? "待发放" : "已完成"}</span>
               </button>
             ))}
@@ -915,7 +917,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
     <div className="member-content">
       <section className="profile-head">
         <div className="profile-avatar-wrap">
-          <Avatar text={data.user.nickname.slice(0, 1)} tone="coral" />
+          <Avatar text={data.user.nickname.slice(0, 1)} tone="coral" imageUrl={data.user.avatarUrl} />
           <span className="online-dot" />
         </div>
         <div className="profile-copy">
@@ -955,6 +957,8 @@ function ProfileEditDialog({ user, onClose }: { user: DashboardData["user"]; onC
   const [confirmJoined, setConfirmJoined] = useState(user.guildStatus === "已入会");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl);
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const canConfirmJoined = user.invited || user.guildStatus === "已邀请" || user.guildStatus === "已入会";
   async function save() {
     setSaving(true);
@@ -976,8 +980,45 @@ function ProfileEditDialog({ user, onClose }: { user: DashboardData["user"]; onC
       setSaving(false);
     }
   }
+  async function uploadAvatar(file: File | undefined) {
+    if (!file) return;
+    setAvatarBusy(true);
+    setError("");
+    try {
+      const body = new FormData();
+      body.append("avatar", file);
+      const response = await fetch("/api/profile/avatar", { method: "POST", body });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "头像上传失败");
+      setAvatarUrl(result.user?.avatarUrl ?? null);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "头像上传失败");
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+  async function resetAvatar() {
+    setAvatarBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/profile/avatar", { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "恢复默认头像失败");
+      setAvatarUrl(result.avatarUrl ?? null);
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : "恢复默认头像失败");
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
   return (
     <ModalShell title="编辑资料" eyebrow="MY PROFILE" onClose={onClose}>
+      <div className="avatar-editor">
+        <Avatar text={nickname.slice(0, 1)} tone="coral" imageUrl={avatarUrl} />
+        <div><strong>个人头像</strong><span>上传后自动裁剪并压缩为 WebP</span></div>
+        <label className="secondary-button mini-button avatar-upload-button">{avatarBusy ? "处理中..." : "更换头像"}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={avatarBusy} onChange={(event) => { void uploadAvatar(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+        {avatarUrl && <button className="text-button" type="button" disabled={avatarBusy} onClick={() => void resetAvatar()}>恢复默认</button>}
+      </div>
       <div className="field"><label htmlFor="profile-nickname">快手昵称</label><input id="profile-nickname" value={nickname} onChange={(event) => setNickname(event.target.value)} /></div>
       <div className="field"><label>快手 ID</label><input value={user.kuaishouId} disabled /></div>
       {canConfirmJoined && user.guildStatus !== "已入会" && (
@@ -1453,7 +1494,7 @@ export default function MemberApp() {
           <BrandMark />
           <div className="topbar-actions">
             <button className="icon-button" aria-label="搜索"><Search size={19} /></button>
-            <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" />
+            <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>
         </header>
         {page}

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
+import { RedemptionStatus } from "@prisma/client";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 
-const orderStatuses = ["PENDING", "APPROVED", "FULFILLED", "REJECTED", "REFUNDED"] as const;
+const orderStatuses = ["PENDING", "APPROVED", "PENDING_SHIPMENT", "FULFILLED", "REJECTED", "REFUNDED"] as const;
 
 export async function GET(request: Request) {
   try {
@@ -14,7 +15,9 @@ export async function GET(request: Request) {
     const requestedStatus = url.searchParams.get("status");
     const status = orderStatuses.find((value) => value === requestedStatus);
     const where = {
-      ...(status ? { status } : {}),
+      ...(status === "PENDING_SHIPMENT"
+        ? { status: { in: [RedemptionStatus.PENDING, RedemptionStatus.APPROVED] } }
+        : status ? { status } : {}),
       ...(search ? {
         OR: [
           { id: { contains: search, mode: "insensitive" as const } },

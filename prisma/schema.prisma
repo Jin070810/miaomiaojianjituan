@@ -76,6 +76,7 @@ model User {
   id               String               @id @default(cuid())
   kuaishouId       String               @unique
   nickname         String
+  avatarUrl        String?
   passwordHash     String
   role             Role                 @default(MEMBER)
   active           Boolean              @default(true)

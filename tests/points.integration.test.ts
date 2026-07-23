@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { adminAdjustPoints, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
-import { periodBounds, settleRanking } from "@/lib/rankings";
+import { claimRankingAward, periodBounds, settleRanking } from "@/lib/rankings";
 import { prepareVideoReprocess } from "@/lib/video-jobs";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
@@ -213,6 +213,21 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     expect(second.settled).toBe(false);
     expect(await db.rankingEntry.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
     expect(await db.rankingAward.count({ where: { periodId: first.period.id, userId: senderId } })).toBe(1);
+    const award = await db.rankingAward.findFirstOrThrow({ where: { periodId: first.period.id, userId: senderId } });
+    await db.rankingAward.update({ where: { id: award.id }, data: { status: "EXPIRED" } });
+    await expect(claimRankingAward({ awardId: award.id, userId: senderId })).rejects.toThrow("已过期");
+    const shippingAward = await db.rankingAward.create({
+      data: { periodId: first.period.id, userId: receiverId, rank: 99, value: 0 },
+    });
+    const claimed = await claimRankingAward({
+      awardId: shippingAward.id,
+      userId: receiverId,
+      recipientName: "测试收货人",
+      phone: "13800138000",
+      address: "上海市测试区榜单奖励地址 1 号",
+    });
+    expect(claimed.status).toBe("CLAIMED");
+    expect(claimed.giftId).toBeNull();
   });
 
   it("refunds an order and restores stock only once", async () => {

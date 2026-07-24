@@ -29,5 +29,6 @@ COPY package.json tsconfig.json worker.ts ./
 COPY lib ./lib
 COPY prisma ./prisma
 COPY scripts/seed-admin.ts ./scripts/seed-admin.ts
+COPY scripts/reconcile-redemption-orders.ts ./scripts/reconcile-redemption-orders.ts
 RUN npx prisma generate
 CMD ["npx", "tsx", "worker.ts"]

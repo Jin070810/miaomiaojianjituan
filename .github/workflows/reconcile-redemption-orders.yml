@@ -1,0 +1,109 @@
+name: Reconcile Redemption Orders
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "dry-run 只读预览；apply 执行事务"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+      release_commit:
+        description: "已部署并合并到 main 的完整 commit SHA"
+        required: true
+        type: string
+      cutoff:
+        description: "订单范围截止时间（ISO 8601），dry-run 与 apply 必须使用同一个值"
+        required: true
+        type: string
+      excluded_gift_name:
+        description: "需要取消并退款的礼品名称"
+        required: true
+        default: "悠哈奶糖条"
+        type: string
+      reason:
+        description: "维护原因"
+        required: true
+        default: "订单资料同步：已发放订单统一结算"
+        type: string
+      confirm_apply:
+        description: "我已核对 dry-run 输出，确认执行取消退款和批量发放"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-redemption-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Require apply confirmation
+        if: inputs.action == 'apply'
+        env:
+          CONFIRM_APPLY: ${{ inputs.confirm_apply }}
+        run: test "$CONFIRM_APPLY" = "true"
+
+      - name: Validate release commit
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_commit 必须是完整的 40 位 SHA"
+            exit 1
+          fi
+
+      - name: Verify commit is deployed ancestry
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release ancestry
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          git fetch --no-tags origin main
+          git cat-file -e "$RELEASE_COMMIT^{commit}"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
+
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          test -n "$PRODUCTION_USER"
+          test -n "$PRODUCTION_PATH"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Run reconciliation
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          ADMIN_KUAISHOU_IDS: ${{ secrets.ADMIN_KUAISHOU_IDS }}
+          ACTION: ${{ inputs.action }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CUTOFF: ${{ inputs.cutoff }}
+          EXCLUDED_GIFT_NAME: ${{ inputs.excluded_gift_name }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          # git rev-parse must run on the remote host.
+          # shellcheck disable=SC2016
+          remote_script="$(printf 'set -e\ncd %q\ncurrent_commit="$(git rev-parse HEAD)"\ntest "$current_commit" = %q\nexport ADMIN_KUAISHOU_IDS=%q\ndocker compose --env-file .env.production run --rm --no-deps -e ADMIN_KUAISHOU_IDS worker npm run redemption:reconcile -- --action %q --cutoff %q --excluded-gift-name %q --reason %q\n' \
+            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$ADMIN_KUAISHOU_IDS" "$ACTION" "$CUTOFF" "$EXCLUDED_GIFT_NAME" "$REASON")"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"

@@ -109,8 +109,10 @@ jobs:
           EXCLUDED_GIFT_NAME: ${{ inputs.excluded_gift_name }}
           REASON: ${{ inputs.reason }}
         run: |
-          # git rev-parse must run on the remote host.
+          # Container and image discovery must run on the remote host.
+          reconciliation_source="$PRODUCTION_PATH/lib/redemption-reconciliation.ts:/app/lib/redemption-reconciliation.ts:ro"
+          command_source="$PRODUCTION_PATH/scripts/reconcile-redemption-orders.ts:/app/scripts/reconcile-redemption-orders.ts:ro"
           # shellcheck disable=SC2016
-          remote_script="$(printf 'set -e\ncd %q\ncurrent_commit="$(git rev-parse HEAD)"\ntest "$current_commit" = %q\nexport ADMIN_KUAISHOU_IDS=%q\ndocker compose --env-file .env.production run --rm --no-deps -e ADMIN_KUAISHOU_IDS worker npm run redemption:reconcile -- --action %q --cutoff %q --excluded-gift-name %q --reason %q\n' \
-            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$ADMIN_KUAISHOU_IDS" "$ACTION" "$CUTOFF" "$EXCLUDED_GIFT_NAME" "$REASON")"
+          remote_script="$(printf 'set -e\ncd %q\ngit fetch origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\ntest -f lib/redemption-reconciliation.ts\ntest -f scripts/reconcile-redemption-orders.ts\nworker_container="$(docker ps --filter label=com.docker.compose.project=miaomiao-points --filter label=com.docker.compose.service=worker --format "{{.ID}}" | head -n 1)"\ntest -n "$worker_container"\nworker_image="$(docker inspect --format "{{.Image}}" "$worker_container")"\ndocker tag "$worker_image" miaomiao-points-worker:production\nexport ADMIN_KUAISHOU_IDS=%q\ndocker compose --env-file .env.production run --rm --no-deps -e ADMIN_KUAISHOU_IDS -v %q -v %q worker ./node_modules/.bin/tsx scripts/reconcile-redemption-orders.ts --action %q --cutoff %q --excluded-gift-name %q --reason %q\n' \
+            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RELEASE_COMMIT" "$ADMIN_KUAISHOU_IDS" "$reconciliation_source" "$command_source" "$ACTION" "$CUTOFF" "$EXCLUDED_GIFT_NAME" "$REASON")"
           printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"

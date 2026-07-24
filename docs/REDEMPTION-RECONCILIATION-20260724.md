@@ -11,13 +11,13 @@
 
 - 所有订单状态、库存、积分流水、通知和审计在一个 Serializable 事务中提交，任一步失败则整批回滚。
 - 截止时间、排除礼品名和原因共同生成维护请求标识；相同输入重复执行不会重复退款或发通知。
-- workflow 只允许从 `main` 触发，并要求服务器当前部署 commit 与输入的完整 release SHA 完全一致。
+- workflow 只允许从 `main` 触发，并要求输入完整 release SHA。服务器检出该已合并 commit，将两份维护源码只读挂载到当前健康 Worker 镜像中执行；不替换运行中的 Web/Worker，也不在服务器安装依赖。
 - 日志只输出数量、订单状态、退款积分和不透明订单 ID，不输出成员昵称、快手 ID、手机号或地址。
 
 ## 执行顺序
 
 1. 将 hotfix 通过 PR 合并到 `main`，完成 CI、自审和 staging 验收。
-2. 创建正式 tag，并通过 `Deploy Production` 发布对应完整 commit SHA。
+2. 确认生产 Web/Worker 健康，并记录包含维护脚本的完整 `main` commit SHA。
 3. 记录一个 UTC ISO 8601 截止时间。
 4. 运行 `Reconcile Redemption Orders` 的 `dry-run`，核对排除订单数必须为 1，并确认其退款积分和其余待发放订单数量。
 5. 使用完全相同的 release SHA、截止时间、礼品名和原因运行 `apply`，同时勾选 `confirm_apply`。

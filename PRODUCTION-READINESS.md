@@ -26,6 +26,7 @@
 - 成员默认使用统一品牌头像，可上传 5MB 以内的 JPG、PNG 或 WebP；服务端裁剪并压缩为 `256×256` WebP，支持恢复默认头像并记录审计日志
 - 已生成 PostgreSQL 备份并验证归档可读，恢复脚本已就绪
 - CI 已加入数据对账、Web 镜像构建和 Worker 镜像构建；正式部署 workflow 会拒绝不属于 `main` 历史的 release SHA，并要求手动勾选 `confirm_production=true`
+- 正式镜像由 GitHub Actions 按 release commit 构建并推送到 GHCR；生产服务器只拉取并切换已验证镜像，不再依赖服务器到 npm 的网络完成现场构建
 - 飞书礼品附件已下载到 `public/gifts/feishu` 并回填 53 个礼品；源表中 5 个礼品没有商品图，已保留占位图并记录在迁移清单
 - 视频入账使用数据库状态抢占，多个 Worker 并发只能生成一次奖励流水
 - Worker 提供带 TTL 的心跳、优雅停机和滞留 `PROCESSING` 任务恢复，生产健康检查会校验 Worker

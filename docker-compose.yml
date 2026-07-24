@@ -38,6 +38,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
   app:
+    image: miaomiao-points-app:production
     build:
       context: .
       target: runner
@@ -65,6 +66,7 @@ services:
     stop_grace_period: 30s
     logging: *default-logging
   migrate:
+    image: miaomiao-points-worker:production
     build:
       context: .
       target: worker
@@ -76,6 +78,7 @@ services:
         condition: service_healthy
     logging: *default-logging
   worker:
+    image: miaomiao-points-worker:production
     build:
       context: .
       target: worker

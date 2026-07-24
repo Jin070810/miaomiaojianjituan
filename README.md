@@ -23,7 +23,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 新服务器首次准备可由 root 执行 `bash scripts/bootstrap-server.sh`，它会安装 Docker/Compose、配置 2GB Swap、限制入站端口并创建 `/opt/miaomiaojianjituan`。正式 workflow 会在备份和启动容器前执行 `bash scripts/production-preflight.sh`，检查生产密钥、非默认数据库密码、Docker Compose 和 HTTPS 证书。
 
-正式发布由 `scripts/deploy-production.sh` 编排：先启动基础 PostgreSQL/Redis 并等待数据库就绪，再生成发布前备份并执行 migration、启动 Web/Worker。首次管理员初始化完成后，workflow 才启动 Nginx；这样空库不会因“尚无管理员”的健康检查形成启动死锁。
+正式发布先由 GitHub Actions 从已合并的 release commit 构建 App/Worker 镜像并推送到 GHCR。生产服务器只拉取该 commit 的镜像、启动 PostgreSQL/Redis、生成发布前备份、执行 migration 并切换 Web/Worker，不在服务器运行 `npm ci` 或现场编译。首次管理员初始化完成后，workflow 才启动 Nginx；这样空库不会因“尚无管理员”的健康检查形成启动死锁。
 
 ## 快手视频抓取
 

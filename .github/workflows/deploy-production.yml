@@ -106,7 +106,7 @@ jobs:
           chmod 600 "$HOME/.ssh/config"
 
       - name: Transfer release images
-        timeout-minutes: 20
+        timeout-minutes: 60
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}

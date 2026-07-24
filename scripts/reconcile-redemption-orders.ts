@@ -31,8 +31,10 @@ async function main() {
     excluded: scope.excluded.map((order) => ({ id: order.id, status: order.status, totalCost: order.totalCost })),
     fulfillCount: scope.fulfill.length,
   }, null, 2));
-  if (scope.excluded.length !== 1) throw new Error(`目标取消订单应为 1 条，实际找到 ${scope.excluded.length} 条`);
-  if (action === "dry-run") return;
+  if (action === "dry-run") {
+    if (scope.excluded.length !== 1) throw new Error(`目标取消订单应为 1 条，实际找到 ${scope.excluded.length} 条`);
+    return;
+  }
   if (actorIds.length === 0) throw new Error("缺少 ADMIN_KUAISHOU_IDS，无法写入审计操作者");
   const actor = await db.user.findFirst({
     where: { kuaishouId: { in: actorIds }, role: "ADMIN", active: true },

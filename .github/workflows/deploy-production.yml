@@ -81,7 +81,7 @@ jobs:
           docker build --target runner --tag miaomiao-points-app:production .
           docker build --target worker --tag miaomiao-points-worker:production .
           docker image inspect miaomiao-points-app:production miaomiao-points-worker:production \
-            --format '{{join .RepoTags ","}} size={{.Size}} id={{.Id}}'
+            --format 'size={{.Size}} id={{.Id}}'
 
       - name: Configure SSH
         env:

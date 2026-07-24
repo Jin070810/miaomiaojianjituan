@@ -238,4 +238,16 @@ export async function recoverStaleVideoSubmissions(limit = 200) {
   return { found: rows.length, enqueued };
 }
 
+export async function getVideoQueueMetrics() {
+  if (!process.env.REDIS_URL) return null;
+  const counts = await getQueue().getJobCounts("waiting", "active", "delayed", "failed", "completed");
+  return {
+    waiting: counts.waiting ?? 0,
+    active: counts.active ?? 0,
+    delayed: counts.delayed ?? 0,
+    failed: counts.failed ?? 0,
+    completed: counts.completed ?? 0,
+  };
+}
+
 export { connection };

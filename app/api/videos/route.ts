@@ -8,6 +8,7 @@ import { enqueueVideo } from "@/lib/video-jobs";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
+import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
 
 const schema = z.object({ link: z.string().trim().min(8).max(2000) });
 
@@ -16,6 +17,9 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const user = await currentUser();
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    if (!(await operationSwitchEnabled("VIDEO_SUBMISSIONS"))) {
+      return NextResponse.json({ error: operationSwitchDefinitions.VIDEO_SUBMISSIONS.disabledMessage }, { status: 503 });
+    }
     await enforceRateLimit(`video-submit:${user.id}`, 10, 60);
     const idempotencyKey = requireIdempotency(request);
     const input = schema.parse(await request.json());

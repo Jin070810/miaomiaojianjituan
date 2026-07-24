@@ -12,7 +12,9 @@ import {
   ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
+  Download,
   FileText,
+  ExternalLink,
   Gift,
   KeyRound,
   LayoutDashboard,
@@ -33,7 +35,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "announcements" | "logs";
+type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "announcements" | "logs" | "settings";
 
 type AdminVideo = {
   id: string;
@@ -42,6 +44,9 @@ type AdminVideo = {
   points: number;
   status: string;
   reviewReason: string | null;
+  fetchedOwner: string | null;
+  submittedNickname: string;
+  photoId: string | null;
   submittedAt: string;
   user: { kuaishouId: string; nickname: string };
 };
@@ -95,6 +100,8 @@ type AdminOrderRow = {
   totalCost: number;
   status: string;
   createdAt: string;
+  fulfilledAt?: string | null;
+  trackingNumber?: string | null;
   recipientName?: string | null;
   recipientPhone?: string | null;
   recipientAddress?: string | null;
@@ -109,10 +116,18 @@ type AdminOrderRow = {
 type AdminAuditRow = {
   id: string;
   action: string;
+  actionLabel: string;
   entity: string;
+  entityLabel: string;
   entityId: string | null;
+  summary: string;
+  beforeValue: unknown;
+  afterValue: unknown;
+  reason: string | null;
+  ip: string | null;
+  requestId: string | null;
   createdAt: string;
-  actor: { kuaishouId: string; nickname: string } | null;
+  actor: { kuaishouId: string; nickname: string; role: string } | null;
 };
 type AdminRankingAward = {
   id: string;
@@ -189,6 +204,28 @@ function formatAdminToday() {
 
 function videoStatusLabel(status: string) {
   return ({ APPROVED: "已到账", REJECTED: "已驳回", REVOKED: "已撤销", FAILED: "抓取失败", PROCESSING: "处理中", PENDING_REVIEW: "待审核" } as Record<string, string>)[status] ?? status;
+}
+
+function orderStatusLabel(status: string, kind: "PHYSICAL" | "CASH") {
+  return ({
+    PENDING: kind === "PHYSICAL" ? "待采购" : "待发放",
+    APPROVED: kind === "PHYSICAL" ? "已下单，待采购" : "待发放",
+    FULFILLED: kind === "PHYSICAL" ? "已发货" : "已发放",
+    REJECTED: "已驳回",
+    REFUNDED: "已退款",
+  } as Record<string, string>)[status] ?? status;
+}
+
+function safeKuaishouUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:" && (hostname === "kuaishou.com" || hostname.endsWith(".kuaishou.com"))
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 const gifts = [
@@ -286,7 +323,7 @@ function AdminSidebar({
         ))}
       </nav>
       <div className="admin-sidebar-footer">
-        <button><Settings2 size={17} />系统设置</button>
+        <button className={active === "settings" ? "active" : ""} onClick={() => onChange("settings")}><Settings2 size={17} />系统设置</button>
         <button onClick={onLogout}><LogOut size={17} />退出后台</button>
       </div>
     </aside>
@@ -365,20 +402,28 @@ function AuditTable({ rows, compact = false, onAction }: { rows: AdminVideo[]; c
   return (
     <div className="data-table-wrap">
       <table className="data-table">
-        <thead><tr><th>视频与成员</th><th>点赞</th><th>奖励积分</th><th>状态</th><th>提交时间</th><th /></tr></thead>
+        <thead><tr><th>视频与成员</th><th>点赞</th><th>奖励积分</th><th>状态</th>{!compact && <th>结果说明</th>}<th>提交时间</th><th /></tr></thead>
         <tbody>
-          {(compact ? rows.slice(0, 4) : rows).map((row) => (
-            <tr key={row.id}>
-              <td><div className="table-main"><span className="table-thumb">▶</span><div><strong>{row.sourceUrl}</strong><small>{row.user.nickname} · {row.user.kuaishouId}</small></div></div></td>
-              <td>{row.likes?.toLocaleString() ?? "未获取"}</td><td className={row.status === "APPROVED" && row.points > 0 ? "positive-text" : ""}>{row.status === "APPROVED" && row.points > 0 ? `+${row.points.toLocaleString()}` : "未入账"}</td>
-              <td><span className={`status-chip ${row.status === "APPROVED" ? "success" : row.status === "FAILED" ? "warning" : "danger"}`}>{videoStatusLabel(row.status)}</span></td><td>{formatAdminDate(row.submittedAt)}</td>
-              <td>{onAction ? <div className="table-actions-inline">
-                {row.status === "APPROVED" && <button className="table-more" title="撤销并扣回积分" aria-label="撤销视频积分" onClick={() => onAction(row, "revoke")}><X size={16} /></button>}
-                {["REJECTED", "FAILED"].includes(row.status) && <button className="table-more" title="重新抓取并自动审核" aria-label="重新抓取" onClick={() => onAction(row, "reprocess")}><Activity size={16} /></button>}
-              </div> : <button className="table-more" aria-label="更多操作"><MoreHorizontal size={17} /></button>}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && <tr><td colSpan={6}>暂无待处理视频</td></tr>}
+          {(compact ? rows.slice(0, 4) : rows).map((row) => {
+            const href = safeKuaishouUrl(row.sourceUrl);
+            const reason = row.reviewReason?.trim() || (row.status === "APPROVED" ? "自动审核通过" : "历史记录未保存具体原因");
+            return (
+              <tr key={row.id}>
+                <td><div className="table-main"><span className="table-thumb">▶</span><div>{href
+                  ? <a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${row.user.nickname}提交的快手视频`} title="在新标签页打开快手视频"><strong>{row.sourceUrl}</strong><ExternalLink size={13} /></a>
+                  : <strong className="video-source-invalid" title="该历史链接不是安全的快手 HTTPS 地址">{row.sourceUrl}</strong>}<small>{row.user.nickname} · {row.user.kuaishouId}</small></div></div></td>
+                <td>{row.likes?.toLocaleString() ?? "未获取"}</td><td className={row.status === "APPROVED" && row.points > 0 ? "positive-text" : ""}>{row.status === "APPROVED" && row.points > 0 ? `+${row.points.toLocaleString()}` : "未入账"}</td>
+                <td><span className={`status-chip ${row.status === "APPROVED" ? "success" : row.status === "FAILED" ? "warning" : "danger"}`}>{videoStatusLabel(row.status)}</span></td>
+                {!compact && <td><details className="video-result-detail"><summary title={reason}>{reason}</summary><div><span>抓取作者：{row.fetchedOwner ?? "未获取"}</span><span>提交昵称：{row.submittedNickname || "未记录"}</span><span>photoId：{row.photoId ?? "未获取"}</span></div></details></td>}
+                <td>{formatAdminDate(row.submittedAt)}</td>
+                <td>{onAction ? <div className="table-actions-inline">
+                  {row.status === "APPROVED" && <button className="table-more" title="撤销并扣回积分" aria-label="撤销视频积分" onClick={() => onAction(row, "revoke")}><X size={16} /></button>}
+                  {["REJECTED", "FAILED"].includes(row.status) && <button className="table-more" title="重新抓取并自动审核" aria-label="重新抓取" onClick={() => onAction(row, "reprocess")}><Activity size={16} /></button>}
+                </div> : <button className="table-more" aria-label="更多操作"><MoreHorizontal size={17} /></button>}</td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && <tr><td colSpan={compact ? 6 : 7}>暂无视频记录</td></tr>}
         </tbody>
       </table>
     </div>
@@ -412,7 +457,7 @@ function VideosAdmin({
         {Object.keys(statusForFilter).map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => { setFilter(item); void onFilter(statusForFilter[item]); }}>{item}{filter === item && <span>{pagination.total}</span>}</button>)}
       </div>
       <section className="admin-panel audit-panel">
-        <div className="admin-panel-head"><div><h2>{filter}视频</h2><p>共 {pagination.total} 条记录，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索视频、作者或快手 ID" /></div><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>
+        <div className="admin-panel-head"><div><h2>{filter}视频</h2><p>共 {pagination.total} 条记录，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索链接、photoId、作者、驳回原因或快手 ID" /></div><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>
         <AuditTable rows={rows} onAction={onAction} />
         {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多视频 <ChevronDown size={15} /></button></div>}
       </section>
@@ -727,7 +772,7 @@ function OrderRecipientDetails({ order, onLoad }: { order: AdminOrderRow; onLoad
   );
 }
 
-function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund") => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
+function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl">>>({});
@@ -746,19 +791,31 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
     setStatus(next);
     void onFilter(next);
   }
-  async function runAction(order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund", canFulfill = true) {
+  async function runAction(order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", canFulfill = true) {
     if (processingOrderId) return;
     if (action === "fulfill" && !canFulfill) {
       setFeedback({ type: "error", message: order.gift.kind === "CASH" ? "该订单尚未填写收款码，无法完成" : "该订单尚未填写完整收货资料，无法发货" });
       return;
     }
+    let input: { trackingNumber?: string | null } | undefined;
+    if (action === "fulfill" && order.gift.kind === "PHYSICAL") {
+      const trackingNumber = window.prompt("可选：填写快递单号", order.trackingNumber ?? "");
+      if (trackingNumber === null) return;
+      input = { trackingNumber: trackingNumber.trim() || null };
+    }
+    if (action === "update_tracking") {
+      const trackingNumber = window.prompt("填写新的快递单号；留空可清除", order.trackingNumber ?? "");
+      if (trackingNumber === null) return;
+      input = { trackingNumber: trackingNumber.trim() || null };
+    }
     setProcessingOrderId(order.id);
     setFeedback(null);
     try {
-      const changed = await onAction(order, action);
+      const changed = await onAction(order, action, input);
       if (changed) {
         const message = action === "fulfill"
-          ? (order.gift.kind === "CASH" ? "订单已完成" : "订单已发货")
+          ? (order.gift.kind === "CASH" ? "订单已发放" : "订单已发货")
+          : action === "update_tracking" ? "快递单号已更新"
           : action === "reject" ? "订单已驳回并退回积分" : action === "refund" ? "订单已退款" : "订单已确认";
         setFeedback({ type: "success", message });
       }
@@ -771,8 +828,8 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
   const filtered = rows;
   return (
     <>
-      <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>处理礼品发货和订单状态变更。</p></div><button className="secondary-button"><FileText size={16} />导出订单</button></div>
-      <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => changeStatus("ALL")}>全部订单 <b>{status === "ALL" ? pagination.total : rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => changeStatus("PENDING")}>待发货 <b>{status === "PENDING" ? pagination.total : "—"}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => changeStatus("FULFILLED")}>已完成 <b>{status === "FULFILLED" ? pagination.total : "—"}</b></button></div>
+      <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>实物订单按“待采购 → 已发货”处理；驳回会退回积分和兑换配额。</p></div><button className="secondary-button"><FileText size={16} />导出订单</button></div>
+      <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => changeStatus("ALL")}>全部订单 <b>{status === "ALL" ? pagination.total : rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => changeStatus("PENDING")}>待采购 / 待发放 <b>{status === "PENDING" ? pagination.total : "—"}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => changeStatus("FULFILLED")}>已发货 / 已发放 <b>{status === "FULFILLED" ? pagination.total : "—"}</b></button></div>
       <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条已加载订单，共 {pagination.total} 条；驳回订单会自动退回积分和库存</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索订单号或快手 ID" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>{feedback && <p className={feedback.type === "success" ? "form-success" : "form-error"} role="alert">{feedback.message}</p>}<div className="order-list">{filtered.map((order, i) => {
         const merged = { ...order, ...details[order.id] };
         const readyToFulfill = order.gift.kind === "CASH"
@@ -780,7 +837,7 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
           : Boolean(merged.recipientName && (merged.recipientPhone || merged.hasRecipientPhone) && (merged.recipientAddress || merged.hasRecipientAddress));
         const pendingShipment = ["PENDING", "APPROVED"].includes(order.status);
         const processing = processingOrderId === order.id;
-        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") || order.gift.imageUrl?.startsWith("/") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} /></div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : "success"}`}>{pendingShipment ? "待发货" : order.status === "FULFILLED" ? "已完成" : order.status}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "完成" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
+        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") || order.gift.imageUrl?.startsWith("/") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
       })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多订单 <ChevronDown size={15} /></button></div>}</section>
     </>
   );
@@ -993,15 +1050,112 @@ function AnnouncementsAdmin({
   );
 }
 
-function LogsAdmin({ rows, pagination, onLoadMore, onSearch }: { rows: AdminAuditRow[]; pagination: AdminPagination; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void> }) {
+function auditJson(value: unknown) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+type OperationSwitchRow = {
+  key: "VIDEO_SUBMISSIONS" | "POINT_TRANSFERS" | "REDEMPTIONS";
+  label: string;
+  description: string;
+  enabled: boolean;
+  updatedAt: string | null;
+  updatedBy: { nickname: string; kuaishouId: string } | null;
+};
+
+function SettingsAdmin() {
+  const [rows, setRows] = useState<OperationSwitchRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/admin/operation-switches", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? "运营开关加载失败");
+        setRows(result.switches ?? []);
+      })
+      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : "运营开关加载失败"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function toggle(row: OperationSwitchRow) {
+    setSavingKey(row.key);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/operation-switches", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: row.key, enabled: !row.enabled }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "运营开关更新失败");
+      setRows(result.switches ?? []);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "运营开关更新失败");
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  return (
+    <>
+      <div className="admin-page-title"><div><span className="eyebrow">OPERATIONS CONTROL</span><h1>系统设置</h1><p>紧急情况下暂停成员写入入口，不影响后台处理和历史数据。</p></div><span className="status-chip success"><ShieldCheck size={14} /> 服务端强制</span></div>
+      <section className="admin-panel operation-settings-panel">
+        <div className="admin-panel-head"><div><h2>运营开关</h2><p>每次变更都会记录操作者、时间和开关前后状态</p></div></div>
+        {loading && <p className="empty-copy">正在加载运营开关...</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        {!loading && <div className="operation-switch-list">{rows.map((row) => (
+          <div className="operation-switch-row" key={row.key}>
+            <div><strong>{row.label}</strong><span>{row.description}</span><small>{row.updatedAt ? `最近更新：${formatAdminDate(row.updatedAt)}${row.updatedBy ? ` · ${row.updatedBy.nickname}` : ""}` : "使用系统默认配置"}</small></div>
+            <label className="operation-toggle">
+              <input type="checkbox" checked={row.enabled} disabled={Boolean(savingKey)} onChange={() => void toggle(row)} />
+              <span aria-hidden="true" />
+              <b>{savingKey === row.key ? "保存中" : row.enabled ? "已开启" : "已暂停"}</b>
+            </label>
+          </div>
+        ))}</div>}
+      </section>
+      <section className="admin-panel operation-settings-panel">
+        <div className="admin-panel-head"><div><h2>脱敏数据导出</h2><p>导出文件不包含手机号、地址、收款码、密码或原始抓取数据。</p></div></div>
+        <div className="export-link-grid">
+          <a className="secondary-button" href="/api/admin/exports/orders"><Download size={16} />订单 CSV</a>
+          <a className="secondary-button" href="/api/admin/exports/points"><Download size={16} />积分 CSV</a>
+          <a className="secondary-button" href="/api/admin/exports/videos"><Download size={16} />视频 CSV</a>
+          <a className="secondary-button" href="/api/admin/exports/audit"><Download size={16} />审计 CSV</a>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function auditActorLabel(row: AdminAuditRow) {
+  if (row.actor) return row.actor.nickname;
+  if (["VIDEO_AUTO_REJECTED", "VIDEO_WORKER_RECOVERY", "VIDEO_REPROCESS_REQUESTED", "VIDEO_BULK_REPROCESS_REQUESTED", "VIDEO_ENQUEUE_FAILED", "VIDEO_REPROCESS_ENQUEUE_FAILED", "VIDEO_APPROVED", "VIDEO_POINTS_ADJUSTED", "REDEMPTION_RECONCILIATION_COMPLETED", "RANKING_SETTLED"].includes(row.action)) return "系统自动任务";
+  if (row.action === "LOGIN_FAILED") return "未登录用户";
+  return "历史详情有限";
+}
+
+function LogsAdmin({ rows, pagination, onLoadMore, onSearch, onFilter }: { rows: AdminAuditRow[]; pagination: AdminPagination; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (filters: { actionPrefix: string; entity: string }) => Promise<void> }) {
   const [query, setQuery] = useState("");
+  const [actionPrefix, setActionPrefix] = useState("");
+  const [entity, setEntity] = useState("");
+  const [selected, setSelected] = useState<AdminAuditRow | null>(null);
   async function submitSearch() {
     await onSearch(query.trim());
   }
   return (
     <>
-      <div className="admin-page-title"><div><span className="eyebrow">AUDIT TRAIL</span><h1>审计日志</h1><p>所有积分、身份和订单变更都在这里留痕。</p></div><button className="icon-button" title="只读日志" aria-label="只读日志"><SlidersHorizontal size={19} /></button></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>系统操作记录</h2><p>只读记录 · 共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索操作人或对象" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div><div className="data-table-wrap"><table className="data-table"><thead><tr><th>操作</th><th>操作人</th><th>对象类型</th><th>对象 ID</th><th>时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><span className="log-action"><ShieldCheck size={15} />{row.action}</span></td><td>{row.actor?.nickname ?? "系统"}<small>{row.actor?.kuaishouId}</small></td><td>{row.entity}</td><td>{row.entityId ?? "—"}</td><td>{formatAdminDate(row.createdAt)}</td></tr>)}</tbody></table></div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多日志 <ChevronDown size={15} /></button></div>}</section>
+      <div className="admin-page-title"><div><span className="eyebrow">AUDIT TRAIL</span><h1>审计日志</h1><p>所有写入、身份和订单变更都在这里留痕。</p></div><button className="icon-button" title="只读日志" aria-label="只读日志"><SlidersHorizontal size={19} /></button></div>
+      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>系统操作记录</h2><p>只读记录 · 共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索操作人、对象、原因或请求 ID" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div><select className="audit-filter" value={actionPrefix} aria-label="按动作筛选" onChange={(event) => { const value = event.target.value; setActionPrefix(value); void onFilter({ actionPrefix: value, entity }); }}><option value="">全部动作</option><option value="VIDEO_">视频</option><option value="REDEMPTION_">兑换</option><option value="TRANSFER_">转账</option><option value="LOGIN_">登录</option><option value="USER_">成员</option><option value="GIFT_">礼品</option><option value="RANKING_">榜单</option><option value="ANNOUNCEMENT_">公告</option></select><select className="audit-filter" value={entity} aria-label="按对象筛选" onChange={(event) => { const value = event.target.value; setEntity(value); void onFilter({ actionPrefix, entity: value }); }}><option value="">全部对象</option><option value="VideoSubmission">视频</option><option value="VideoAppeal">视频申诉</option><option value="RedemptionOrder">兑换订单</option><option value="Transfer">积分转账</option><option value="PointLedger">积分流水</option><option value="User">成员</option><option value="Gift">礼品</option><option value="RankingAward">榜单奖励</option><option value="Announcement">公告</option><option value="Authentication">认证</option></select></div></div><div className="data-table-wrap"><table className="data-table audit-log-table"><thead><tr><th>操作摘要</th><th>操作人</th><th>对象</th><th>时间</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><span className="log-action"><ShieldCheck size={15} />{row.actionLabel}</span><small className="audit-summary">{row.summary}</small></td><td>{auditActorLabel(row)}<small>{row.actor ? `${row.actor.kuaishouId} · ${row.actor.role === "ADMIN" ? "管理员" : "成员"}` : row.action === "LOGIN_FAILED" ? "登录安全事件" : row.action.startsWith("VIDEO_") ? "系统事件" : "历史详情有限"}</small></td><td><span>{row.entityLabel}</span><small>{row.entityId ?? "—"}</small></td><td>{formatAdminDate(row.createdAt)}</td><td><button className="table-more" title="查看日志详情" aria-label={`查看${row.actionLabel}详情`} onClick={() => setSelected(row)}><FileText size={15} /></button></td></tr>)}</tbody></table></div>{rows.length === 0 && <p className="empty-copy">暂无审计记录</p>}{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多日志 <ChevronDown size={15} /></button></div>}</section>
+      {selected && <div className="modal-backdrop" role="presentation" onMouseDown={() => setSelected(null)}><section className="modal-sheet audit-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="audit-detail-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">AUDIT DETAIL</span><h2 id="audit-detail-title">{selected.actionLabel}</h2></div><button className="icon-button" aria-label="关闭日志详情" onClick={() => setSelected(null)}><X size={20} /></button></div><p className="audit-detail-summary">{selected.summary}</p><div className="audit-detail-grid"><div><span>操作人</span><strong>{auditActorLabel(selected)}</strong></div><div><span>角色</span><strong>{selected.actor ? (selected.actor.role === "ADMIN" ? "管理员" : "成员") : selected.action.startsWith("VIDEO_") || selected.action === "RANKING_SETTLED" || selected.action === "REDEMPTION_RECONCILIATION_COMPLETED" ? "系统" : "资料有限"}</strong></div><div><span>对象</span><strong>{selected.entityLabel} · {selected.entityId ?? "—"}</strong></div><div><span>时间</span><strong>{formatAdminDate(selected.createdAt)}</strong></div><div><span>IP</span><strong>{selected.ip ?? "—"}</strong></div><div><span>请求 ID</span><strong>{selected.requestId ?? "—"}</strong></div></div><div className="audit-json-grid"><div><span>变更前</span><pre>{auditJson(selected.beforeValue)}</pre></div><div><span>变更后</span><pre>{auditJson(selected.afterValue)}</pre></div></div>{selected.reason && <div className="audit-reason"><span>原因</span><p>{selected.reason}</p></div>}<small className="audit-raw-action">原始动作码：{selected.action}</small></section></div>}
     </>
   );
 }
@@ -1016,6 +1170,7 @@ export default function AdminPage() {
   const [userFilters, setUserFilters] = useState({ search: "", guild: "" });
   const [orderFilters, setOrderFilters] = useState({ search: "", status: "" });
   const [auditSearch, setAuditSearch] = useState("");
+  const [auditFilters, setAuditFilters] = useState({ actionPrefix: "", entity: "" });
   const router = useRouter();
   useEffect(() => {
     let activeRequest = true;
@@ -1203,15 +1358,22 @@ export default function AdminPage() {
     if (!data || data.auditPagination.page >= data.auditPagination.pages) return;
     await loadAudit({ page: data.auditPagination.page + 1, append: true });
   }
-  async function loadAudit(input: { page?: number; search?: string; append?: boolean }) {
+  async function loadAudit(input: { page?: number; search?: string; actionPrefix?: string; entity?: string; append?: boolean }) {
     if (!data) return;
     const search = input.search ?? auditSearch;
+    const nextFilters = {
+      actionPrefix: input.actionPrefix ?? auditFilters.actionPrefix,
+      entity: input.entity ?? auditFilters.entity,
+    };
     const page = input.page ?? 1;
     const params = new URLSearchParams({ page: String(page), take: String(data.auditPagination.take) });
     if (search) params.set("search", search);
+    if (nextFilters.actionPrefix) params.set("actionPrefix", nextFilters.actionPrefix);
+    if (nextFilters.entity) params.set("entity", nextFilters.entity);
     try {
       const result = await fetchAdminPage(`/api/admin/audit-logs?${params}`, "审计日志加载失败");
       setAuditSearch(search);
+      setAuditFilters(nextFilters);
       setData((current) => current ? {
         ...current,
         audit: input.append ? [...current.audit, ...(result.audit ?? [])] : (result.audit ?? []),
@@ -1276,13 +1438,13 @@ export default function AdminPage() {
       metrics: { ...current.metrics, pendingVideos: Math.max(0, current.metrics.pendingVideos - 1) },
     } : current);
   }
-  async function handleOrderAction(order: AdminOrderRow, action: "approve" | "fulfill" | "reject" | "refund"): Promise<boolean> {
+  async function handleOrderAction(order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }): Promise<boolean> {
     const reason = ["reject", "refund"].includes(action) ? window.prompt("请输入处理原因") : undefined;
     if (["reject", "refund"].includes(action) && !reason) return false;
     const response = await fetch(`/api/admin/orders/${order.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, reason }),
+      body: JSON.stringify({ action, reason, ...input }),
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -1290,8 +1452,13 @@ export default function AdminPage() {
     }
     setData((current) => current ? {
       ...current,
-      orders: current.orders.map((item) => item.id === order.id ? { ...item, status: result.order.status } : item),
-      metrics: { ...current.metrics, pendingOrders: ["approve", "fulfill", "reject", "refund"].includes(action) && ["PENDING", "APPROVED"].includes(order.status) ? Math.max(0, current.metrics.pendingOrders - 1) : current.metrics.pendingOrders },
+        orders: current.orders.map((item) => item.id === order.id ? {
+          ...item,
+          status: result.order.status,
+          trackingNumber: result.order.trackingNumber ?? item.trackingNumber ?? null,
+          fulfilledAt: result.order.fulfilledAt ?? item.fulfilledAt ?? null,
+        } : item),
+        metrics: { ...current.metrics, pendingOrders: ["approve", "fulfill", "reject", "refund"].includes(action) && ["PENDING", "APPROVED"].includes(order.status) ? Math.max(0, current.metrics.pendingOrders - 1) : current.metrics.pendingOrders },
     } : current);
     return true;
   }
@@ -1439,7 +1606,8 @@ export default function AdminPage() {
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
     if (active === "announcements") return <AnnouncementsAdmin rows={data.announcements} users={data.users} onSave={saveAnnouncement} onAction={actionAnnouncement} />;
-    if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} onSearch={(search) => loadAudit({ search })} />;
+    if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} onSearch={(search) => loadAudit({ search })} onFilter={(filters) => loadAudit(filters)} />;
+    if (active === "settings") return <SettingsAdmin />;
     return <Overview data={data} />;
   };
   if (!data) {
@@ -1451,7 +1619,7 @@ export default function AdminPage() {
       <section className="admin-main">
         <header className="admin-topbar">
           <button className="mobile-admin-menu" aria-label="打开菜单"><MoreHorizontal size={20} /></button>
-          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "announcements" ? "公告通知" : "审计日志"}</strong></div>
+          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
           <div className="admin-top-actions"><button className="icon-button"><Bell size={18} /></button><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
         </header>
         <div className="admin-content">{render()}</div>

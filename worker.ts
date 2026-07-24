@@ -3,6 +3,7 @@ import "dotenv/config";
 import { connection, processVideoSubmission, recoverStaleVideoSubmissions } from "./lib/video-jobs";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
+import { sendOperationalAlert } from "./lib/alerts";
 
 const worker = new Worker("kuaishou-video", async (job) => {
   await processVideoSubmission(job.data.videoId);
@@ -12,8 +13,14 @@ const worker = new Worker("kuaishou-video", async (job) => {
 });
 
 worker.on("completed", (job) => console.log(`[video-worker] completed ${job.id}`));
-worker.on("failed", (job, error) => console.error(`[video-worker] failed ${job?.id}`, error));
-worker.on("error", (error) => console.error("[video-worker] redis error", error));
+worker.on("failed", (job, error) => {
+  console.error(`[video-worker] failed ${job?.id}`, error);
+  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, error: error.message } });
+});
+worker.on("error", (error) => {
+  console.error("[video-worker] redis error", error);
+  void sendOperationalAlert({ source: "video-worker", severity: "critical", message: "视频 Worker 或 Redis 出错", details: { error: error.message } });
+});
 
 let closing = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
@@ -31,6 +38,7 @@ async function maintenance() {
     }
   } catch (error) {
     console.error("[worker-maintenance] failed", error);
+    await sendOperationalAlert({ source: "video-worker", severity: "warning", message: "Worker 维护任务失败", details: { error: error instanceof Error ? error.message : String(error) } });
   }
 }
 
@@ -70,6 +78,7 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 
 void start().catch(async (error) => {
   console.error("[video-worker] startup failed", error);
+  await sendOperationalAlert({ source: "video-worker", severity: "critical", message: "视频 Worker 启动失败", details: { error: error instanceof Error ? error.message : String(error) } });
   await shutdown("startup-failure");
   process.exitCode = 1;
 });

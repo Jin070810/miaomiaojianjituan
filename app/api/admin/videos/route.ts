@@ -20,6 +20,7 @@ export async function GET(request: Request) {
           { sourceUrl: { contains: search, mode: "insensitive" as const } },
           { photoId: { contains: search, mode: "insensitive" as const } },
           { fetchedOwner: { contains: search, mode: "insensitive" as const } },
+          { reviewReason: { contains: search, mode: "insensitive" as const } },
           { user: { is: { kuaishouId: { contains: search, mode: "insensitive" as const } } } },
           { user: { is: { nickname: { contains: search, mode: "insensitive" as const } } } },
         ],

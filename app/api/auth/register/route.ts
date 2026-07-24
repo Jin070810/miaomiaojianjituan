@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { assertSameOrigin, encryptPhone, getClientIp, rateLimitResponse, hashPassword } from "@/lib/security";
+import { assertSameOrigin, encryptPhone, getClientIp, rateLimitResponse, hashPassword, requestId } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { createSession } from "@/lib/auth";
+import { writeAuditLog } from "@/lib/audit";
 
 const schema = z.object({
   kuaishouId: z.string().trim().min(2).max(80),
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
     if (input.guildStatus === "未绑定" && !input.boundPhone) {
       return NextResponse.json({ error: "未绑定公会时需要填写绑定手机号" }, { status: 400 });
     }
+    const auditRequestId = requestId();
     const user = await db.$transaction(async (tx) => {
       const existing = await tx.user.findFirst({ where: { kuaishouId: { equals: input.kuaishouId, mode: "insensitive" } } });
       if (existing) throw new Error("该快手ID已注册");
@@ -37,6 +39,15 @@ export async function POST(request: Request) {
       });
       await tx.guildStatusHistory.create({
         data: { userId: created.id, status: input.guildStatus ?? "未设置", reason: "注册" },
+      });
+      await writeAuditLog(tx, {
+          actorId: created.id,
+          action: "USER_REGISTERED",
+          entity: "User",
+          entityId: created.id,
+          afterValue: { kuaishouId: created.kuaishouId, nickname: created.nickname, role: created.role },
+          ip: getClientIp(request),
+          requestId: auditRequestId,
       });
       return created;
     });

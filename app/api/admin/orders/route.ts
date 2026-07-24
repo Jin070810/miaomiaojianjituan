@@ -40,6 +40,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
         ...order,
+        fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
         hasRecipientName: Boolean(order.recipientName),
         hasRecipientPhone: Boolean(recipientPhoneEnc),
         hasRecipientAddress: Boolean(recipientAddressEnc),

@@ -35,6 +35,10 @@ type NotificationResponse = {
   pagination: { page: number; take: number; total: number; pages: number };
 };
 
+type NotificationCenterProps = {
+  onOpenDetail?: (row: NotificationRow) => void;
+};
+
 const PROMPT_SESSION_KEY = "miaomiao-notification-prompt-shown";
 
 export function clearNotificationPromptSession() {
@@ -61,7 +65,7 @@ function notificationTime(value: string) {
   }).format(new Date(value));
 }
 
-export default function NotificationCenter() {
+export default function NotificationCenter({ onOpenDetail }: NotificationCenterProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [page, setPage] = useState(1);
@@ -157,12 +161,13 @@ export default function NotificationCenter() {
       <button
         key={row.id}
         className={`notification-row ${row.readAt ? "" : "unread"}`}
-        onClick={() => { void markRead(row.id); if (compact) setPopupOpen(false); }}
+        onClick={() => { void markRead(row.id); onOpenDetail?.(row); if (compact) setPopupOpen(false); }}
       >
         <span className="notification-icon"><Icon size={17} /></span>
         <span className="notification-copy">
           <strong>{row.title}</strong>
           <span className={compact ? "notification-summary" : "notification-body"}>{row.body}</span>
+          {row.entityId && <span className="notification-detail-link">查看详情</span>}
           <small>{notificationTime(row.createdAt)}{row.withdrawn ? " · 已撤回" : ""}</small>
         </span>
         {!row.readAt && <i className="notification-unread-dot" />}

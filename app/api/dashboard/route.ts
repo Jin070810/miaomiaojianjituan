@@ -108,6 +108,7 @@ export async function GET() {
     gifts,
     orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
       ...order,
+      fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
       hasCashQrCode: Boolean(cashQrCodeUrl),

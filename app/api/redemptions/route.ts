@@ -6,6 +6,7 @@ import { redeemGift } from "@/lib/points";
 import { assertSameOrigin, getClientIp, isSafeCashQrCodeUrl, MAX_CASH_QR_CODE_LENGTH, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
+import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
 
 const schema = z.object({
   giftId: z.string().min(1),
@@ -25,6 +26,9 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const user = await currentUser();
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    if (!(await operationSwitchEnabled("REDEMPTIONS"))) {
+      return NextResponse.json({ error: operationSwitchDefinitions.REDEMPTIONS.disabledMessage }, { status: 503 });
+    }
     await enforceRateLimit(`redemption:${user.id}`, 10, 60);
     const input = schema.parse(await request.json());
     const order = await redeemGift({ ...input, userId: user.id, idempotencyKey: requireIdempotency(request), ip: getClientIp(request) });
@@ -48,6 +52,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
       ...order,
+      fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
       hasCashQrCode: Boolean(cashQrCodeUrl),

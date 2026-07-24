@@ -6,8 +6,9 @@ import { db } from "@/lib/db";
 import { assertSameOrigin, decryptSensitive, getClientIp } from "@/lib/security";
 
 const schema = z.object({
-  action: z.enum(["approve", "fulfill", "reject", "refund"]),
+  action: z.enum(["approve", "fulfill", "update_tracking", "reject", "refund"]),
   reason: z.string().trim().max(500).optional(),
+  trackingNumber: z.string().trim().max(120).nullable().optional(),
 });
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
@@ -22,6 +23,10 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         recipientPhoneEnc: true,
         recipientAddressEnc: true,
         cashQrCodeUrl: true,
+        trackingNumber: true,
+        fulfilledAt: true,
+        reviewedAt: true,
+        status: true,
         gift: { select: { kind: true } },
       },
     });
@@ -32,6 +37,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         recipientPhone: order.recipientPhoneEnc ? decryptSensitive(order.recipientPhoneEnc) : null,
         recipientAddress: order.recipientAddressEnc ? decryptSensitive(order.recipientAddressEnc) : null,
         cashQrCodeUrl: order.cashQrCodeUrl,
+        trackingNumber: order.trackingNumber,
+        fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
         kind: order.gift.kind,
       },
     });

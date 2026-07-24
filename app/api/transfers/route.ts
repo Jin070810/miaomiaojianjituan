@@ -6,6 +6,7 @@ import { completeTransfer } from "@/lib/points";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
+import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
 
 const schema = z.object({ receiverKuaishouId: z.string().trim().min(2).max(80), amount: z.number().int().positive().max(500000), note: z.string().trim().max(200).optional() });
 
@@ -14,6 +15,9 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const user = await currentUser();
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    if (!(await operationSwitchEnabled("POINT_TRANSFERS"))) {
+      return NextResponse.json({ error: operationSwitchDefinitions.POINT_TRANSFERS.disabledMessage }, { status: 503 });
+    }
     await enforceRateLimit(`transfer:${user.id}`, 20, 60);
     const input = schema.parse(await request.json());
     const idempotencyKey = requireIdempotency(request);

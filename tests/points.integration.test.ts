@@ -296,6 +296,40 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     await db.gift.delete({ where: { id: gift.id } });
   });
 
+  it("tracks physical shipment and allows a later tracking correction", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 100 } });
+    const gift = await db.gift.create({ data: { name: "测试物流礼品", pointsCost: 20, stock: 2 } });
+    const order = await redeemGift({
+      userId: senderId,
+      giftId: gift.id,
+      quantity: 1,
+      idempotencyKey: `integration-shipping-${Date.now()}`,
+      recipient: { recipientName: "测试收货人", phone: "13800138000", address: "上海市测试区物流路 1 号" },
+    });
+    expect(order.status).toBe("APPROVED");
+    const fulfilled = await updateRedemptionOrder({
+      orderId: order.id,
+      action: "fulfill",
+      actorId: receiverId,
+      trackingNumber: "SF1234567890",
+    });
+    expect(fulfilled.status).toBe("FULFILLED");
+    expect(fulfilled.trackingNumber).toBe("SF1234567890");
+    expect(fulfilled.fulfilledAt).toBeTruthy();
+    const corrected = await updateRedemptionOrder({
+      orderId: order.id,
+      action: "update_tracking",
+      actorId: receiverId,
+      trackingNumber: "YT0987654321",
+    });
+    expect(corrected.trackingNumber).toBe("YT0987654321");
+    expect(await db.auditLog.count({ where: { action: "REDEMPTION_TRACKING_UPDATED", entityId: order.id } })).toBe(1);
+    await db.notification.deleteMany({ where: { entityType: "RedemptionOrder", entityId: order.id } });
+    await db.auditLog.deleteMany({ where: { entity: "RedemptionOrder", entityId: order.id } });
+    await db.redemptionOrder.delete({ where: { id: order.id } });
+    await db.gift.delete({ where: { id: gift.id } });
+  });
+
   it("blocks fulfillment when legacy recipient details are missing", async () => {
     const cash = await db.gift.create({ data: { name: "测试缺资料现金", kind: "CASH", pointsCost: 1, stock: 1 } });
     const physical = await db.gift.create({ data: { name: "测试缺资料实物", kind: "PHYSICAL", pointsCost: 1, stock: 1 } });

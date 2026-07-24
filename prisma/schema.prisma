@@ -123,6 +123,7 @@ model User {
   announcementRecipients AnnouncementRecipient[]
   guildHistory     GuildStatusHistory[]
   sessions         Session[]
+  operationSettings SystemSetting[]     @relation("OperationSettingUpdater")
 }
 
 model Session {
@@ -285,6 +286,8 @@ model RedemptionOrder {
   idempotencyKey      String           @unique
   createdAt           DateTime         @default(now())
   reviewedAt          DateTime?
+  fulfilledAt         DateTime?
+  trackingNumber      String?
   user                User             @relation(fields: [userId], references: [id])
   gift                Gift             @relation(fields: [giftId], references: [id])
 
@@ -430,6 +433,18 @@ model AuditLog {
 
   @@index([entity, entityId])
   @@index([createdAt])
+}
+
+model SystemSetting {
+  key         String   @id
+  enabled     Boolean  @default(true)
+  description String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  updatedBy   User?    @relation("OperationSettingUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedAt])
 }
 
 model LegacyImport {

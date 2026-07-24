@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { presentAuditLog } from "@/lib/audit";
 
 function shanghaiDateKey(value: Date) {
   const parts = new Intl.DateTimeFormat("en", {
@@ -34,7 +35,7 @@ export async function GET() {
       db.auditLog.findMany({
         orderBy: { createdAt: "desc" },
         take: 50,
-        include: { actor: { select: { kuaishouId: true, nickname: true } } },
+        include: { actor: { select: { kuaishouId: true, nickname: true, role: true } } },
       }),
       db.pointAccount.aggregate({ _sum: { balance: true } }),
     ]);
@@ -64,7 +65,7 @@ export async function GET() {
         pendingOrders,
         totalBalance: accounts._sum.balance ?? 0,
       },
-      audit: recentAudit,
+      audit: recentAudit.map((row) => presentAuditLog(row)),
       pointsTrend,
     });
   } catch (error) {

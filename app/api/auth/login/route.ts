@@ -1,28 +1,64 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { assertSameOrigin, getClientIp, rateLimitResponse, verifyPassword } from "@/lib/security";
+import { assertSameOrigin, getClientIp, rateLimitResponse, requestId, verifyPassword } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { createSession } from "@/lib/auth";
+import { writeAuditLog } from "@/lib/audit";
 
 const schema = z.object({
   kuaishouId: z.string().trim().min(2).max(80),
   password: z.string().min(6).max(128),
 });
 
+function maskLoginId(value: string) {
+  const normalized = value.trim();
+  if (normalized.length <= 4) return `${normalized.slice(0, 1)}***`;
+  return `${normalized.slice(0, 2)}***${normalized.slice(-2)}`;
+}
+
 export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = schema.parse(await request.json());
     await enforceRateLimit(`login:${getClientIp(request)}:${input.kuaishouId.toLowerCase()}`, 8, 900);
+    const auditRequestId = requestId();
     const user = await db.user.findFirst({ where: { kuaishouId: { equals: input.kuaishouId, mode: "insensitive" } } });
     if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
+      await writeAuditLog(db, {
+          action: "LOGIN_FAILED",
+          entity: "Authentication",
+          entityId: user?.id,
+          afterValue: {
+            attemptedKuaishouId: maskLoginId(user?.kuaishouId ?? input.kuaishouId),
+            reason: user ? "INVALID_PASSWORD" : "UNKNOWN_ACCOUNT",
+          },
+          ip: getClientIp(request),
+          requestId: auditRequestId,
+      });
       return NextResponse.json({ error: "快手ID或密码不正确" }, { status: 401 });
     }
     if (!user.active) {
+      await writeAuditLog(db, {
+          action: "LOGIN_FAILED",
+          entity: "Authentication",
+          entityId: user.id,
+          afterValue: { attemptedKuaishouId: maskLoginId(user.kuaishouId), reason: "ACCOUNT_INACTIVE" },
+          ip: getClientIp(request),
+          requestId: auditRequestId,
+      });
       return NextResponse.json({ error: "账号已停用，请联系管理员" }, { status: 403 });
     }
     await createSession(user.id);
+    await writeAuditLog(db, {
+        actorId: user.id,
+        action: "LOGIN_SUCCEEDED",
+        entity: "Authentication",
+        entityId: user.id,
+        afterValue: { role: user.role },
+        ip: getClientIp(request),
+        requestId: auditRequestId,
+    });
     return NextResponse.json({
       user: { id: user.id, kuaishouId: user.kuaishouId, nickname: user.nickname, role: user.role },
     });

@@ -92,7 +92,7 @@ type DashboardData = {
     imageUrl: string | null;
     description: string | null;
   }>;
-  orders: Array<{ id: string; status: string; totalCost: number; createdAt: string; gift: { name: string; kind: "PHYSICAL" | "CASH"; imageUrl: string | null } }>;
+  orders: Array<{ id: string; status: string; totalCost: number; createdAt: string; fulfilledAt: string | null; trackingNumber: string | null; gift: { name: string; kind: "PHYSICAL" | "CASH"; imageUrl: string | null } }>;
   transfers: Array<{
     id: string;
     amount: number;
@@ -871,11 +871,11 @@ function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }:
   );
 }
 
-function orderStatusLabel(status: string) {
+function orderStatusLabel(status: string, kind: "PHYSICAL" | "CASH") {
   const labels: Record<string, string> = {
-    PENDING: "待发货",
-    APPROVED: "待发货",
-    FULFILLED: "已完成",
+    PENDING: kind === "PHYSICAL" ? "待采购" : "待发放",
+    APPROVED: kind === "PHYSICAL" ? "已下单，待采购" : "待发放",
+    FULFILLED: kind === "PHYSICAL" ? "已发货" : "已发放",
     REJECTED: "已驳回",
     REFUNDED: "已退款",
   };
@@ -899,7 +899,7 @@ function RedemptionRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore 
               <strong>{order.gift.name}</strong>
               <span>{order.gift.kind === "CASH" ? "现金兑换" : "实物商品"} · {formatDate(order.createdAt)}</span>
             </div>
-            <div className="record-side"><b className="negative-text">-{order.totalCost.toLocaleString()}</b><span className="status-chip">{orderStatusLabel(order.status)}</span></div>
+            <div className="record-side"><b className="negative-text">-{order.totalCost.toLocaleString()}</b><span className="status-chip">{orderStatusLabel(order.status, order.gift.kind)}</span>{order.gift.kind === "PHYSICAL" && order.trackingNumber && <small className="tracking-copy">快递单号：{order.trackingNumber}</small>}</div>
           </div>
         ))}
         {data.orders.length === 0 && <p className="empty-copy">暂时没有兑换记录</p>}
@@ -1363,7 +1363,7 @@ function RedeemDialog({
         <div className="success-state">
           <div className="success-symbol yellow-symbol"><PackageCheck size={30} /></div>
           <h3>兑换申请已提交</h3>
-          <p>订单进入待发货状态，物流信息更新后会第一时间通知你。</p>
+          <p>{gift?.kind === "PHYSICAL" ? "订单已提交，进入待采购状态；发货后会第一时间通知你。" : "订单已提交，进入待发放状态；完成后会第一时间通知你。"}</p>
           <button className="primary-button full-button" onClick={onClose}>查看订单</button>
         </div>
       )}
@@ -1491,7 +1491,12 @@ export default function MemberApp() {
           <BrandMark />
           <div className="topbar-actions">
             <button className="icon-button" aria-label="搜索"><Search size={19} /></button>
-            <NotificationCenter />
+            <NotificationCenter onOpenDetail={(notification) => {
+              if (notification.entityType === "VideoSubmission") handleNavigate("videos");
+              if (notification.entityType === "RedemptionOrder") handleNavigate("orders");
+              if (notification.entityType === "Transfer") handleNavigate("transfers");
+              if (notification.entityType === "PointLedger") handleNavigate("ledger");
+            }} />
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>
         </header>

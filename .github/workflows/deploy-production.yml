@@ -25,7 +25,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: production
@@ -73,30 +72,16 @@ jobs:
             exit 1
           fi
 
-      - name: Build and publish release images
+      - name: Build release images
+        timeout-minutes: 15
         env:
-          GHCR_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
-          image_base="ghcr.io/${GITHUB_REPOSITORY,,}"
-          app_image="$image_base-app:$RELEASE_COMMIT"
-          worker_image="$image_base-worker:$RELEASE_COMMIT"
           git checkout --detach "$RELEASE_COMMIT"
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker build --target runner --tag "$app_image" .
-          docker build --target worker --tag "$worker_image" .
-          for image in "$app_image" "$worker_image"; do
-            for attempt in 1 2 3; do
-              if docker push "$image"; then
-                break
-              fi
-              if [[ "$attempt" == "3" ]]; then
-                exit 1
-              fi
-              sleep $((attempt * 10))
-            done
-          done
-          docker logout ghcr.io
+          docker build --target runner --tag miaomiao-points-app:production .
+          docker build --target worker --tag miaomiao-points-worker:production .
+          docker image inspect miaomiao-points-app:production miaomiao-points-worker:production \
+            --format '{{join .RepoTags ","}} size={{.Size}} id={{.Id}}'
 
       - name: Configure SSH
         env:
@@ -120,21 +105,26 @@ jobs:
           EOF
           chmod 600 "$HOME/.ssh/config"
 
+      - name: Transfer release images
+        timeout-minutes: 20
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          docker save miaomiao-points-app:production miaomiao-points-worker:production \
+            | gzip -1 \
+            | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "gzip -d | docker load"
+
       - name: Deploy approved commit
+        timeout-minutes: 10
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
-          GHCR_TOKEN: ${{ github.token }}
         run: |
-          image_base="ghcr.io/${GITHUB_REPOSITORY,,}"
-          app_image="$image_base-app:$RELEASE_COMMIT"
-          worker_image="$image_base-worker:$RELEASE_COMMIT"
-          # The pull retry loop is intentionally expanded on the remote host.
-          # shellcheck disable=SC2016
-          remote_script="$(printf 'set -e\ncd %q\nprintf %%s %q | docker login ghcr.io --username %q --password-stdin\ntrap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT\npull_image() {\n  image="$1"\n  for attempt in 1 2 3; do\n    if docker pull "$image"; then return 0; fi\n    if [ "$attempt" = "3" ]; then return 1; fi\n    sleep $((attempt * 10))\n  done\n}\npull_image %q\npull_image %q\ndocker tag %q miaomiao-points-app:production\ndocker tag %q miaomiao-points-worker:production\ndocker logout ghcr.io >/dev/null\ntrap - EXIT\ngit fetch origin\ngit checkout --detach %q\nbash scripts/deploy-production.sh .env.production %q\n' \
-            "$PRODUCTION_PATH" "$GHCR_TOKEN" "$GITHUB_ACTOR" "$app_image" "$worker_image" "$app_image" "$worker_image" "$RELEASE_COMMIT" "$PRODUCTION_PATH")"
+          remote_script="$(printf 'set -e\ncd %q\ngit fetch origin\ngit checkout --detach %q\nbash scripts/deploy-production.sh .env.production %q\n' \
+            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$PRODUCTION_PATH")"
           printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
 
       - name: Bootstrap production administrator

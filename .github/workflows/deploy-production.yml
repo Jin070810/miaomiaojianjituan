@@ -72,17 +72,6 @@ jobs:
             exit 1
           fi
 
-      - name: Build release images
-        timeout-minutes: 15
-        env:
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-        run: |
-          git checkout --detach "$RELEASE_COMMIT"
-          docker build --target runner --tag miaomiao-points-app:production .
-          docker build --target worker --tag miaomiao-points-worker:production .
-          docker image inspect miaomiao-points-app:production miaomiao-points-worker:production \
-            --format 'size={{.Size}} id={{.Id}}'
-
       - name: Configure SSH
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
@@ -105,15 +94,18 @@ jobs:
           EOF
           chmod 600 "$HOME/.ssh/config"
 
-      - name: Transfer release images
-        timeout-minutes: 60
+      - name: Build approved commit on production host
+        timeout-minutes: 30
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
-          docker save miaomiao-points-app:production miaomiao-points-worker:production \
-            | gzip -1 \
-            | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "gzip -d | docker load"
+          remote_script="$(printf 'set -euo pipefail\ncd %q\ngit fetch --no-tags origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\nexport DOCKER_BUILDKIT=1\ndocker build --target runner --label org.opencontainers.image.revision=%q --tag miaomiao-points-app:%q --tag miaomiao-points-app:production .\ndocker build --target worker --label org.opencontainers.image.revision=%q --tag miaomiao-points-worker:%q --tag miaomiao-points-worker:production .\ndocker image inspect miaomiao-points-app:production miaomiao-points-worker:production --format "size={{.Size}} id={{.Id}} revision={{index .Config.Labels \\"org.opencontainers.image.revision\\"}}"\n' \
+            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RELEASE_COMMIT" \
+            "$RELEASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_COMMIT")"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
 
       - name: Deploy approved commit
         timeout-minutes: 10
@@ -151,7 +143,7 @@ jobs:
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
         run: |
           ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
-            "set -e; cd '$PRODUCTION_PATH'; docker compose --env-file .env.production --profile production up -d nginx; docker compose --env-file .env.production --profile production ps"
+            "set -e; cd '$PRODUCTION_PATH'; docker compose --env-file .env.production --profile production up -d nginx; docker compose --env-file .env.production --profile production restart nginx; docker compose --env-file .env.production --profile production ps"
 
       - name: Verify production health
         env:

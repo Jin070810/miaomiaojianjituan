@@ -1,0 +1,148 @@
+name: Weekly Challenge Production Switch
+
+on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: "开启或关闭周挑战积分发放"
+        required: true
+        default: false
+        type: boolean
+      release_commit:
+        description: "当前正式环境应运行的完整 commit SHA"
+        required: true
+        type: string
+      shadow_run_id:
+        description: "成功的双周期 DeepSeek 影子 workflow run ID"
+        required: true
+        type: string
+      confirm_production:
+        description: "我已确认影子验收、生产巡检和回滚开关"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-weekly-challenge-switch
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_production
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RELEASE_COMMIT: ${{ inputs.release_commit }}
+      SHADOW_RUN_ID: ${{ inputs.shadow_run_id }}
+      ENABLED: ${{ inputs.enabled }}
+      PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+      ADMIN_KUAISHOU_IDS: ${{ secrets.ADMIN_KUAISHOU_IDS }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SHADOW_RUN_ID" =~ ^[0-9]+$ ]]
+          test -n "$PRODUCTION_DOMAIN"
+          test -n "$ADMIN_KUAISHOU_IDS"
+          test -n "$ADMIN_PASSWORD"
+      - name: Download approved shadow report
+        uses: actions/download-artifact@v8
+        with:
+          name: weekly-challenge-deepseek-shadow
+          path: shadow-report
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.shadow_run_id }}
+      - name: Validate shadow acceptance
+        run: |
+          set -euo pipefail
+          jq -e '
+            .success == true
+            and .syntheticMembers == 300
+            and .rewardsEnabled == false
+            and (.challengePeriods | length) == 2
+            and all(.challengePeriods[];
+              .status == "READY"
+              and .audienceCount == 300
+              and .assignmentCount == 300
+              and .rewardBudget == 10000
+              and .totalRewards <= 10000
+              and .minimumReward >= 10
+              and .maximumReward <= 1500
+              and .runningAttempts == 0
+              and (.finalFailedBatches | length) == 0
+              and .model == "deepseek-v4-flash")
+          ' shadow-report/report.json >/dev/null
+      - name: Verify production health before change
+        run: |
+          set -euo pipefail
+          health="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"
+          jq -e --arg sha "$RELEASE_COMMIT" '
+            .ok == true
+            and .app.commit == $sha
+            and .workerVersion.commit == $sha
+            and .database == "ok"
+            and .redis == "ok"
+            and .worker == "ok"
+            and (.issues | length) == 0
+            and .weeklyChallenges.providerConfigured == true
+          ' <<<"$health" >/dev/null
+      - name: Update switch through audited admin API
+        run: |
+          set -euo pipefail
+          origin="https://$PRODUCTION_DOMAIN"
+          admin_id="${ADMIN_KUAISHOU_IDS%%,*}"
+          admin_id="$(xargs <<<"$admin_id")"
+          work_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$work_dir"' EXIT
+
+          login_status="$({
+            jq -n --arg kuaishouId "$admin_id" --arg password "$ADMIN_PASSWORD" \
+              '{kuaishouId: $kuaishouId, password: $password}' |
+              curl --silent --show-error \
+                --output "$work_dir/login.json" \
+                --write-out '%{http_code}' \
+                --cookie-jar "$work_dir/cookies.txt" \
+                --header 'content-type: application/json' \
+                --header "origin: $origin" \
+                --data-binary @- \
+                "$origin/api/auth/login"
+          })"
+          test "$login_status" = "200"
+          jq -e '.user.role == "ADMIN"' "$work_dir/login.json" >/dev/null
+
+          update_status="$({
+            jq -n --argjson enabled "$ENABLED" \
+              '{key: "WEEKLY_CHALLENGES", enabled: $enabled}' |
+              curl --silent --show-error \
+                --output "$work_dir/update.json" \
+                --write-out '%{http_code}' \
+                --cookie "$work_dir/cookies.txt" \
+                --header 'content-type: application/json' \
+                --header "origin: $origin" \
+                --request PATCH \
+                --data-binary @- \
+                "$origin/api/admin/operation-switches"
+          })"
+          test "$update_status" = "200"
+          jq -e --argjson enabled "$ENABLED" '
+            any(.switches[]; .key == "WEEKLY_CHALLENGES" and .enabled == $enabled)
+          ' "$work_dir/update.json" >/dev/null
+      - name: Verify production health after change
+        run: |
+          set -euo pipefail
+          health="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"
+          jq -e --arg sha "$RELEASE_COMMIT" --argjson enabled "$ENABLED" '
+            .ok == true
+            and .app.commit == $sha
+            and .workerVersion.commit == $sha
+            and (.issues | length) == 0
+            and .weeklyChallenges.providerConfigured == true
+            and .weeklyChallenges.enabled == $enabled
+          ' <<<"$health" >/dev/null
+          echo "周挑战生产开关已更新并通过健康检查" >> "$GITHUB_STEP_SUMMARY"

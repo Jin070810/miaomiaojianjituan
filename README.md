@@ -70,6 +70,21 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 本阶段 migration 为 `prisma/migrations/20260724010000_notifications_announcements`，只新增通知、公告及收件人表。回滚应用版本时保留这些表和历史通知，不删除已执行 migration；如需停用功能，应以前向修复或配置关闭入口。
 
+## v1.3 AI 个性化周挑战
+
+- 周日 18:00 起按 `Asia/Shanghai` 为下一周冻结有效普通成员并生成匿名任务，23:00 仍未完整生成则整周失败，不发布规则兜底任务。
+- DeepSeek 每批最多处理 25 名匿名成员，只接收入团天数、四个完整周的视频/点赞聚合、最好成绩、趋势和历史任务完成率。昵称、快手 ID、手机号、地址、余额和视频链接不会进入提示词。
+- 任务支持通过视频数、点赞总量和组合目标。服务端重新校验成员覆盖、唯一性、整数目标、新人至少两条通过视频、个人 `10–1500` 分和整周 `10,000` 分预算。
+- 周一自动激活；成员只查看自己的基线、进度、说明和奖励。个人奖励达标后主动领取，截止到下一周周三 23:59；固定 `2,000` 分竞速奖励在达标视频通过事务中抢占。
+- 视频撤销会在同一事务内重新计算任务，必要时冲正个人与竞速积分，并把竞速奖励改发给仍达标且最早完成的成员。
+- 管理后台可查看周期覆盖、预算、任务分布、模型批次和失败原因；“周挑战积分发放”开关默认关闭，关闭时保留只读查询。
+
+本地或 staging 配置 `DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `ALERT_WEBHOOK_URL` 后再启用周挑战。测试使用本地模拟服务，不读取真实密钥。生产镜像还必须在构建时注入 `APP_COMMIT_SHA` 与 `APP_BUILD_TIME`；健康接口会返回 App/Worker 版本并拒绝版本不一致的部署。
+
+正式发布从 GitHub `production` Environment 读取变量 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 和 Secrets `DEEPSEEK_API_KEY`、`ALERT_WEBHOOK_URL`，由部署 workflow 写入服务器环境文件；禁止将这些密钥提交到仓库。
+
+v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新增枚举、表、关系和索引。应用回滚时关闭周挑战开关并回退 Web/Worker，保留新增表和积分审计历史，不回退已执行 migration。完整验收与影子运行要求见 [`docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md`](docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md)。
+
 ## 批量积分
 
 - 管理后台支持一次选择一名或多名有效普通成员，也可以选择全体成员，以相同的整数积分和原因批量增减，不设置人数上限。

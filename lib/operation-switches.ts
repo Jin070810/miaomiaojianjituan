@@ -6,16 +6,25 @@ export const operationSwitchDefinitions = {
     label: "视频提交",
     description: "关闭后，成员不能提交或重试视频，后台审核与历史查询不受影响。",
     disabledMessage: "视频提交当前暂停，请稍后再试",
+    defaultEnabled: true,
   },
   POINT_TRANSFERS: {
     label: "积分转账",
     description: "关闭后，成员不能发起积分转账，已有积分流水不受影响。",
     disabledMessage: "积分转账当前暂停，请稍后再试",
+    defaultEnabled: true,
   },
   REDEMPTIONS: {
     label: "礼品兑换",
     description: "关闭后，成员不能提交新兑换，管理员仍可处理已有订单。",
     disabledMessage: "礼品兑换当前暂停，请稍后再试",
+    defaultEnabled: true,
+  },
+  WEEKLY_CHALLENGES: {
+    label: "周挑战积分发放",
+    description: "默认关闭。关闭后不激活新周期、不领取个人奖励，也不发放竞速奖励；历史任务仍可查询。",
+    disabledMessage: "周挑战积分发放当前暂停，请稍后再试",
+    defaultEnabled: false,
   },
 } as const;
 
@@ -33,7 +42,7 @@ export async function getOperationSwitches() {
       key: key as OperationSwitchKey,
       label: definition.label,
       description: definition.description,
-      enabled: row?.enabled ?? true,
+      enabled: row?.enabled ?? definition.defaultEnabled,
       updatedAt: row?.updatedAt ?? null,
       updatedBy: row?.updatedBy ?? null,
     };
@@ -42,7 +51,7 @@ export async function getOperationSwitches() {
 
 export async function operationSwitchEnabled(key: OperationSwitchKey) {
   const row = await db.systemSetting.findUnique({ where: { key }, select: { enabled: true } });
-  return row?.enabled ?? true;
+  return row?.enabled ?? operationSwitchDefinitions[key].defaultEnabled;
 }
 
 export async function updateOperationSwitch(input: {
@@ -75,7 +84,7 @@ export async function updateOperationSwitch(input: {
       action: "OPERATION_SWITCH_UPDATED",
       entity: "SystemSetting",
       entityId: input.key,
-      beforeValue: { enabled: existing?.enabled ?? true },
+      beforeValue: { enabled: existing?.enabled ?? definition.defaultEnabled },
       afterValue: { enabled: updated.enabled, label: definition.label },
       ip: input.ip,
       requestId: input.requestId,

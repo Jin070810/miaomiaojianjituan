@@ -5,6 +5,10 @@ import { calculateVideoPoints } from "./kuaishou";
 import { getVideoPointRule } from "./point-rules";
 import { createNotification } from "./notifications";
 import { writeAuditLog } from "./audit";
+import {
+  evaluateWeeklyChallengeAfterVideoApproval,
+  reconcileWeeklyChallengesAfterVideoRevocation,
+} from "./weekly-challenges";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -516,6 +520,11 @@ export async function creditVideoReward(input: {
       metadata: { amount: input.points, points: input.points, status: "APPROVED" },
       dedupeKey: `video:${video.id}:approved`,
     });
+    await evaluateWeeklyChallengeAfterVideoApproval(tx, {
+      userId: input.userId,
+      submittedAt: video.submittedAt,
+      completedAt: updated.reviewedAt ?? new Date(),
+    });
     return updated;
   });
 }
@@ -662,6 +671,11 @@ export async function resolveVideoAppeal(input: {
       metadata: { amount: points, points, status: "APPROVED", videoId: appeal.videoId },
       dedupeKey: `appeal:${appeal.id}:approved`,
     });
+    await evaluateWeeklyChallengeAfterVideoApproval(tx, {
+      userId: appeal.userId,
+      submittedAt: video.submittedAt,
+      completedAt: video.reviewedAt ?? new Date(),
+    });
     return updated;
   });
 }
@@ -701,6 +715,12 @@ export async function revokeVideoReward(input: { videoId: string; actorId: strin
       entityId: video.id,
       metadata: { amount: -video.points, status: "REVOKED" },
       dedupeKey: `video:${video.id}:revoked`,
+    });
+    await reconcileWeeklyChallengesAfterVideoRevocation(tx, {
+      userId: video.userId,
+      submittedAt: video.submittedAt,
+      videoId: video.id,
+      reason: input.reason,
     });
     return updated;
   });

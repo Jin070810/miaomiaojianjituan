@@ -23,7 +23,8 @@
     "redemption:reconcile": "tsx scripts/reconcile-redemption-orders.ts",
     "ops:daily-check": "tsx scripts/ops-daily-check.ts",
     "ops:verify-backups": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-backups.ps1",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@prisma/client": "^6.8.2",
@@ -36,10 +37,11 @@
     "postcss": "^8.5.22",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "zod": "^3.25.76",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",

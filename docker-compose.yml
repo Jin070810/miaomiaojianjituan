@@ -49,6 +49,10 @@ services:
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
       SESSION_SECRET: ${SESSION_SECRET}
       PHONE_ENCRYPTION_KEY: ${PHONE_ENCRYPTION_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -87,11 +91,20 @@ services:
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-miaomiao}?schema=public}
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
       VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-4}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      BACKUP_DIRECTORY: ${BACKUP_DIRECTORY:-./backups}
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
+      QUEUE_WAITING_ALERT_THRESHOLD: ${QUEUE_WAITING_ALERT_THRESHOLD:-1000}
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    volumes:
+      - ./backups:/app/backups:ro
     restart: unless-stopped
     stop_grace_period: 75s
     logging: *default-logging

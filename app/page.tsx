@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CircleHelp,
   ClipboardCheck,
+  ClipboardPaste,
   Coins,
   Copy,
   KeyRound,
@@ -25,6 +26,8 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  Sparkles,
+  Target,
   Trophy,
   UserRound,
   WalletCards,
@@ -104,6 +107,33 @@ type DashboardData = {
     receiver: { kuaishouId: string; nickname: string };
   }>;
   leaderboard: Array<{ rank: number; userId: string; kuaishouId: string; nickname: string; avatarUrl: string | null; points: number; current: boolean }>;
+};
+
+type WeeklyChallengeData = {
+  id: string;
+  type: "VIDEO_COUNT" | "LIKE_SUM" | "COMBINED";
+  status: "ACTIVE" | "COMPLETED" | "CLAIMED" | "REVERSED" | "EXPIRED";
+  title: string;
+  description: string;
+  aiReason: string;
+  baselineVideoCount: number;
+  baselineLikes: number;
+  targetVideoCount: number | null;
+  targetLikes: number | null;
+  rewardPoints: number;
+  completedAt: string | null;
+  claimedAt: string | null;
+  reversedAt: string | null;
+  progress: { videoCount: number; likes: number; qualified: boolean };
+  rewardsEnabled: boolean;
+  claimable: boolean;
+  raceEnded: boolean;
+  period: {
+    periodStart: string;
+    periodEnd: string;
+    claimEndsAt: string;
+    raceReward: number;
+  };
 };
 
 type DisplayGift = {
@@ -296,13 +326,30 @@ function BottomNav({
 function HomeView({
   onNavigate,
   onOpen,
+  challenge,
+  onClaimChallenge,
   data,
 }: {
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
+  challenge: WeeklyChallengeData | null;
+  onClaimChallenge: () => Promise<void>;
   data: DashboardData;
 }) {
   const recentLedger = data.ledger.slice(0, 3);
+  const [claimingChallenge, setClaimingChallenge] = useState(false);
+  const [challengeError, setChallengeError] = useState("");
+  async function claimChallenge() {
+    setClaimingChallenge(true);
+    setChallengeError("");
+    try {
+      await onClaimChallenge();
+    } catch (error) {
+      setChallengeError(error instanceof Error ? error.message : "任务奖励领取失败");
+    } finally {
+      setClaimingChallenge(false);
+    }
+  }
   return (
     <div className="member-content">
       <section className="welcome-row">
@@ -330,6 +377,54 @@ function HomeView({
           <span className="balance-trend"><ArrowUpRight size={14} /> 实时</span>
         </div>
       </section>
+
+      {challenge && (
+        <section className="weekly-challenge" aria-labelledby="weekly-challenge-title">
+          <div className="weekly-challenge-head">
+            <span className="weekly-challenge-icon"><Sparkles size={19} /></span>
+            <div>
+              <span className="eyebrow">本周 AI 挑战</span>
+              <h2 id="weekly-challenge-title">{challenge.title}</h2>
+            </div>
+            <span className={`status-chip ${challenge.status === "CLAIMED" ? "success" : challenge.status === "REVERSED" || challenge.status === "EXPIRED" ? "danger" : "warning"}`}>
+              {challenge.status === "CLAIMED" ? "已领取" : challenge.status === "REVERSED" ? "已撤销" : challenge.status === "EXPIRED" ? "已结束" : challenge.progress.qualified ? "已达标" : "进行中"}
+            </span>
+          </div>
+          <p className="weekly-challenge-description">{challenge.description}</p>
+          <div className="weekly-challenge-progress">
+            {challenge.targetVideoCount !== null && (
+              <div>
+                <span><b>通过视频</b><strong>{challenge.progress.videoCount} / {challenge.targetVideoCount}</strong></span>
+                <progress max={challenge.targetVideoCount} value={Math.min(challenge.progress.videoCount, challenge.targetVideoCount)} />
+              </div>
+            )}
+            {challenge.targetLikes !== null && (
+              <div>
+                <span><b>累计点赞</b><strong>{challenge.progress.likes.toLocaleString()} / {challenge.targetLikes.toLocaleString()}</strong></span>
+                <progress max={challenge.targetLikes} value={Math.min(challenge.progress.likes, challenge.targetLikes)} />
+              </div>
+            )}
+          </div>
+          <div className="weekly-challenge-baseline">
+            <Target size={16} />
+            <span>个人基线：每周 {challenge.baselineVideoCount} 条通过视频、{challenge.baselineLikes.toLocaleString()} 点赞</span>
+          </div>
+          <p className="weekly-challenge-reason">{challenge.aiReason}</p>
+          <div className="weekly-challenge-foot">
+            <div>
+              <span>达标奖励</span>
+              <strong>{challenge.rewardPoints.toLocaleString()} 分</strong>
+              <small>{challenge.raceEnded ? "本周竞速已结束" : `最先达标另得 ${challenge.period.raceReward.toLocaleString()} 分`}</small>
+            </div>
+            {challenge.progress.qualified && ["ACTIVE", "COMPLETED"].includes(challenge.status) && (
+              <button className="primary-button compact-button" disabled={!challenge.rewardsEnabled || claimingChallenge} onClick={() => void claimChallenge()}>
+                {!challenge.rewardsEnabled ? "发放暂停" : claimingChallenge ? "领取中..." : "领取奖励"}
+              </button>
+            )}
+          </div>
+          {challengeError && <p className="form-error" role="alert">{challengeError}</p>}
+        </section>
+      )}
 
       <section className="quick-actions">
         <button onClick={() => onOpen("submit")}>
@@ -1136,7 +1231,28 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
   const [link, setLink] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [pasting, setPasting] = useState(false);
   const [error, setError] = useState("");
+  async function pasteFromClipboard() {
+    setError("");
+    if (!navigator.clipboard?.readText) {
+      setError("当前浏览器无法直接读取剪贴板，请在输入框内长按粘贴");
+      return;
+    }
+    setPasting(true);
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+      if (!clipboardText.trim()) {
+        setError("剪贴板中没有可粘贴的内容");
+        return;
+      }
+      setLink(clipboardText);
+    } catch {
+      setError("无法读取剪贴板，请允许剪贴板权限后重试，或在输入框内长按粘贴");
+    } finally {
+      setPasting(false);
+    }
+  }
   async function submit() {
     setSubmitting(true);
     setError("");
@@ -1164,13 +1280,16 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
             <label htmlFor="video-link">快手视频链接</label>
             <div className="input-with-icon">
               <Link2 size={18} />
-              <input
+              <textarea
                 id="video-link"
                 value={link}
                 onChange={(event) => setLink(event.target.value)}
                 placeholder="粘贴快手分享链接或分享文案"
+                rows={4}
               />
-              <button className="paste-button" onClick={() => setLink("https://v.kuaishou.com/3xY7aP")}>粘贴</button>
+              <button type="button" className="paste-button" disabled={pasting} onClick={() => void pasteFromClipboard()}>
+                <ClipboardPaste size={14} /> {pasting ? "读取中" : "粘贴"}
+              </button>
             </div>
             <span className="field-hint">支持短链接、长链接和分享文案。仅接受发布 7 天内且不少于 200 赞的视频。</span>
           </div>
@@ -1376,6 +1495,7 @@ export default function MemberApp() {
   const [dialog, setDialog] = useState<DialogType>(null);
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [weeklyChallenge, setWeeklyChallenge] = useState<WeeklyChallengeData | null>(null);
   const [loadError, setLoadError] = useState("");
   const [revision, setRevision] = useState(0);
   const [historyMore, setHistoryMore] = useState({ ledger: false, videos: false, transfers: false, orders: false });
@@ -1384,24 +1504,30 @@ export default function MemberApp() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/dashboard", { cache: "no-store" })
-      .then(async (response) => {
-        if (response.status === 401) {
+    Promise.all([
+      fetch("/api/dashboard", { cache: "no-store" }),
+      fetch("/api/weekly-challenges/current", { cache: "no-store" }),
+    ])
+      .then(async ([response, challengeResponse]) => {
+        if (response.status === 401 || challengeResponse.status === 401) {
           router.replace("/login");
           return null;
         }
         const result = await response.json();
         if (!response.ok) throw new Error(result.error ?? "数据加载失败");
-        return result as DashboardData;
+        const challengeResult = await challengeResponse.json();
+        if (!challengeResponse.ok) throw new Error(challengeResult.error ?? "周挑战加载失败");
+        return { dashboard: result as DashboardData, challenge: challengeResult.challenge as WeeklyChallengeData | null };
       })
       .then((result) => {
         if (active && result) {
-          setDashboard(result);
+          setDashboard(result.dashboard);
+          setWeeklyChallenge(result.challenge);
           setHistoryMore({
-            ledger: result.ledger.length === 50,
-            videos: result.videos.length === 50,
-            transfers: result.transfers.length === 50,
-            orders: result.orders.length === 50,
+            ledger: result.dashboard.ledger.length === 50,
+            videos: result.dashboard.videos.length === 50,
+            transfers: result.dashboard.transfers.length === 50,
+            orders: result.dashboard.orders.length === 50,
           });
           setLoadError("");
         }
@@ -1454,6 +1580,17 @@ export default function MemberApp() {
     }
   }
 
+  async function claimCurrentChallenge() {
+    if (!weeklyChallenge) return;
+    const response = await fetch(`/api/weekly-challenges/${weeklyChallenge.id}/claim`, {
+      method: "POST",
+      headers: { "idempotency-key": crypto.randomUUID() },
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "任务奖励领取失败");
+    setRevision((value) => value + 1);
+  }
+
   const page = useMemo(() => {
     if (!dashboard) return null;
     if (view === "videos") return <VideosView onOpen={openDialog} data={dashboard} hasMore={historyMore.videos} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("videos")} />;
@@ -1463,8 +1600,8 @@ export default function MemberApp() {
     if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} />;
     if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} />;
     if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} />;
-    return <HomeView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} />;
-  }, [dashboard, giftRows, router, view]);
+    return <HomeView data={dashboard} challenge={weeklyChallenge} onClaimChallenge={claimCurrentChallenge} onNavigate={handleNavigate} onOpen={openDialog} />;
+  }, [dashboard, giftRows, router, view, weeklyChallenge]);
 
   if (!dashboard) {
     return (

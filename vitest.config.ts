@@ -8,5 +8,7 @@ export default defineConfig({
   test: {
     environment: "node",
     clearMocks: true,
+    fileParallelism: false,
+    exclude: ["tests/e2e/**", "node_modules/**"],
   },
 });

@@ -55,6 +55,8 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
       - run: docker compose config
@@ -63,4 +65,4 @@ jobs:
           docker compose config | grep -q 'http://127.0.0.1:3000/api/health'
       - run: docker compose build app
       - run: docker build --target worker -t miaomiao-points-worker:ci .
-      - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts"
+      - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts && test -f scripts/ops-daily-check.ts"

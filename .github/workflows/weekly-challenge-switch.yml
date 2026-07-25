@@ -13,8 +13,9 @@ on:
         required: true
         type: string
       shadow_run_id:
-        description: "成功的双周期 DeepSeek 影子 workflow run ID"
-        required: true
+        description: "开启时必填：成功的双周期 DeepSeek 影子 workflow run ID"
+        required: false
+        default: ""
         type: string
       confirm_production:
         description: "我已确认影子验收、生产巡检和回滚开关"
@@ -47,11 +48,14 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$SHADOW_RUN_ID" =~ ^[0-9]+$ ]]
+          if [[ "$ENABLED" == "true" ]]; then
+            [[ "$SHADOW_RUN_ID" =~ ^[0-9]+$ ]]
+          fi
           test -n "$PRODUCTION_DOMAIN"
           test -n "$ADMIN_KUAISHOU_IDS"
           test -n "$ADMIN_PASSWORD"
       - name: Download approved shadow report
+        if: inputs.enabled
         uses: actions/download-artifact@v8
         with:
           name: weekly-challenge-deepseek-shadow
@@ -59,6 +63,7 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.shadow_run_id }}
       - name: Validate shadow acceptance
+        if: inputs.enabled
         run: |
           set -euo pipefail
           jq -e '
@@ -79,6 +84,7 @@ jobs:
               and .model == "deepseek-v4-flash")
           ' shadow-report/report.json >/dev/null
       - name: Verify production health before change
+        if: inputs.enabled
         run: |
           set -euo pipefail
           health="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"
@@ -136,13 +142,17 @@ jobs:
       - name: Verify production health after change
         run: |
           set -euo pipefail
-          health="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"
-          jq -e --arg sha "$RELEASE_COMMIT" --argjson enabled "$ENABLED" '
-            .ok == true
-            and .app.commit == $sha
-            and .workerVersion.commit == $sha
-            and (.issues | length) == 0
-            and .weeklyChallenges.providerConfigured == true
-            and .weeklyChallenges.enabled == $enabled
-          ' <<<"$health" >/dev/null
+          health="$(curl --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"
+          if [[ "$ENABLED" == "true" ]]; then
+            jq -e --arg sha "$RELEASE_COMMIT" '
+              .ok == true
+              and .app.commit == $sha
+              and .workerVersion.commit == $sha
+              and (.issues | length) == 0
+              and .weeklyChallenges.providerConfigured == true
+              and .weeklyChallenges.enabled == true
+            ' <<<"$health" >/dev/null
+          else
+            jq -e '.weeklyChallenges.enabled == false' <<<"$health" >/dev/null
+          fi
           echo "周挑战生产开关已更新并通过健康检查" >> "$GITHUB_STEP_SUMMARY"

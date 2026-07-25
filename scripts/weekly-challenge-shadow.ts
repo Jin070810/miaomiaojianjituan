@@ -19,8 +19,31 @@ function assertShadowEnvironment() {
   if (!/^(shadow|staging)[-_][a-z0-9_-]+$/i.test(schema)) {
     throw new Error("影子运行只允许使用名称以 shadow_、shadow-、staging_ 或 staging- 开头的独立 schema");
   }
-  for (const key of ["DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL", "ALERT_WEBHOOK_URL"] as const) {
+  for (const key of ["DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL"] as const) {
     if (!process.env[key]?.trim()) throw new Error(`缺少 ${key}`);
+  }
+  const webhook = process.env.ALERT_WEBHOOK_URL?.trim() ?? "";
+  if (webhook && !webhook.startsWith("https://")) {
+    throw new Error("ALERT_WEBHOOK_URL 必须是 HTTPS 地址");
+  }
+  const webhookConfigured = Boolean(webhook);
+  const emailKeys = ["ALERT_EMAIL_TO", "ALERT_SMTP_HOST", "ALERT_SMTP_USER", "ALERT_SMTP_PASSWORD"] as const;
+  const configuredEmailKeys = emailKeys.filter((key) => process.env[key]?.trim());
+  if (configuredEmailKeys.length && configuredEmailKeys.length !== emailKeys.length) {
+    throw new Error("SMTP 邮件告警配置不完整");
+  }
+  if (configuredEmailKeys.length === emailKeys.length) {
+    const smtpPort = Number(process.env.ALERT_SMTP_PORT?.trim() || "465");
+    if (!Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65_535) {
+      throw new Error("ALERT_SMTP_PORT 必须是 1 到 65535 之间的整数");
+    }
+    const smtpSecure = process.env.ALERT_SMTP_SECURE?.trim().toLowerCase();
+    if (smtpSecure && smtpSecure !== "true" && smtpSecure !== "false") {
+      throw new Error("ALERT_SMTP_SECURE 必须是 true 或 false");
+    }
+  }
+  if (!webhookConfigured && configuredEmailKeys.length !== emailKeys.length) {
+    throw new Error("缺少 ALERT_WEBHOOK_URL 或完整 SMTP 邮件告警配置");
   }
   return schema;
 }

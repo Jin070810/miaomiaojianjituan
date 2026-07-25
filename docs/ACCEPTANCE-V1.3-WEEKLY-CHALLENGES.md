@@ -9,12 +9,14 @@
 - `DEEPSEEK_BASE_URL`：OpenAI 兼容服务根地址，必须使用 HTTPS。
 - `DEEPSEEK_API_KEY`：仅由部署环境注入，不写入仓库、镜像层或日志。
 - `DEEPSEEK_MODEL`：经 staging 验证的模型名称。
-- `ALERT_WEBHOOK_URL`：生成失败、模型失败和每日巡检告警地址。
+- 告警通道：配置 `ALERT_WEBHOOK_URL`，或完整配置 `ALERT_EMAIL_TO`、`ALERT_SMTP_HOST`、`ALERT_SMTP_USER`、`ALERT_SMTP_PASSWORD`；用于生成失败、模型失败和每日巡检告警。
 - `APP_COMMIT_SHA`、`APP_BUILD_TIME`：由正式构建 workflow 注入；不得人工填写为与镜像不符的值。
 
-GitHub `production` Environment 必须配置变量 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`，以及 Secrets `DEEPSEEK_API_KEY`、`ALERT_WEBHOOK_URL`。部署 workflow 会将四项配置原子写入服务器的 `.env.production`，不输出密钥内容。
+GitHub `production` Environment 必须配置变量 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 和 Secret `DEEPSEEK_API_KEY`，并提供 Webhook Secret 或完整 SMTP 邮件配置。包含手机号的 `ALERT_EMAIL_TO`、`ALERT_EMAIL_FROM`、`ALERT_SMTP_USER` 与授权码均使用 Secrets；部署 workflow 会将配置原子写入服务器的 `.env.production`，不输出密钥内容。
 
 生产前置检查会拒绝缺少 DeepSeek、告警、数据库密钥、证书或 HTTPS 的发布。`/api/health` 必须返回与发布请求相同的 App/Worker SHA。
+
+维护者明确决定先部署代码、后配置告警时，可以在生产 workflow 勾选 `confirm_alert_deferred`。该例外必须记录在发布单中，且 workflow 必须验证 `weeklyChallenges.enabled == false`；在真实告警和 DeepSeek 影子验证完成前不得启用周挑战。
 
 ## 数据库
 

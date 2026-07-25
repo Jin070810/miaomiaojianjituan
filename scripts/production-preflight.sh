@@ -32,6 +32,13 @@ deepseek_base_url="$(env_value DEEPSEEK_BASE_URL)"
 deepseek_api_key="$(env_value DEEPSEEK_API_KEY)"
 deepseek_model="$(env_value DEEPSEEK_MODEL)"
 alert_webhook_url="$(env_value ALERT_WEBHOOK_URL)"
+alert_email_to="$(env_value ALERT_EMAIL_TO)"
+alert_smtp_host="$(env_value ALERT_SMTP_HOST)"
+alert_smtp_port="$(env_value ALERT_SMTP_PORT)"
+alert_smtp_user="$(env_value ALERT_SMTP_USER)"
+alert_smtp_password="$(env_value ALERT_SMTP_PASSWORD)"
+alert_smtp_secure="$(env_value ALERT_SMTP_SECURE)"
+alerts_deferred="$(env_value ALERTS_DEFERRED)"
 if [[ -z "$database_url" ]]; then
   database_url="$(env_value DATABASE_URL)"
 fi
@@ -44,7 +51,31 @@ fi
 [[ "$deepseek_base_url" =~ ^https:// ]] || fail "DEEPSEEK_BASE_URL 必须是 HTTPS 地址"
 [[ -n "$deepseek_api_key" && "$deepseek_api_key" != *"replace-with"* ]] || fail "缺少有效的 DEEPSEEK_API_KEY"
 [[ -n "$deepseek_model" ]] || fail "缺少 DEEPSEEK_MODEL"
-[[ "$alert_webhook_url" =~ ^https:// ]] || fail "ALERT_WEBHOOK_URL 必须是 HTTPS 地址"
+webhook_configured=false
+email_configured=false
+[[ -z "$alerts_deferred" || "$alerts_deferred" == "true" || "$alerts_deferred" == "false" ]] \
+  || fail "ALERTS_DEFERRED 必须是 true 或 false"
+if [[ -n "$alert_webhook_url" ]]; then
+  [[ "$alert_webhook_url" =~ ^https:// ]] || fail "ALERT_WEBHOOK_URL 必须是 HTTPS 地址"
+  webhook_configured=true
+fi
+if [[ -n "$alert_email_to" || -n "$alert_smtp_host" || -n "$alert_smtp_user" || -n "$alert_smtp_password" ]]; then
+  if [[ -n "$alert_email_to" && -n "$alert_smtp_host" && -n "$alert_smtp_user" && -n "$alert_smtp_password" ]]; then
+    [[ -z "$alert_smtp_port" || "$alert_smtp_port" =~ ^[0-9]+$ ]] || fail "ALERT_SMTP_PORT 必须是整数"
+    if [[ -n "$alert_smtp_port" ]] && ! (( alert_smtp_port >= 1 && alert_smtp_port <= 65535 )); then
+      fail "ALERT_SMTP_PORT 必须在 1 到 65535 之间"
+    fi
+    [[ -z "$alert_smtp_secure" || "$alert_smtp_secure" == "true" || "$alert_smtp_secure" == "false" ]] \
+      || fail "ALERT_SMTP_SECURE 必须是 true 或 false"
+    email_configured=true
+  elif [[ "$alerts_deferred" != "true" ]]; then
+    fail "SMTP 邮件告警配置不完整"
+  fi
+fi
+if [[ "$webhook_configured" != "true" && "$email_configured" != "true" ]]; then
+  [[ "$alerts_deferred" == "true" ]] || fail "必须配置告警通道，或明确设置 ALERTS_DEFERRED=true"
+  echo "警告：告警通道已明确延期，周挑战必须保持关闭。" >&2
+fi
 
 [[ -s "$project_dir/certs/fullchain.pem" ]] || fail "缺少 certs/fullchain.pem"
 [[ -s "$project_dir/certs/privkey.pem" ]] || fail "缺少 certs/privkey.pem"

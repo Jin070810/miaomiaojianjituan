@@ -41,6 +41,13 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+      ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+      ALERT_SMTP_HOST: ${{ vars.ALERT_SMTP_HOST }}
+      ALERT_SMTP_PORT: ${{ vars.ALERT_SMTP_PORT }}
+      ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+      ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+      ALERT_SMTP_SECURE: ${{ vars.ALERT_SMTP_SECURE }}
       WEEKLY_CHALLENGE_SHADOW_CONFIRM: I_UNDERSTAND_PAID_DEEPSEEK_SHADOW
     steps:
       - uses: actions/checkout@v7

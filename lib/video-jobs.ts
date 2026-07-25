@@ -250,4 +250,11 @@ export async function getVideoQueueMetrics() {
   };
 }
 
+export async function closeVideoQueue() {
+  const current = queue;
+  queue = null;
+  if (!current) return;
+  await current.close();
+}
+
 export { connection };

@@ -19,6 +19,13 @@ export async function checkRateLimitStore() {
   return "ok" as const;
 }
 
+export async function closeRateLimitStore() {
+  const current = redis;
+  redis = null;
+  if (!current) return;
+  await current.quit().catch(() => current.disconnect());
+}
+
 export class RateLimitError extends Error {
   retryAfter: number;
   constructor(retryAfter: number) {

@@ -1247,6 +1247,9 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
         return;
       }
       setLink(clipboardText);
+      if (clipboardText.length > 2000) {
+        setError("分享文案超过 2,000 字，请只保留包含快手链接的部分");
+      }
     } catch {
       setError("无法读取剪贴板，请允许剪贴板权限后重试，或在输入框内长按粘贴");
     } finally {
@@ -1286,19 +1289,21 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
                 onChange={(event) => setLink(event.target.value)}
                 placeholder="粘贴快手分享链接或分享文案"
                 rows={4}
+                maxLength={2000}
               />
               <button type="button" className="paste-button" disabled={pasting} onClick={() => void pasteFromClipboard()}>
                 <ClipboardPaste size={14} /> {pasting ? "读取中" : "粘贴"}
               </button>
             </div>
             <span className="field-hint">支持短链接、长链接和分享文案。仅接受发布 7 天内且不少于 200 赞的视频。</span>
+            <span className={`field-hint ${link.length > 2000 ? "negative-text" : ""}`}>{link.length.toLocaleString()} / 2,000 字</span>
           </div>
           <div className="rule-notice">
             <ShieldCheck size={18} />
             <span>作者名需要与账号快手昵称一致；已通过或审核中的视频不能重复提交，被驳回后可以再次提交。</span>
           </div>
           {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="primary-button full-button modal-submit" disabled={!link || submitting} onClick={submit}>
+          <button className="primary-button full-button modal-submit" disabled={!link || link.length > 2000 || submitting} onClick={submit}>
             <Send size={17} /> {submitting ? "正在提交..." : "提交并开始校验"}
           </button>
         </>

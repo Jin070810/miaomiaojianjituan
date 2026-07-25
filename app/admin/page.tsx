@@ -26,6 +26,7 @@ import {
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Trophy,
   UserRound,
   Users,
@@ -35,7 +36,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "announcements" | "logs" | "settings";
+type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "challenges" | "announcements" | "logs" | "settings";
 
 type AdminVideo = {
   id: string;
@@ -167,6 +168,58 @@ type AdminAnnouncement = {
   recipients: Array<{ userId: string; user: { id: string; nickname: string; kuaishouId: string } }>;
   _count: { notifications: number };
 };
+type AdminWeeklyChallengePeriod = {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  claimEndsAt: string;
+  status: "GENERATING" | "READY" | "ACTIVE" | "CLOSED" | "FAILED" | "CANCELLED";
+  audienceCount: number;
+  personalRewardBudget: number;
+  raceReward: number;
+  model: string;
+  promptVersion: string;
+  generatedAt: string | null;
+  failureReason: string | null;
+  _count: { assignments: number; attempts: number };
+  rewardSummary: Array<{ status: string; _count: { id: number }; _sum: { rewardPoints: number | null } }>;
+  taskDistribution: Array<{
+    type: "VIDEO_COUNT" | "LIKE_SUM" | "COMBINED";
+    _count: { id: number };
+    _avg: { rewardPoints: number | null; difficultyScore: number | null };
+  }>;
+  raceWinner: { rewardPoints: number; wonAt: string; reversedAt: string | null; user: { nickname: string; kuaishouId: string } } | null;
+};
+type AdminWeeklyChallengeDetail = AdminWeeklyChallengePeriod & {
+  assignments: Array<{
+    id: string;
+    type: "VIDEO_COUNT" | "LIKE_SUM" | "COMBINED";
+    status: string;
+    baselineVideoCount: number;
+    baselineLikes: number;
+    targetVideoCount: number | null;
+    targetLikes: number | null;
+    rewardPoints: number;
+    difficultyScore: number;
+    title: string;
+    aiReason: string;
+    completedAt: string | null;
+    claimedAt: string | null;
+    progress: { videoCount: number; likes: number };
+    user: { nickname: string; kuaishouId: string; active: boolean };
+  }>;
+  attempts: Array<{
+    id: string;
+    batchNumber: number;
+    attemptNumber: number;
+    status: string;
+    model: string;
+    latencyMs: number | null;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    error: string | null;
+  }>;
+};
 type AdminData = {
   metrics: { users: number; pendingVideos: number; activeGifts: number; pendingOrders: number; totalBalance: number };
   pointsTrend: Array<{ label: string; videoReward: number; adminAdjustment: number }>;
@@ -178,6 +231,7 @@ type AdminData = {
   orders: AdminOrderRow[];
   periods: AdminRankingPeriod[];
   announcements: AdminAnnouncement[];
+  weeklyChallengePeriods: AdminWeeklyChallengePeriod[];
   pointLedger: AdminPointLedgerRow[];
   pointRule: VideoPointRule;
   pointPagination: AdminPagination;
@@ -287,6 +341,7 @@ function AdminSidebar({
         { id: "gifts" as const, label: "礼品管理", icon: Gift },
         { id: "orders" as const, label: "兑换订单", icon: PackageCheck, badge: pendingOrders ? pendingOrders.toString() : undefined },
         { id: "rankings" as const, label: "榜单结算", icon: Trophy },
+        { id: "challenges" as const, label: "AI 周挑战", icon: Sparkles },
         { id: "announcements" as const, label: "公告通知", icon: Megaphone },
       ],
     },
@@ -772,12 +827,78 @@ function OrderRecipientDetails({ order, onLoad }: { order: AdminOrderRow; onLoad
   );
 }
 
+type AdminPromptOptions = {
+  title: string;
+  label: string;
+  initialValue?: string;
+  placeholder?: string;
+  confirmLabel?: string;
+  inputType?: "text" | "password" | "number";
+  multiline?: boolean;
+  required?: boolean;
+};
+
+function AdminPromptDialog({
+  options,
+  onCancel,
+  onConfirm,
+}: {
+  options: AdminPromptOptions;
+  onCancel: () => void;
+  onConfirm: (value: string) => void;
+}) {
+  const [value, setValue] = useState(options.initialValue ?? "");
+  const invalid = options.required !== false && !value.trim();
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
+      <section className="modal-sheet admin-prompt-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-prompt-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-head">
+          <div><span className="eyebrow">CONFIRM ACTION</span><h2 id="admin-prompt-title">{options.title}</h2></div>
+          <button className="icon-button" aria-label="取消操作" onClick={onCancel}><X size={20} /></button>
+        </div>
+        <div className="field">
+          <label htmlFor="admin-prompt-value">{options.label}</label>
+          {options.multiline
+            ? <textarea id="admin-prompt-value" autoFocus rows={4} value={value} placeholder={options.placeholder} onChange={(event) => setValue(event.target.value)} />
+            : <input id="admin-prompt-value" autoFocus type={options.inputType ?? "text"} value={value} placeholder={options.placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !invalid) onConfirm(value); }} />}
+        </div>
+        <div className="admin-panel-actions">
+          <button className="secondary-button" onClick={onCancel}>取消</button>
+          <button className="primary-button" disabled={invalid} onClick={() => onConfirm(value)}>{options.confirmLabel ?? "确认"}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function useAdminPrompt() {
+  const [request, setRequest] = useState<{
+    options: AdminPromptOptions;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+  function ask(options: AdminPromptOptions) {
+    return new Promise<string | null>((resolve) => setRequest({ options, resolve }));
+  }
+  function finish(value: string | null) {
+    const current = request;
+    setRequest(null);
+    current?.resolve(value);
+  }
+  return {
+    ask,
+    dialog: request
+      ? <AdminPromptDialog options={request.options} onCancel={() => finish(null)} onConfirm={(value) => finish(value)} />
+      : null,
+  };
+}
+
 function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl">>>({});
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const { ask, dialog } = useAdminPrompt();
   const loadDetails = async (order: AdminOrderRow) => {
     const response = await fetch(`/api/admin/orders/${order.id}`, { cache: "no-store" });
     if (!response.ok) return;
@@ -799,12 +920,24 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
     }
     let input: { trackingNumber?: string | null } | undefined;
     if (action === "fulfill" && order.gift.kind === "PHYSICAL") {
-      const trackingNumber = window.prompt("可选：填写快递单号", order.trackingNumber ?? "");
+      const trackingNumber = await ask({
+        title: "确认发货",
+        label: "快递单号（可选）",
+        initialValue: order.trackingNumber ?? "",
+        required: false,
+        confirmLabel: "确认发货",
+      });
       if (trackingNumber === null) return;
       input = { trackingNumber: trackingNumber.trim() || null };
     }
     if (action === "update_tracking") {
-      const trackingNumber = window.prompt("填写新的快递单号；留空可清除", order.trackingNumber ?? "");
+      const trackingNumber = await ask({
+        title: "修改快递单号",
+        label: "新的快递单号（留空可清除）",
+        initialValue: order.trackingNumber ?? "",
+        required: false,
+        confirmLabel: "保存",
+      });
       if (trackingNumber === null) return;
       input = { trackingNumber: trackingNumber.trim() || null };
     }
@@ -839,6 +972,7 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
         const processing = processingOrderId === order.id;
         return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl?.startsWith("http") || order.gift.imageUrl?.startsWith("/") ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
       })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多订单 <ChevronDown size={15} /></button></div>}</section>
+      {dialog}
     </>
   );
 }
@@ -1061,13 +1195,127 @@ function auditJson(value: unknown) {
 }
 
 type OperationSwitchRow = {
-  key: "VIDEO_SUBMISSIONS" | "POINT_TRANSFERS" | "REDEMPTIONS";
+  key: "VIDEO_SUBMISSIONS" | "POINT_TRANSFERS" | "REDEMPTIONS" | "WEEKLY_CHALLENGES";
   label: string;
   description: string;
   enabled: boolean;
   updatedAt: string | null;
   updatedBy: { nickname: string; kuaishouId: string } | null;
 };
+
+function WeeklyChallengesAdmin({
+  periods,
+  onRetry,
+}: {
+  periods: AdminWeeklyChallengePeriod[];
+  onRetry: (period: AdminWeeklyChallengePeriod) => Promise<void>;
+}) {
+  const [detail, setDetail] = useState<AdminWeeklyChallengeDetail | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const statusLabel: Record<AdminWeeklyChallengePeriod["status"], string> = {
+    GENERATING: "生成中",
+    READY: "待生效",
+    ACTIVE: "进行中",
+    CLOSED: "待领奖",
+    FAILED: "生成失败",
+    CANCELLED: "已取消",
+  };
+  const assignmentStatusLabel: Record<string, string> = {
+    ACTIVE: "进行中",
+    COMPLETED: "已达标",
+    CLAIMED: "已领取",
+    REVERSED: "已冲正",
+    EXPIRED: "已过期",
+  };
+  const attemptStatusLabel: Record<string, string> = {
+    RUNNING: "调用中",
+    SUCCEEDED: "已成功",
+    FAILED: "失败",
+  };
+  async function loadDetail(period: AdminWeeklyChallengePeriod) {
+    setLoadingId(period.id);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/weekly-challenges/${period.id}`, { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "周期详情加载失败");
+      setDetail(result.period);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "周期详情加载失败");
+    } finally {
+      setLoadingId(null);
+    }
+  }
+  return (
+    <>
+      <div className="admin-page-title">
+        <div><span className="eyebrow">AI WEEKLY CHALLENGES</span><h1>AI 周挑战</h1><p>查看自动生成覆盖、积分预算、模型批次与成员任务进度。</p></div>
+        <span className="status-chip teal">无需逐人审批</span>
+      </div>
+      {error && <div className="order-feedback error" role="alert"><AlertTriangle size={17} />{error}</div>}
+      <section className="admin-panel">
+        <div className="admin-panel-head"><div><h2>任务周期</h2><p>个人周池固定 10,000 分，竞速奖励固定 2,000 分</p></div></div>
+        <div className="data-table-wrap">
+          <table className="data-table weekly-period-table">
+            <thead><tr><th>周期</th><th>状态</th><th>覆盖</th><th>匿名任务分布</th><th>理论奖励</th><th>模型</th><th>竞速冠军</th><th /></tr></thead>
+            <tbody>
+              {periods.map((period) => {
+                const rewardTotal = period.rewardSummary.reduce((sum, row) => sum + (row._sum.rewardPoints ?? 0), 0);
+                const distribution = new Map(period.taskDistribution.map((row) => [row.type, row._count.id]));
+                return (
+                  <tr key={period.id}>
+                    <td><strong>{formatAdminDate(period.periodStart)} 起</strong><small>至 {formatAdminDate(period.periodEnd)}</small></td>
+                    <td><span className={`status-chip ${period.status === "FAILED" ? "danger" : period.status === "ACTIVE" ? "success" : "warning"}`}>{statusLabel[period.status]}</span>{period.failureReason && <small className="challenge-failure">{period.failureReason}</small>}</td>
+                    <td><strong>{period._count.assignments} / {period.audienceCount}</strong><small>{period._count.attempts} 次模型调用</small></td>
+                    <td><strong>数量 {distribution.get("VIDEO_COUNT") ?? 0}</strong><small>点赞 {distribution.get("LIKE_SUM") ?? 0} · 组合 {distribution.get("COMBINED") ?? 0}</small></td>
+                    <td><strong>{rewardTotal.toLocaleString()} 分</strong><small>上限 {period.personalRewardBudget.toLocaleString()}</small></td>
+                    <td><strong>{period.model}</strong><small>{period.promptVersion}</small></td>
+                    <td>{period.raceWinner && !period.raceWinner.reversedAt ? <><strong>{period.raceWinner.user.nickname}</strong><small>{period.raceWinner.rewardPoints.toLocaleString()} 分</small></> : <span>尚未产生</span>}</td>
+                    <td><div className="table-actions-inline"><button className="secondary-button mini-button" disabled={loadingId === period.id} onClick={() => void loadDetail(period)}>{loadingId === period.id ? "加载中" : "查看"}</button>{period.status === "FAILED" && <button className="secondary-button mini-button" onClick={() => void onRetry(period)}>重试</button>}</div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {periods.length === 0 && <p className="empty-copy">还没有周挑战周期；功能开关默认关闭。</p>}
+      </section>
+      {detail && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setDetail(null)}>
+          <section className="modal-sheet weekly-challenge-admin-dialog" role="dialog" aria-modal="true" aria-labelledby="weekly-detail-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head"><div><span className="eyebrow">WEEKLY DETAIL</span><h2 id="weekly-detail-title">周期任务详情</h2></div><button className="icon-button" aria-label="关闭周期详情" onClick={() => setDetail(null)}><X size={20} /></button></div>
+            <div className="challenge-detail-metrics">
+              <div><span>成员任务</span><strong>{detail.assignments.length}</strong></div>
+              <div><span>已达标/领取</span><strong>{detail.assignments.filter((row) => ["COMPLETED", "CLAIMED"].includes(row.status)).length}</strong></div>
+              <div><span>模型批次</span><strong>{detail.attempts.length}</strong></div>
+              <div><span>模型成本（Token）</span><strong>{detail.attempts.reduce((sum, row) => sum + (row.inputTokens ?? 0) + (row.outputTokens ?? 0), 0).toLocaleString()}</strong></div>
+            </div>
+            <div className="data-table-wrap challenge-detail-table">
+              <table className="data-table weekly-assignment-table">
+                <thead><tr><th>成员</th><th>AI 任务</th><th>基线 → 目标</th><th>当前进度</th><th>奖励</th><th>状态</th></tr></thead>
+                <tbody>{detail.assignments.map((assignment) => (
+                  <tr key={assignment.id}>
+                    <td><strong>{assignment.user.nickname}</strong><small>{assignment.user.kuaishouId}</small></td>
+                    <td><strong>{assignment.title}</strong><small>{assignment.aiReason}</small></td>
+                    <td><span>{assignment.baselineVideoCount} → {assignment.targetVideoCount ?? "—"} 条</span><small>{assignment.baselineLikes.toLocaleString()} → {assignment.targetLikes?.toLocaleString() ?? "—"} 赞</small></td>
+                    <td><span>{assignment.progress.videoCount} 条</span><small>{assignment.progress.likes.toLocaleString()} 赞</small></td>
+                    <td><strong>{assignment.rewardPoints.toLocaleString()}</strong><small>难度 {assignment.difficultyScore}</small></td>
+                    <td><span className={`status-chip ${assignment.status === "CLAIMED" ? "success" : assignment.status === "REVERSED" ? "danger" : "warning"}`}>{assignmentStatusLabel[assignment.status] ?? assignment.status}</span></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+            <div className="challenge-attempt-list">
+              <h3>模型生成记录</h3>
+              {detail.attempts.map((attempt) => <div key={attempt.id}><span>批次 {attempt.batchNumber + 1} / 尝试 {attempt.attemptNumber}</span><b>{attemptStatusLabel[attempt.status] ?? attempt.status}</b><span>{attempt.latencyMs ?? "—"} ms</span><span>{(attempt.inputTokens ?? 0) + (attempt.outputTokens ?? 0)} tokens</span>{attempt.error && <small>{attempt.error}</small>}</div>)}
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
 
 function SettingsAdmin() {
   const [rows, setRows] = useState<OperationSwitchRow[]>([]);
@@ -1171,6 +1419,8 @@ export default function AdminPage() {
   const [orderFilters, setOrderFilters] = useState({ search: "", status: "" });
   const [auditSearch, setAuditSearch] = useState("");
   const [auditFilters, setAuditFilters] = useState({ actionPrefix: "", entity: "" });
+  const [adminFeedback, setAdminFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const { ask: askAdminValue, dialog: adminPromptDialog } = useAdminPrompt();
   const router = useRouter();
   useEffect(() => {
     let activeRequest = true;
@@ -1186,13 +1436,14 @@ export default function AdminPage() {
       fetch("/api/admin/announcements?take=50", { cache: "no-store" }),
       fetch("/api/admin/points?take=50", { cache: "no-store" }),
       fetch("/api/admin/point-rules", { cache: "no-store" }),
-    ]).then(async ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, announcementsResponse, pointsResponse, pointRulesResponse]) => {
-      if ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, announcementsResponse, pointsResponse, pointRulesResponse].some((response) => response.status === 401 || response.status === 403)) {
+      fetch("/api/admin/weekly-challenges?take=10", { cache: "no-store" }),
+    ]).then(async ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, announcementsResponse, pointsResponse, pointRulesResponse, weeklyChallengesResponse]) => {
+      if ([dashboardResponse, videosResponse, appealsResponse, usersResponse, giftsResponse, ordersResponse, auditResponse, rankingsResponse, announcementsResponse, pointsResponse, pointRulesResponse, weeklyChallengesResponse].some((response) => response.status === 401 || response.status === 403)) {
         router.replace("/login");
         return;
       }
-      const [dashboard, videos, appeals, users, gifts, orders, audit, rankings, announcements, points, pointRules] = await Promise.all([
-        dashboardResponse.json(), videosResponse.json(), appealsResponse.json(), usersResponse.json(), giftsResponse.json(), ordersResponse.json(), auditResponse.json(), rankingsResponse.json(), announcementsResponse.json(), pointsResponse.json(), pointRulesResponse.json(),
+      const [dashboard, videos, appeals, users, gifts, orders, audit, rankings, announcements, points, pointRules, weeklyChallenges] = await Promise.all([
+        dashboardResponse.json(), videosResponse.json(), appealsResponse.json(), usersResponse.json(), giftsResponse.json(), ordersResponse.json(), auditResponse.json(), rankingsResponse.json(), announcementsResponse.json(), pointsResponse.json(), pointRulesResponse.json(), weeklyChallengesResponse.json(),
       ]);
       if (!dashboardResponse.ok) throw new Error(dashboard.error ?? "后台数据加载失败");
       if (activeRequest) {
@@ -1212,6 +1463,7 @@ export default function AdminPage() {
           auditPagination: audit.pagination ?? { page: 1, take: 50, total: (audit.audit ?? dashboard.audit ?? []).length, pages: 1 },
           periods: rankings.periods ?? [],
           announcements: announcements.announcements ?? [],
+          weeklyChallengePeriods: weeklyChallenges.periods ?? [],
           pointLedger: points.ledger ?? [],
           pointPagination: points.pagination ?? { page: 1, take: 50, total: 0, pages: 1 },
           pointRule: pointRules.rule,
@@ -1273,7 +1525,7 @@ export default function AdminPage() {
         videosPagination: result.pagination,
       } : current);
     } catch (loadError) {
-      window.alert(loadError instanceof Error ? loadError.message : "视频记录加载失败");
+      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "视频记录加载失败" });
     }
   }
   async function loadMoreVideos() {
@@ -1295,7 +1547,7 @@ export default function AdminPage() {
         appealsPagination: result.pagination,
       } : current);
     } catch (loadError) {
-      window.alert(loadError instanceof Error ? loadError.message : "申诉记录加载失败");
+      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "申诉记录加载失败" });
     }
   }
   async function loadMoreAppeals() {
@@ -1321,7 +1573,7 @@ export default function AdminPage() {
         usersPagination: result.pagination,
       } : current);
     } catch (loadError) {
-      window.alert(loadError instanceof Error ? loadError.message : "成员记录加载失败");
+      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "成员记录加载失败" });
     }
   }
   async function loadMoreUsers() {
@@ -1347,7 +1599,7 @@ export default function AdminPage() {
         ordersPagination: result.pagination,
       } : current);
     } catch (loadError) {
-      window.alert(loadError instanceof Error ? loadError.message : "订单记录加载失败");
+      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "订单记录加载失败" });
     }
   }
   async function loadMoreOrders() {
@@ -1380,11 +1632,17 @@ export default function AdminPage() {
         auditPagination: result.pagination,
       } : current);
     } catch (loadError) {
-      window.alert(loadError instanceof Error ? loadError.message : "审计日志加载失败");
+      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "审计日志加载失败" });
     }
   }
   async function handleVideoAction(video: AdminVideo, action: "revoke" | "reprocess") {
-    const reason = action === "revoke" ? window.prompt("请输入撤销原因") : undefined;
+    const reason = action === "revoke" ? await askAdminValue({
+      title: "撤销视频奖励",
+      label: "撤销原因",
+      multiline: true,
+      placeholder: "说明撤销依据，操作会同步检查周挑战奖励",
+      confirmLabel: "确认撤销",
+    }) : undefined;
     if (action === "revoke" && !reason) return;
     const response = await fetch(`/api/videos/${video.id}`, {
       method: "POST",
@@ -1393,9 +1651,10 @@ export default function AdminPage() {
     });
     const result = await response.json();
     if (!response.ok) {
-      window.alert(result.error ?? "操作失败");
+      setAdminFeedback({ type: "error", message: result.error ?? "操作失败" });
       return;
     }
+    setAdminFeedback({ type: "success", message: action === "revoke" ? "视频奖励已撤销并完成相关积分核对" : "视频已重新进入处理队列" });
     setData((current) => {
       if (!current) return current;
       const nextStatus = result.video?.status as string | undefined;
@@ -1414,14 +1673,37 @@ export default function AdminPage() {
     });
   }
   async function handleAppealAction(appeal: AdminAppeal, action: "approve" | "reject") {
-    const reason = action === "reject" ? window.prompt("请输入驳回申诉原因") : window.prompt("可选：填写复查说明或留空使用默认积分");
+    const reason = await askAdminValue(action === "reject" ? {
+      title: "驳回视频申诉",
+      label: "驳回原因",
+      multiline: true,
+      confirmLabel: "确认驳回",
+    } : {
+      title: "通过视频申诉",
+      label: "复查说明（可选）",
+      multiline: true,
+      required: false,
+      confirmLabel: "下一步",
+    });
+    if (reason === null) return;
     if (action === "reject" && !reason) return;
     let points: number | undefined;
     if (action === "approve") {
-      const raw = window.prompt(`请输入核定积分（当前抓取点赞 ${appeal.video.likes ?? 0}，建议 ${appeal.video.points || "自动计算"}）`, String(appeal.video.points || ""));
+      const raw = await askAdminValue({
+        title: "核定申诉积分",
+        label: `当前抓取点赞 ${appeal.video.likes ?? 0}，请输入核定积分`,
+        inputType: "number",
+        initialValue: String(appeal.video.points || ""),
+        required: false,
+        confirmLabel: "确认通过",
+      });
+      if (raw === null) return;
       if (raw !== null && raw.trim() !== "") {
         points = Number(raw);
-        if (!Number.isInteger(points) || points < 0) { window.alert("积分必须是非负整数"); return; }
+        if (!Number.isInteger(points) || points < 0) {
+          setAdminFeedback({ type: "error", message: "积分必须是非负整数" });
+          return;
+        }
       }
     }
     const response = await fetch(`/api/admin/video-appeals/${appeal.id}`, {
@@ -1430,7 +1712,11 @@ export default function AdminPage() {
       body: JSON.stringify({ action, reason, points }),
     });
     const result = await response.json();
-    if (!response.ok) { window.alert(result.error ?? "申诉处理失败"); return; }
+    if (!response.ok) {
+      setAdminFeedback({ type: "error", message: result.error ?? "申诉处理失败" });
+      return;
+    }
+    setAdminFeedback({ type: "success", message: action === "approve" ? "申诉已通过并完成积分入账" : "申诉已驳回" });
     setData((current) => current ? {
       ...current,
       appeals: current.appeals.filter((item) => item.id !== appeal.id),
@@ -1439,7 +1725,12 @@ export default function AdminPage() {
     } : current);
   }
   async function handleOrderAction(order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }): Promise<boolean> {
-    const reason = ["reject", "refund"].includes(action) ? window.prompt("请输入处理原因") : undefined;
+    const reason = ["reject", "refund"].includes(action) ? await askAdminValue({
+      title: action === "reject" ? "驳回兑换订单" : "退款兑换订单",
+      label: "处理原因",
+      multiline: true,
+      confirmLabel: action === "reject" ? "确认驳回" : "确认退款",
+    }) : undefined;
     if (["reject", "refund"].includes(action) && !reason) return false;
     const response = await fetch(`/api/admin/orders/${order.id}`, {
       method: "POST",
@@ -1470,7 +1761,7 @@ export default function AdminPage() {
     });
     const result = await response.json();
     if (!response.ok) {
-      window.alert(result.error ?? "更新失败");
+      setAdminFeedback({ type: "error", message: result.error ?? "更新失败" });
       return;
     }
     setData((current) =>
@@ -1488,7 +1779,12 @@ export default function AdminPage() {
     await handleUserUpdate(user, { active: !user.active });
   }
   async function handleResetPassword(user: AdminUserRow) {
-    const password = window.prompt(`为 ${user.nickname} 设置临时密码（至少 8 位）`);
+    const password = await askAdminValue({
+      title: `重置 ${user.nickname} 的密码`,
+      label: "临时密码（至少 8 位）",
+      inputType: "password",
+      confirmLabel: "确认重置",
+    });
     if (!password) return;
     const response = await fetch(`/api/admin/users/${user.id}/password`, {
       method: "POST",
@@ -1497,10 +1793,10 @@ export default function AdminPage() {
     });
     const result = await response.json();
     if (!response.ok) {
-      window.alert(result.error ?? "密码重置失败");
+      setAdminFeedback({ type: "error", message: result.error ?? "密码重置失败" });
       return;
     }
-    window.alert("密码已重置，旧登录会话已失效。请通过安全方式将临时密码交给成员。");
+    setAdminFeedback({ type: "success", message: "密码已重置，旧登录会话已失效。请通过安全方式将临时密码交给成员。" });
   }
   async function handleRankingSettle(type: "week" | "month", periodStart: string, rewards: Array<{ rank: number; title: string; description?: string }>) {
     const response = await fetch("/api/admin/rankings", {
@@ -1510,13 +1806,16 @@ export default function AdminPage() {
     });
     const result = await response.json();
     if (!response.ok) {
-      window.alert(result.error ?? "榜单结算失败");
+      setAdminFeedback({ type: "error", message: result.error ?? "榜单结算失败" });
       return;
     }
     const refreshed = await fetch("/api/admin/rankings", { cache: "no-store" });
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
-    if (!result.settled) window.alert(result.reason ?? "该周期已结算");
+    setAdminFeedback({
+      type: "success",
+      message: result.settled ? "榜单已完成结算" : (result.reason ?? "该周期已结算"),
+    });
   }
   async function handleRankingAwardUpdate(award: AdminRankingAward, input: { status?: "FULFILLED" }) {
     const response = await fetch(`/api/admin/rankings/awards/${award.id}`, {
@@ -1526,12 +1825,28 @@ export default function AdminPage() {
     });
     const result = await response.json();
     if (!response.ok) {
-      window.alert(result.error ?? "奖励更新失败");
+      setAdminFeedback({ type: "error", message: result.error ?? "奖励更新失败" });
       return;
     }
     const refreshed = await fetch("/api/admin/rankings", { cache: "no-store" });
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
+    setAdminFeedback({ type: "success", message: "榜单奖励状态已更新" });
+  }
+  async function handleWeeklyChallengeRetry(period: AdminWeeklyChallengePeriod) {
+    try {
+      const response = await fetch(`/api/admin/weekly-challenges/${period.id}/retry`, {
+        method: "POST",
+        headers: { "idempotency-key": crypto.randomUUID() },
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "周挑战重试提交失败");
+      const refreshed = await fetchAdminPage("/api/admin/weekly-challenges?take=10", "周挑战周期刷新失败");
+      setData((current) => current ? { ...current, weeklyChallengePeriods: refreshed.periods ?? [] } : current);
+      setAdminFeedback({ type: "success", message: "周挑战重新生成任务已提交" });
+    } catch (retryError) {
+      setAdminFeedback({ type: "error", message: retryError instanceof Error ? retryError.message : "周挑战重试提交失败" });
+    }
   }
   async function handlePointAdjustment(input: { userIds: string[]; amount: number; reason: string }) {
     const response = await fetch("/api/admin/points/bulk", {
@@ -1605,6 +1920,7 @@ export default function AdminPage() {
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
+    if (active === "challenges") return <WeeklyChallengesAdmin periods={data.weeklyChallengePeriods} onRetry={handleWeeklyChallengeRetry} />;
     if (active === "announcements") return <AnnouncementsAdmin rows={data.announcements} users={data.users} onSave={saveAnnouncement} onAction={actionAnnouncement} />;
     if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} onSearch={(search) => loadAudit({ search })} onFilter={(filters) => loadAudit(filters)} />;
     if (active === "settings") return <SettingsAdmin />;
@@ -1619,12 +1935,22 @@ export default function AdminPage() {
       <section className="admin-main">
         <header className="admin-topbar">
           <button className="mobile-admin-menu" aria-label="打开菜单"><MoreHorizontal size={20} /></button>
-          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
+          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "challenges" ? "AI 周挑战" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
           <div className="admin-top-actions"><button className="icon-button"><Bell size={18} /></button><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
         </header>
-        <div className="admin-content">{render()}</div>
+        <div className="admin-content">
+          {adminFeedback && (
+            <div className={`admin-global-feedback ${adminFeedback.type}`} role={adminFeedback.type === "error" ? "alert" : "status"} aria-live="polite">
+              {adminFeedback.type === "success" ? <Check size={17} /> : <AlertTriangle size={17} />}
+              <span>{adminFeedback.message}</span>
+              <button className="icon-button" aria-label="关闭提示" onClick={() => setAdminFeedback(null)}><X size={16} /></button>
+            </div>
+          )}
+          {render()}
+        </div>
       </section>
       {giftEditor && <GiftEditorDialog gift={giftEditor.gift} onClose={() => setGiftEditor(null)} onSave={handleGiftSave} />}
+      {adminPromptDialog}
     </main>
   );
 }

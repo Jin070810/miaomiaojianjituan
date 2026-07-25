@@ -1,0 +1,41 @@
+name: Production Daily Operations Check
+
+on:
+  schedule:
+    - cron: "15 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-daily-operations-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          test -n "$PRODUCTION_USER"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Run production checks
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+        run: |
+          test -n "$PRODUCTION_PATH"
+          remote_script="$(printf 'set -euo pipefail\ncd %q\ndocker compose --env-file .env.production run --rm --no-deps worker npm run ops:daily-check\n' "$PRODUCTION_PATH")"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"

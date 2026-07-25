@@ -35,6 +35,10 @@ enum LedgerType {
   REDEMPTION
   REDEMPTION_REFUND
   REVERSAL
+  WEEKLY_CHALLENGE_REWARD
+  WEEKLY_RACE_REWARD
+  WEEKLY_CHALLENGE_REVERSAL
+  WEEKLY_RACE_REVERSAL
 }
 
 enum TransferStatus {
@@ -81,6 +85,36 @@ enum NotificationType {
   REDEMPTION
   RANKING_RESULT
   RANKING_AWARD
+  WEEKLY_CHALLENGE
+}
+
+enum WeeklyChallengePeriodStatus {
+  GENERATING
+  READY
+  ACTIVE
+  CLOSED
+  FAILED
+  CANCELLED
+}
+
+enum WeeklyChallengeType {
+  VIDEO_COUNT
+  LIKE_SUM
+  COMBINED
+}
+
+enum WeeklyChallengeAssignmentStatus {
+  ACTIVE
+  COMPLETED
+  CLAIMED
+  REVERSED
+  EXPIRED
+}
+
+enum WeeklyChallengeAttemptStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
 }
 
 enum AnnouncementStatus {
@@ -124,6 +158,8 @@ model User {
   guildHistory     GuildStatusHistory[]
   sessions         Session[]
   operationSettings SystemSetting[]     @relation("OperationSettingUpdater")
+  weeklyChallengeAssignments WeeklyChallengeAssignment[]
+  weeklyRaceWins             WeeklyRaceWinner[]
 }
 
 model Session {
@@ -445,6 +481,106 @@ model SystemSetting {
   updatedBy   User?    @relation("OperationSettingUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([updatedAt])
+}
+
+model WeeklyChallengePeriod {
+  id                   String                             @id @default(cuid())
+  periodStart          DateTime                           @unique
+  periodEnd            DateTime
+  claimEndsAt          DateTime
+  status               WeeklyChallengePeriodStatus        @default(GENERATING)
+  personalRewardBudget Int                                @default(10000)
+  raceReward           Int                                @default(2000)
+  model                String
+  promptVersion        String                             @default("v1")
+  audienceSnapshot     Json
+  audienceCount        Int
+  generationRunId      String?
+  generationStartedAt  DateTime?
+  generatedAt          DateTime?
+  activatedAt          DateTime?
+  closedAt             DateTime?
+  failureReason        String?
+  createdAt            DateTime                           @default(now())
+  updatedAt            DateTime                           @updatedAt
+  assignments          WeeklyChallengeAssignment[]
+  attempts             WeeklyChallengeGenerationAttempt[]
+  raceWinner           WeeklyRaceWinner?
+
+  @@index([status, periodStart])
+}
+
+model WeeklyChallengeAssignment {
+  id                 String                          @id @default(cuid())
+  periodId           String
+  userId             String
+  type               WeeklyChallengeType
+  status             WeeklyChallengeAssignmentStatus @default(ACTIVE)
+  baselineVideoCount Int                             @default(0)
+  baselineLikes      Int                             @default(0)
+  weeklyVideoCounts  Json
+  weeklyLikeSums     Json
+  targetVideoCount   Int?
+  targetLikes        Int?
+  rewardPoints       Int
+  difficultyScore    Int
+  title              String
+  description        String
+  aiReason           String
+  completedAt        DateTime?
+  claimedAt          DateTime?
+  claimIdempotencyKey String?                         @unique
+  reversedAt         DateTime?
+  createdAt          DateTime                        @default(now())
+  updatedAt          DateTime                        @updatedAt
+  period             WeeklyChallengePeriod           @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  user               User                            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  raceWin            WeeklyRaceWinner?
+
+  @@unique([periodId, userId])
+  @@index([userId, status, createdAt])
+  @@index([periodId, status, completedAt])
+}
+
+model WeeklyChallengeGenerationAttempt {
+  id              String                       @id @default(cuid())
+  periodId        String
+  batchNumber     Int
+  attemptNumber   Int
+  status          WeeklyChallengeAttemptStatus @default(RUNNING)
+  model           String
+  promptVersion   String
+  promptHash      String
+  requestId       String
+  memberCount     Int
+  latencyMs       Int?
+  inputTokens     Int?
+  outputTokens    Int?
+  error           String?
+  validatedOutput Json?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+  period          WeeklyChallengePeriod        @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@unique([periodId, batchNumber, attemptNumber])
+  @@index([periodId, status, createdAt])
+}
+
+model WeeklyRaceWinner {
+  id           String                    @id @default(cuid())
+  periodId     String                    @unique
+  assignmentId String                    @unique
+  userId       String
+  rewardPoints Int
+  wonAt        DateTime
+  reversedAt   DateTime?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  period       WeeklyChallengePeriod     @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  assignment   WeeklyChallengeAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  user         User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, wonAt])
 }
 
 model LegacyImport {

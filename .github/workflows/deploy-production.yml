@@ -58,7 +58,7 @@ jobs:
           fi
 
       - name: Verify commit is merged into main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Verify release ancestry
@@ -94,6 +94,48 @@ jobs:
           EOF
           chmod 600 "$HOME/.ssh/config"
 
+      - name: Inject DeepSeek and alert configuration
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          [[ "$DEEPSEEK_BASE_URL" == https://* ]]
+          test -n "$DEEPSEEK_API_KEY"
+          test -n "$DEEPSEEK_MODEL"
+          [[ "$ALERT_WEBHOOK_URL" == https://* ]]
+          # shellcheck disable=SC2029
+          {
+            cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          env_file="$1"
+          [[ -f "$env_file" ]]
+          upsert_env() {
+            local key="$1"
+            local value="$2"
+            if [[ "$value" == *$'\n'* || "$value" == *"'"* ]]; then
+              echo "$key 包含环境文件不支持的字符" >&2
+              exit 1
+            fi
+            local temp
+            temp="$(mktemp)"
+            grep -v "^${key}=" "$env_file" > "$temp" || true
+            printf "%s='%s'\n" "$key" "$value" >> "$temp"
+            chmod 600 "$temp"
+            mv "$temp" "$env_file"
+          }
+          REMOTE_SCRIPT
+            printf 'upsert_env DEEPSEEK_BASE_URL %q\n' "$DEEPSEEK_BASE_URL"
+            printf 'upsert_env DEEPSEEK_API_KEY %q\n' "$DEEPSEEK_API_KEY"
+            printf 'upsert_env DEEPSEEK_MODEL %q\n' "$DEEPSEEK_MODEL"
+            printf 'upsert_env ALERT_WEBHOOK_URL %q\n' "$ALERT_WEBHOOK_URL"
+          } | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "bash -s -- $(printf '%q' "$PRODUCTION_PATH/.env.production")"
+
       - name: Build approved commit on production host
         timeout-minutes: 30
         env:
@@ -102,9 +144,9 @@ jobs:
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
-          remote_script="$(printf 'set -euo pipefail\ncd %q\ngit fetch --no-tags origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\nexport DOCKER_BUILDKIT=1\ndocker build --target runner --label org.opencontainers.image.revision=%q --tag miaomiao-points-app:%q --tag miaomiao-points-app:production .\ndocker build --target worker --label org.opencontainers.image.revision=%q --tag miaomiao-points-worker:%q --tag miaomiao-points-worker:production .\ndocker image inspect miaomiao-points-app:production miaomiao-points-worker:production --format "size={{.Size}} id={{.Id}} revision={{index .Config.Labels \\"org.opencontainers.image.revision\\"}}"\n' \
-            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RELEASE_COMMIT" \
-            "$RELEASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_COMMIT" "$RELEASE_COMMIT")"
+          # shellcheck disable=SC2016
+          remote_script="$(printf 'set -euo pipefail\ncd %q\nrelease_commit=%q\nbuild_time="$(date -u --iso-8601=seconds)"\ngit fetch --no-tags origin main\ngit cat-file -e "$release_commit^{commit}"\ngit checkout --detach "$release_commit"\nexport DOCKER_BUILDKIT=1\ndocker build --target runner --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-app:$release_commit" --tag miaomiao-points-app:production .\ndocker build --target worker --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-worker:$release_commit" --tag miaomiao-points-worker:production .\ndocker image inspect miaomiao-points-app:production miaomiao-points-worker:production --format "size={{.Size}} id={{.Id}} revision={{index .Config.Labels \\"org.opencontainers.image.revision\\"}}"\n' \
+            "$PRODUCTION_PATH" "$RELEASE_COMMIT")"
           printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
 
       - name: Deploy approved commit
@@ -142,16 +184,24 @@ jobs:
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
         run: |
+          # shellcheck disable=SC2029
           ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
             "set -e; cd '$PRODUCTION_PATH'; docker compose --env-file .env.production --profile production up -d nginx; docker compose --env-file .env.production --profile production restart nginx; docker compose --env-file .env.production --profile production ps"
 
       - name: Verify production health
         env:
           PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
-          for attempt in {1..12}; do
-            if curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health"; then
-              exit 0
+          for _ in {1..12}; do
+            if health_json="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"; then
+              printf '%s\n' "$health_json"
+              if jq -e --arg sha "$RELEASE_COMMIT" \
+                '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' \
+                <<<"$health_json" >/dev/null; then
+                exit 0
+              fi
+              echo "健康接口版本与请求发布 SHA 不一致，等待服务完成切换"
             fi
             sleep 10
           done

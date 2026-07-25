@@ -25,5 +25,12 @@ export function runtimeConfigIssues() {
     issues.push("PHONE_ENCRYPTION_KEY必须是64位十六进制");
   }
   if (process.env.NODE_ENV === "production" && !process.env.REDIS_URL) issues.push("生产环境必须配置REDIS_URL");
+  if (process.env.NODE_ENV === "production" && !/^[0-9a-f]{40}$/i.test(process.env.APP_COMMIT_SHA?.trim() ?? "")) {
+    issues.push("APP_COMMIT_SHA必须是完整的40位提交SHA");
+  }
+  const buildTime = process.env.APP_BUILD_TIME?.trim() ?? "";
+  if (process.env.NODE_ENV === "production" && (!buildTime || Number.isNaN(Date.parse(buildTime)))) {
+    issues.push("APP_BUILD_TIME必须是有效的ISO时间");
+  }
   return issues;
 }

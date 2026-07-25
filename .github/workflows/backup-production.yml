@@ -1,0 +1,64 @@
+name: Production OSS Backup
+
+on:
+  schedule:
+    - cron: "15 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-oss-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          test -n "$PRODUCTION_USER"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Create, upload, and verify backup
+        timeout-minutes: 15
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+        run: |
+          test -n "$PRODUCTION_PATH"
+          remote_script="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          project_path="$1"
+          cd "$project_path"
+          alert_failure() {
+            docker compose --env-file .env.production run --rm --no-deps worker \
+              npm run ops:alert -- --source production-backup --severity critical --message "生产 OSS 数据库备份工作流失败" || true
+          }
+          finish() {
+            status=$?
+            trap - EXIT
+            if (( status != 0 )); then alert_failure; fi
+            exit "$status"
+          }
+          trap finish EXIT
+          bash scripts/backup-db.sh backups .env.production
+          latest="$(find backups -maxdepth 1 -type f -name 'miaomiao-*.dump' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          test -n "$latest"
+          docker compose --env-file .env.production run --rm --no-deps worker \
+            npm run ops:upload-backup -- --file "/app/backups/$(basename "$latest")"
+          REMOTE_SCRIPT
+          )"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "bash -s -- $(printf '%q' "$PRODUCTION_PATH")"

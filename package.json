@@ -23,12 +23,16 @@
     "weekly:shadow": "tsx scripts/weekly-challenge-shadow.ts",
     "redemption:reconcile": "tsx scripts/reconcile-redemption-orders.ts",
     "ops:daily-check": "tsx scripts/ops-daily-check.ts",
+    "ops:upload-backup": "tsx scripts/upload-oss-backup.ts",
+    "ops:download-backup": "tsx scripts/download-oss-backup.ts",
+    "ops:alert": "tsx scripts/send-ops-alert.ts",
     "ops:verify-backups": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-backups.ps1",
     "test": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
     "@prisma/client": "^6.8.2",
+    "ali-oss": "^6.23.0",
     "argon2": "^0.41.1",
     "bullmq": "^5.55.0",
     "dotenv": "^16.5.0",
@@ -44,6 +48,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
+    "@types/ali-oss": "^6.23.3",
     "@types/node": "^22.10.2",
     "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.0.3",

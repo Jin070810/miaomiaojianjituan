@@ -47,6 +47,10 @@ COPY lib ./lib
 COPY prisma ./prisma
 COPY scripts/seed-admin.ts ./scripts/seed-admin.ts
 COPY scripts/reconcile-redemption-orders.ts ./scripts/reconcile-redemption-orders.ts
+COPY scripts/reconcile-data.ts ./scripts/reconcile-data.ts
 COPY scripts/ops-daily-check.ts ./scripts/ops-daily-check.ts
+COPY scripts/upload-oss-backup.ts ./scripts/upload-oss-backup.ts
+COPY scripts/download-oss-backup.ts ./scripts/download-oss-backup.ts
+COPY scripts/send-ops-alert.ts ./scripts/send-ops-alert.ts
 RUN npx prisma generate
 CMD ["npx", "tsx", "worker.ts"]

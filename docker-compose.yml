@@ -113,6 +113,11 @@ services:
       ALERT_SMTP_SECURE: ${ALERT_SMTP_SECURE:-true}
       BACKUP_DIRECTORY: ${BACKUP_DIRECTORY:-./backups}
       BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
+      OSS_BUCKET: ${OSS_BUCKET:-}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:-}
+      OSS_ECS_ROLE_NAME: ${OSS_ECS_ROLE_NAME:-}
+      OSS_PREFIX: ${OSS_PREFIX:-miaomiao/production}
+      LOCAL_BACKUP_RETENTION_DAYS: ${LOCAL_BACKUP_RETENTION_DAYS:-7}
       QUEUE_WAITING_ALERT_THRESHOLD: ${QUEUE_WAITING_ALERT_THRESHOLD:-1000}
     depends_on:
       migrate:
@@ -120,7 +125,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./backups:/app/backups:ro
+      - ./backups:/app/backups
     restart: unless-stopped
     stop_grace_period: 75s
     logging: *default-logging

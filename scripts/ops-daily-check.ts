@@ -3,9 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { db } from "../lib/db";
-import { getVideoQueueMetrics } from "../lib/video-jobs";
-import { checkRateLimitStore } from "../lib/rate-limit";
-import { checkWorkerHeartbeat } from "../lib/worker-health";
+import { closeVideoQueue, getVideoQueueMetrics } from "../lib/video-jobs";
+import { checkRateLimitStore, closeRateLimitStore } from "../lib/rate-limit";
+import { checkWorkerHeartbeat, closeWorkerHealthConnection } from "../lib/worker-health";
 import { sendOperationalAlert } from "../lib/alerts";
 import { shanghaiWeekBounds } from "../lib/weekly-challenges";
 
@@ -158,4 +158,11 @@ main().catch(async (error) => {
   console.error(error);
   await sendOperationalAlert({ source: "ops-daily-check", severity: "critical", message: "每日积分中心巡检执行失败", details: { error: error instanceof Error ? error.message : String(error) } });
   process.exitCode = 1;
-}).finally(() => db.$disconnect());
+}).finally(async () => {
+  await Promise.allSettled([
+    db.$disconnect(),
+    closeVideoQueue(),
+    closeRateLimitStore(),
+    closeWorkerHealthConnection(),
+  ]);
+});

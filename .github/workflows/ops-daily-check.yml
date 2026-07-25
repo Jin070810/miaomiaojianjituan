@@ -37,5 +37,5 @@ jobs:
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
         run: |
           test -n "$PRODUCTION_PATH"
-          remote_script="$(printf 'set -euo pipefail\ncd %q\ndocker compose --env-file .env.production run --rm --no-deps worker npm run ops:daily-check\n' "$PRODUCTION_PATH")"
+          remote_script="$(printf 'set -euo pipefail\ncd %q\ncommand -v timeout >/dev/null\ntimeout --foreground --signal=TERM --kill-after=30s 5m docker compose --env-file .env.production run --rm --no-deps worker npm run ops:daily-check\n' "$PRODUCTION_PATH")"
           printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"

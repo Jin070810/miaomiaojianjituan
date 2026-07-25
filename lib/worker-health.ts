@@ -83,9 +83,16 @@ export async function checkWorkerHeartbeat() {
   return (await getWorkerHeartbeat()).status;
 }
 
-export async function closeWorkerHealth() {
-  if (!redis) return;
-  await redis.del(HEARTBEAT_KEY).catch(() => undefined);
-  await redis.quit().catch(() => redis?.disconnect());
+export async function closeWorkerHealthConnection() {
+  const current = redis;
   redis = null;
+  if (!current) return;
+  await current.quit().catch(() => current.disconnect());
+}
+
+export async function closeWorkerHealth() {
+  const current = redis;
+  if (!current) return;
+  await current.del(HEARTBEAT_KEY).catch(() => undefined);
+  await closeWorkerHealthConnection();
 }

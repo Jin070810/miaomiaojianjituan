@@ -67,6 +67,8 @@ npm run weekly:shadow
 
 保存脚本输出、告警接收记录和后台截图作为发布记录。脚本会拒绝 `public` 或任何非空 schema，不使用真实成员资料，不会开启周挑战积分发放，并要求结果告警成功送达。
 
+PR 合并成 release candidate 后，优先从 `main` 手动触发 `Weekly Challenge DeepSeek Shadow` workflow 并确认付费运行。工作流使用一次性 PostgreSQL service，不读取生产数据库；成功后下载并归档 `weekly-challenge-deepseek-shadow` artifact。
+
 ## 上线与回滚
 
 - 首次上线开关默认关闭；真实 DeepSeek 与告警已验证、影子运行完成并由维护者明确确认后才能开启。

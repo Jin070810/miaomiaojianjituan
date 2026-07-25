@@ -83,6 +83,8 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 真实 DeepSeek 上线验收必须使用全新的独立 PostgreSQL schema，名称以 `shadow_` 或 `staging_` 开头。先执行 migration，再设置 `WEEKLY_CHALLENGE_SHADOW_CONFIRM=I_UNDERSTAND_PAID_DEEPSEEK_SHADOW` 并运行 `npm run weekly:shadow`；脚本会生成 300 名纯合成匿名成员、回放五周聚合数据并连续生成两个挑战周期。脚本拒绝非空 schema 和 `public`，始终保持积分发放开关关闭，只输出覆盖、任务分布、预算、重试和 Token 聚合；完成后还必须成功发送一次告警，借此验证 `ALERT_WEBHOOK_URL`。
 
+合并到 `main` 后也可以手动运行 GitHub Actions 的 `Weekly Challenge DeepSeek Shadow` workflow。该任务只使用 Actions 临时 PostgreSQL 服务，不连接生产数据库；DeepSeek 与告警配置从 `production` Environment 注入，聚合报告作为 30 天 artifact 留存。
+
 正式发布从 GitHub `production` Environment 读取变量 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 和 Secrets `DEEPSEEK_API_KEY`、`ALERT_WEBHOOK_URL`，由部署 workflow 写入服务器环境文件；禁止将这些密钥提交到仓库。
 
 v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新增枚举、表、关系和索引。应用回滚时关闭周挑战开关并回退 Web/Worker，保留新增表和积分审计历史，不回退已执行 migration。完整验收与影子运行要求见 [`docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md`](docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md)。

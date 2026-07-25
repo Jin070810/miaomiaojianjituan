@@ -1,0 +1,64 @@
+name: Weekly Challenge DeepSeek Shadow
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_paid_shadow:
+        description: "确认使用真实 DeepSeek 运行 300 人、两个周期的付费影子验证"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-challenge-deepseek-shadow
+  cancel-in-progress: false
+
+jobs:
+  shadow:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_paid_shadow
+    runs-on: ubuntu-latest
+    environment: production
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: miaomiao_shadow
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d miaomiao_shadow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/miaomiao_shadow?schema=shadow_v13_rc
+      DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+      WEEKLY_CHALLENGE_SHADOW_CONFIRM: I_UNDERSTAND_PAID_DEEPSEEK_SHADOW
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      - name: Run paid DeepSeek shadow
+        run: |
+          set -o pipefail
+          mkdir -p output/weekly-shadow
+          npm --silent run weekly:shadow | tee output/weekly-shadow/report.json
+      - name: Upload shadow report
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-challenge-deepseek-shadow
+          path: output/weekly-shadow/report.json
+          if-no-files-found: error
+          retention-days: 30

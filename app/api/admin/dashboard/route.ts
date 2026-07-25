@@ -27,7 +27,7 @@ export async function GET() {
   try {
     await requireAdmin();
     const trendStart = new Date(Date.now() - 6 * 86_400_000);
-    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts] = await Promise.all([
+    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts, recentVideos] = await Promise.all([
       db.user.count(),
       db.videoAppeal.count({ where: { status: "PENDING" } }),
       db.gift.count({ where: { active: true } }),
@@ -38,6 +38,11 @@ export async function GET() {
         include: { actor: { select: { kuaishouId: true, nickname: true, role: true } } },
       }),
       db.pointAccount.aggregate({ _sum: { balance: true } }),
+      db.videoSubmission.findMany({
+        orderBy: { submittedAt: "desc" },
+        take: 5,
+        include: { user: { select: { kuaishouId: true, nickname: true } } },
+      }),
     ]);
     const trendLedger = await db.pointLedger.findMany({
       where: {
@@ -66,6 +71,7 @@ export async function GET() {
         totalBalance: accounts._sum.balance ?? 0,
       },
       audit: recentAudit.map((row) => presentAuditLog(row)),
+      recentVideos,
       pointsTrend,
     });
   } catch (error) {

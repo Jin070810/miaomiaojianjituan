@@ -1,0 +1,58 @@
+export type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "challenges" | "announcements" | "logs" | "settings";
+
+export class AdminFetchError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+type Fetcher = typeof fetch;
+
+async function fetchJson(path: string, fallbackMessage: string, fetcher: Fetcher) {
+  const response = await fetcher(path, { cache: "no-store" });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new AdminFetchError(result.error ?? fallbackMessage, response.status);
+  return result;
+}
+
+export async function loadAdminSection(section: AdminSection, fetcher: Fetcher = fetch): Promise<Record<string, unknown>> {
+  if (section === "overview") return { dashboard: await fetchJson("/api/admin/dashboard", "后台概览加载失败", fetcher) };
+  if (section === "settings") return {};
+  if (section === "videos") {
+    const [videos, appeals] = await Promise.all([
+      fetchJson("/api/admin/videos?take=50", "视频记录加载失败", fetcher),
+      fetchJson("/api/admin/video-appeals?take=50", "申诉记录加载失败", fetcher),
+    ]);
+    return { videos, appeals };
+  }
+  if (section === "users") return { users: await fetchJson("/api/admin/users?take=50", "成员列表加载失败", fetcher) };
+  if (section === "points") {
+    const [users, points, pointRules] = await Promise.all([
+      fetchJson("/api/admin/users?take=50", "成员列表加载失败", fetcher),
+      fetchJson("/api/admin/points?take=50", "积分流水加载失败", fetcher),
+      fetchJson("/api/admin/point-rules", "积分规则加载失败", fetcher),
+    ]);
+    return { users, points, pointRules };
+  }
+  if (section === "gifts") {
+    const [gifts, orders] = await Promise.all([
+      fetchJson("/api/admin/gifts", "礼品列表加载失败", fetcher),
+      fetchJson("/api/admin/orders?take=50", "兑换订单加载失败", fetcher),
+    ]);
+    return { gifts, orders };
+  }
+  if (section === "orders") return { orders: await fetchJson("/api/admin/orders?take=50", "兑换订单加载失败", fetcher) };
+  if (section === "rankings") return { rankings: await fetchJson("/api/admin/rankings", "榜单周期加载失败", fetcher) };
+  if (section === "challenges") return { weeklyChallenges: await fetchJson("/api/admin/weekly-challenges?take=10", "周挑战加载失败", fetcher) };
+  if (section === "announcements") {
+    const [announcements, users] = await Promise.all([
+      fetchJson("/api/admin/announcements?take=50", "公告加载失败", fetcher),
+      fetchJson("/api/admin/users?take=50", "成员列表加载失败", fetcher),
+    ]);
+    return { announcements, users };
+  }
+  return { audit: await fetchJson("/api/admin/audit-logs?take=50", "审计日志加载失败", fetcher) };
+}

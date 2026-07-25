@@ -229,8 +229,20 @@ export class BulkPointAdjustmentError extends Error {
   }
 }
 
+export async function resolveBatchMemberIds(
+  selectionMode: "EXPLICIT" | "ALL_ACTIVE_MEMBERS" | undefined,
+  explicitUserIds: string[],
+  listAllActiveMembers: () => Promise<Array<{ id: string }>>,
+) {
+  if (selectionMode === "ALL_ACTIVE_MEMBERS") {
+    return (await listAllActiveMembers()).map((member) => member.id).sort();
+  }
+  return [...new Set(explicitUserIds)].sort();
+}
+
 export async function adminAdjustPointsBatch(input: {
-  userIds: string[];
+  selectionMode?: "EXPLICIT" | "ALL_ACTIVE_MEMBERS";
+  userIds?: string[];
   amount: number;
   reason: string;
   idempotencyKey: string;
@@ -242,11 +254,29 @@ export async function adminAdjustPointsBatch(input: {
   }
   const reason = input.reason.trim();
   if (reason.length < 2 || reason.length > 500) throw new BulkPointAdjustmentError("请填写 2 至 500 字的调整原因");
-  const userIds = [...new Set(input.userIds)].sort();
-  if (userIds.length < 1) throw new BulkPointAdjustmentError("批量调整至少需要选择一名成员");
+  const explicitUserIds = input.userIds ?? [];
+  if (input.selectionMode !== "ALL_ACTIVE_MEMBERS" && explicitUserIds.length < 1) {
+    throw new BulkPointAdjustmentError("批量调整至少需要选择一名成员");
+  }
 
   try {
     return await db.$transaction(async (tx) => {
+      const completedBatch = await tx.pointLedger.findMany({
+        where: { idempotencyKey: { startsWith: `${input.idempotencyKey}:` } },
+        include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
+      });
+      if (input.selectionMode === "ALL_ACTIVE_MEMBERS" && completedBatch.length > 0) {
+        return {
+          idempotencyKey: input.idempotencyKey,
+          adjustments: completedBatch.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
+        };
+      }
+      const userIds = await resolveBatchMemberIds(input.selectionMode, explicitUserIds, () => tx.user.findMany({
+        where: { active: true, role: "MEMBER" },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      }));
+      if (userIds.length < 1) throw new BulkPointAdjustmentError("没有可调整的有效普通成员");
       const keys = userIds.map((userId) => `${input.idempotencyKey}:${userId}`);
       const existing = await tx.pointLedger.findMany({
         where: { idempotencyKey: { in: keys } },
@@ -327,12 +357,11 @@ export async function adminAdjustPointsBatch(input: {
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const keys = userIds.map((userId) => `${input.idempotencyKey}:${userId}`);
       const existing = await db.pointLedger.findMany({
-        where: { idempotencyKey: { in: keys } },
+        where: { idempotencyKey: { startsWith: `${input.idempotencyKey}:` } },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing.length === userIds.length) return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
+      if (existing.length > 0) return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
     }
     throw error;
   }

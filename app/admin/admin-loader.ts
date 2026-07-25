@@ -11,6 +11,16 @@ export class AdminFetchError extends Error {
 
 type Fetcher = typeof fetch;
 
+export function buildAdminUsersPath(input: { page?: number; take?: number; search?: string } = {}) {
+  const params = new URLSearchParams({
+    page: String(input.page ?? 1),
+    take: String(input.take ?? 50),
+  });
+  const search = input.search?.trim();
+  if (search) params.set("search", search);
+  return `/api/admin/users?${params}`;
+}
+
 async function fetchJson(path: string, fallbackMessage: string, fetcher: Fetcher) {
   const response = await fetcher(path, { cache: "no-store" });
   const result = await response.json().catch(() => ({}));
@@ -28,10 +38,10 @@ export async function loadAdminSection(section: AdminSection, fetcher: Fetcher =
     ]);
     return { videos, appeals };
   }
-  if (section === "users") return { users: await fetchJson("/api/admin/users?take=50", "成员列表加载失败", fetcher) };
+  if (section === "users") return { users: await fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher) };
   if (section === "points") {
     const [users, points, pointRules] = await Promise.all([
-      fetchJson("/api/admin/users?take=50", "成员列表加载失败", fetcher),
+      fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher),
       fetchJson("/api/admin/points?take=50", "积分流水加载失败", fetcher),
       fetchJson("/api/admin/point-rules", "积分规则加载失败", fetcher),
     ]);
@@ -50,7 +60,7 @@ export async function loadAdminSection(section: AdminSection, fetcher: Fetcher =
   if (section === "announcements") {
     const [announcements, users] = await Promise.all([
       fetchJson("/api/admin/announcements?take=50", "公告加载失败", fetcher),
-      fetchJson("/api/admin/users?take=50", "成员列表加载失败", fetcher),
+      fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher),
     ]);
     return { announcements, users };
   }

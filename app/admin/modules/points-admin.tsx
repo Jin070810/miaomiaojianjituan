@@ -53,6 +53,7 @@ export function PointsAdmin({
   onLoadMore,
   membersPagination,
   onLoadMoreMembers,
+  onSearchMembers,
 }: {
   users: AdminUserRow[];
   ledger: AdminPointLedgerRow[];
@@ -63,6 +64,7 @@ export function PointsAdmin({
   onLoadMore: () => Promise<void>;
   membersPagination: Pagination;
   onLoadMoreMembers: () => Promise<void>;
+  onSearchMembers: (query: string) => Promise<void>;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectionMode, setSelectionMode] = useState<AdjustmentInput["selectionMode"]>("EXPLICIT");
@@ -77,11 +79,13 @@ export function PointsAdmin({
   const [confirming, setConfirming] = useState(false);
 
   const activeMembers = users.filter((user) => user.active && user.role === "MEMBER");
-  const filteredMembers = activeMembers.filter((user) => {
-    const query = memberSearch.trim().toLowerCase();
-    return !query || user.nickname.toLowerCase().includes(query) || user.kuaishouId.toLowerCase().includes(query);
-  });
+  const filteredMembers = activeMembers;
   const numericAmount = Number(amount);
+
+  async function submitMemberSearch() {
+    setError("");
+    await onSearchMembers(memberSearch.trim());
+  }
 
   function prepareAdjustment() {
     if ((selectionMode === "EXPLICIT" && !selectedIds.length) || !Number.isInteger(numericAmount) || numericAmount === 0 || !reason.trim()) {
@@ -142,7 +146,8 @@ export function PointsAdmin({
           <div className="field admin-panel-form">
             <label htmlFor="points-member-search">成员（{selectionMode === "ALL_ACTIVE_MEMBERS" ? "全部有效普通成员" : `已选 ${selectedIds.length} 人`}）</label>
             <div className="member-picker-toolbar">
-              <div className="admin-search"><Search size={15} /><input id="points-member-search" value={memberSearch} disabled={selectionMode === "ALL_ACTIVE_MEMBERS"} onChange={(event) => setMemberSearch(event.target.value)} placeholder="搜索昵称或快手 ID" /></div>
+              <div className="admin-search"><Search size={15} /><input id="points-member-search" value={memberSearch} disabled={selectionMode === "ALL_ACTIVE_MEMBERS"} onChange={(event) => setMemberSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitMemberSearch(); }} placeholder="搜索昵称或快手 ID" /></div>
+              <button className="icon-button" title="搜索成员" aria-label="搜索成员" disabled={selectionMode === "ALL_ACTIVE_MEMBERS"} onClick={() => void submitMemberSearch()}><Search size={16} /></button>
               <button className="text-button" onClick={() => { setSelectionMode("ALL_ACTIVE_MEMBERS"); setSelectedIds([]); }}>全部有效成员</button>
               <button className="text-button" disabled={selectionMode === "ALL_ACTIVE_MEMBERS"} onClick={() => setSelectedIds((current) => [...new Set([...current, ...filteredMembers.map((user) => user.id)])])}>选择当前结果</button>
               <button className="text-button" onClick={() => { setSelectionMode("EXPLICIT"); setSelectedIds([]); }} disabled={selectionMode === "EXPLICIT" && !selectedIds.length}>清空</button>

@@ -35,7 +35,7 @@ import {
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AdminFetchError, loadAdminSection, type AdminSection } from "./admin-loader";
+import { AdminFetchError, buildAdminUsersPath, loadAdminSection, type AdminSection } from "./admin-loader";
 import { PointsAdmin } from "./modules/points-admin";
 
 type AdminVideo = {
@@ -1353,6 +1353,7 @@ export default function AdminPage() {
   const [videoFilters, setVideoFilters] = useState({ search: "", status: "" });
   const [appealSearch, setAppealSearch] = useState("");
   const [userFilters, setUserFilters] = useState({ search: "", guild: "" });
+  const [pointUserSearch, setPointUserSearch] = useState("");
   const [orderFilters, setOrderFilters] = useState({ search: "", status: "" });
   const [auditSearch, setAuditSearch] = useState("");
   const [auditFilters, setAuditFilters] = useState({ actionPrefix: "", entity: "" });
@@ -1557,19 +1558,25 @@ export default function AdminPage() {
     if (!data || data.usersPagination.page >= data.usersPagination.pages) return;
     await loadUsers({ page: data.usersPagination.page + 1, append: true });
   }
-  async function loadMorePointUsers() {
-    if (!data || data.pointUsersPagination.page >= data.pointUsersPagination.pages) return;
-    const nextPage = data.pointUsersPagination.page + 1;
+  async function loadPointUsers(input: { page?: number; search?: string; append?: boolean }) {
+    if (!data) return;
+    const search = input.search ?? pointUserSearch;
+    const page = input.page ?? 1;
     try {
-      const result = await fetchAdminPage(`/api/admin/users?page=${nextPage}&take=${data.pointUsersPagination.take}`, "成员记录加载失败");
+      const result = await fetchAdminPage(buildAdminUsersPath({ page, take: data.pointUsersPagination.take, search }), "成员记录加载失败");
+      setPointUserSearch(search);
       setData((current) => current ? {
         ...current,
-        pointUsers: [...current.pointUsers, ...(result.users ?? [])],
+        pointUsers: input.append ? [...current.pointUsers, ...(result.users ?? [])] : (result.users ?? []),
         pointUsersPagination: result.pagination,
       } : current);
     } catch (loadError) {
       setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "成员记录加载失败" });
     }
+  }
+  async function loadMorePointUsers() {
+    if (!data || data.pointUsersPagination.page >= data.pointUsersPagination.pages) return;
+    await loadPointUsers({ page: data.pointUsersPagination.page + 1, append: true });
   }
   async function loadOrders(input: { page?: number; search?: string; status?: string; append?: boolean }) {
     if (!data) return;
@@ -1917,7 +1924,7 @@ export default function AdminPage() {
     }
     if (active === "videos") return <VideoManagement videos={data.videos} appeals={data.appeals} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} />;
     if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} />;
-    if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} />;
+    if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;

@@ -56,6 +56,17 @@ docker build --target worker -t miaomiao-points-worker:verify .
 5. 用测试账号验证达标、重复领取、撤销、冲正和竞速改发，运行 `npm run data:reconcile` 与 `npm run ops:daily-check`。
 6. Playwright 在 `390×844` 和 `1440×900` 验证空数据、进行中、已达标、领取成功、竞速结束、运营暂停、生成失败和加载状态。
 
+真实 DeepSeek 影子运行使用全新的 `shadow_`/`staging_` 独立 schema：
+
+```powershell
+$env:DATABASE_URL="postgresql://.../miaomiao?schema=shadow_v13_rc"
+npx prisma migrate deploy
+$env:WEEKLY_CHALLENGE_SHADOW_CONFIRM="I_UNDERSTAND_PAID_DEEPSEEK_SHADOW"
+npm run weekly:shadow
+```
+
+保存脚本输出、告警接收记录和后台截图作为发布记录。脚本会拒绝 `public` 或任何非空 schema，不使用真实成员资料，不会开启周挑战积分发放，并要求结果告警成功送达。
+
 ## 上线与回滚
 
 - 首次上线开关默认关闭；真实 DeepSeek 与告警已验证、影子运行完成并由维护者明确确认后才能开启。

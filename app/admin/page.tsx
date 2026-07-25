@@ -183,6 +183,11 @@ type AdminWeeklyChallengePeriod = {
   failureReason: string | null;
   _count: { assignments: number; attempts: number };
   rewardSummary: Array<{ status: string; _count: { id: number }; _sum: { rewardPoints: number | null } }>;
+  taskDistribution: Array<{
+    type: "VIDEO_COUNT" | "LIKE_SUM" | "COMBINED";
+    _count: { id: number };
+    _avg: { rewardPoints: number | null; difficultyScore: number | null };
+  }>;
   raceWinner: { rewardPoints: number; wonAt: string; reversedAt: string | null; user: { nickname: string; kuaishouId: string } } | null;
 };
 type AdminWeeklyChallengeDetail = AdminWeeklyChallengePeriod & {
@@ -1253,15 +1258,17 @@ function WeeklyChallengesAdmin({
         <div className="admin-panel-head"><div><h2>任务周期</h2><p>个人周池固定 10,000 分，竞速奖励固定 2,000 分</p></div></div>
         <div className="data-table-wrap">
           <table className="data-table weekly-period-table">
-            <thead><tr><th>周期</th><th>状态</th><th>覆盖</th><th>理论奖励</th><th>模型</th><th>竞速冠军</th><th /></tr></thead>
+            <thead><tr><th>周期</th><th>状态</th><th>覆盖</th><th>匿名任务分布</th><th>理论奖励</th><th>模型</th><th>竞速冠军</th><th /></tr></thead>
             <tbody>
               {periods.map((period) => {
                 const rewardTotal = period.rewardSummary.reduce((sum, row) => sum + (row._sum.rewardPoints ?? 0), 0);
+                const distribution = new Map(period.taskDistribution.map((row) => [row.type, row._count.id]));
                 return (
                   <tr key={period.id}>
                     <td><strong>{formatAdminDate(period.periodStart)} 起</strong><small>至 {formatAdminDate(period.periodEnd)}</small></td>
                     <td><span className={`status-chip ${period.status === "FAILED" ? "danger" : period.status === "ACTIVE" ? "success" : "warning"}`}>{statusLabel[period.status]}</span>{period.failureReason && <small className="challenge-failure">{period.failureReason}</small>}</td>
                     <td><strong>{period._count.assignments} / {period.audienceCount}</strong><small>{period._count.attempts} 次模型调用</small></td>
+                    <td><strong>数量 {distribution.get("VIDEO_COUNT") ?? 0}</strong><small>点赞 {distribution.get("LIKE_SUM") ?? 0} · 组合 {distribution.get("COMBINED") ?? 0}</small></td>
                     <td><strong>{rewardTotal.toLocaleString()} 分</strong><small>上限 {period.personalRewardBudget.toLocaleString()}</small></td>
                     <td><strong>{period.model}</strong><small>{period.promptVersion}</small></td>
                     <td>{period.raceWinner && !period.raceWinner.reversedAt ? <><strong>{period.raceWinner.user.nickname}</strong><small>{period.raceWinner.rewardPoints.toLocaleString()} 分</small></> : <span>尚未产生</span>}</td>
@@ -1282,6 +1289,7 @@ function WeeklyChallengesAdmin({
               <div><span>成员任务</span><strong>{detail.assignments.length}</strong></div>
               <div><span>已达标/领取</span><strong>{detail.assignments.filter((row) => ["COMPLETED", "CLAIMED"].includes(row.status)).length}</strong></div>
               <div><span>模型批次</span><strong>{detail.attempts.length}</strong></div>
+              <div><span>模型成本（Token）</span><strong>{detail.attempts.reduce((sum, row) => sum + (row.inputTokens ?? 0) + (row.outputTokens ?? 0), 0).toLocaleString()}</strong></div>
             </div>
             <div className="data-table-wrap challenge-detail-table">
               <table className="data-table weekly-assignment-table">

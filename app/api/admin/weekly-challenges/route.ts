@@ -21,18 +21,27 @@ export async function GET(request: Request) {
       }),
       db.weeklyChallengePeriod.count(),
     ]);
-    const rewardRows = periods.length
-      ? await db.weeklyChallengeAssignment.groupBy({
-          by: ["periodId", "status"],
-          where: { periodId: { in: periods.map((period) => period.id) } },
-          _count: { id: true },
-          _sum: { rewardPoints: true },
-        })
-      : [];
+    const [rewardRows, taskDistribution] = periods.length
+      ? await Promise.all([
+          db.weeklyChallengeAssignment.groupBy({
+            by: ["periodId", "status"],
+            where: { periodId: { in: periods.map((period) => period.id) } },
+            _count: { id: true },
+            _sum: { rewardPoints: true },
+          }),
+          db.weeklyChallengeAssignment.groupBy({
+            by: ["periodId", "type"],
+            where: { periodId: { in: periods.map((period) => period.id) } },
+            _count: { id: true },
+            _avg: { rewardPoints: true, difficultyScore: true },
+          }),
+        ])
+      : [[], []];
     return NextResponse.json({
       periods: periods.map((period) => ({
         ...period,
         rewardSummary: rewardRows.filter((row) => row.periodId === period.id),
+        taskDistribution: taskDistribution.filter((row) => row.periodId === period.id),
       })),
       pagination: paginationResult(page, take, total),
     });

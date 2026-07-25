@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { generateWeeklyChallengePeriod } from "@/lib/weekly-challenge-generation";
 import {
+  activateAndCloseWeeklyChallenges,
   claimWeeklyChallenge,
   shanghaiWeekBounds,
 } from "@/lib/weekly-challenges";
@@ -183,6 +184,66 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       where: { periodId: period.id, status: "FAILED" },
     })).toBe(3);
   }, 30_000);
+
+  it("cancels a ready period that missed its activation window", async () => {
+    const user = await db.user.create({
+      data: {
+        kuaishouId: `weekly-missed-activation-${suffix}`,
+        nickname: "错过激活测试成员",
+        passwordHash: "test",
+        role: "MEMBER",
+        active: true,
+      },
+    });
+    userIds.push(user.id);
+    const period = await db.weeklyChallengePeriod.create({
+      data: {
+        periodStart: new Date("2025-01-05T16:00:00.000Z"),
+        periodEnd: new Date("2025-01-12T16:00:00.000Z"),
+        claimEndsAt: new Date("2025-01-15T16:00:00.000Z"),
+        status: "READY",
+        model: "mock",
+        audienceSnapshot: [user.id],
+        audienceCount: 1,
+        assignments: {
+          create: {
+            userId: user.id,
+            type: "VIDEO_COUNT",
+            baselineVideoCount: 0,
+            baselineLikes: 0,
+            weeklyVideoCounts: [0, 0, 0, 0],
+            weeklyLikeSums: [0, 0, 0, 0],
+            targetVideoCount: 2,
+            rewardPoints: 100,
+            difficultyScore: 200,
+            title: "错过激活任务",
+            description: "该任务不应在周期结束后发布",
+            aiReason: "生命周期集成测试",
+          },
+        },
+      },
+    });
+    periodIds.push(period.id);
+
+    const lifecycle = await activateAndCloseWeeklyChallenges(new Date("2025-01-16T00:00:00.000Z"));
+
+    expect(lifecycle.cancelled).toBe(1);
+    expect(lifecycle.cancelledAssignments).toBe(1);
+    expect(await db.weeklyChallengePeriod.findUniqueOrThrow({ where: { id: period.id } })).toMatchObject({
+      status: "CANCELLED",
+      failureReason: "周期结束前未激活，任务未发布",
+    });
+    expect(await db.weeklyChallengeAssignment.findFirstOrThrow({ where: { periodId: period.id } })).toMatchObject({
+      status: "EXPIRED",
+    });
+    expect(await db.auditLog.findFirst({
+      where: {
+        action: "WEEKLY_CHALLENGE_PERIOD_CANCELLED",
+        entity: "WeeklyChallengePeriod",
+        entityId: period.id,
+      },
+    })).not.toBeNull();
+  });
 
   for (const [mode, periodStart] of providerFailureCases) {
     it(`fails atomically after three ${mode} provider responses`, async () => {

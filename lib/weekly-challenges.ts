@@ -462,6 +462,15 @@ export async function activateAndCloseWeeklyChallenges(now = new Date()) {
       });
       if (changed.count !== 1) continue;
       activated += 1;
+      await tx.auditLog.create({
+        data: {
+          action: "WEEKLY_CHALLENGE_PERIOD_ACTIVATED",
+          entity: "WeeklyChallengePeriod",
+          entityId: period.id,
+          beforeValue: { status: "READY" },
+          afterValue: { status: "ACTIVE", activatedAt: now },
+        },
+      });
       for (const assignment of period.assignments) {
         await createNotification(tx, {
           userId: assignment.userId,
@@ -475,6 +484,43 @@ export async function activateAndCloseWeeklyChallenges(now = new Date()) {
         });
       }
     }
+    const missedPeriods = await tx.weeklyChallengePeriod.findMany({
+      where: { status: "READY", periodEnd: { lte: now } },
+      select: { id: true },
+    });
+    let cancelled = 0;
+    let cancelledAssignments = 0;
+    for (const period of missedPeriods) {
+      const changed = await tx.weeklyChallengePeriod.updateMany({
+        where: { id: period.id, status: "READY" },
+        data: {
+          status: "CANCELLED",
+          closedAt: now,
+          failureReason: "周期结束前未激活，任务未发布",
+        },
+      });
+      if (changed.count !== 1) continue;
+      cancelled += 1;
+      const expiredForPeriod = (await tx.weeklyChallengeAssignment.updateMany({
+        where: { periodId: period.id, status: "ACTIVE" },
+        data: { status: "EXPIRED" },
+      })).count;
+      cancelledAssignments += expiredForPeriod;
+      await tx.auditLog.create({
+        data: {
+          action: "WEEKLY_CHALLENGE_PERIOD_CANCELLED",
+          entity: "WeeklyChallengePeriod",
+          entityId: period.id,
+          beforeValue: { status: "READY" },
+          afterValue: {
+            status: "CANCELLED",
+            closedAt: now,
+            expiredAssignments: expiredForPeriod,
+          },
+          reason: "周期结束前未激活，任务未发布",
+        },
+      });
+    }
     const closed = await tx.weeklyChallengePeriod.updateMany({
       where: { status: "ACTIVE", periodEnd: { lte: now } },
       data: { status: "CLOSED", closedAt: now },
@@ -486,7 +532,13 @@ export async function activateAndCloseWeeklyChallenges(now = new Date()) {
       },
       data: { status: "EXPIRED" },
     });
-    return { activated, closed: closed.count, expired: expired.count };
+    return {
+      activated,
+      cancelled,
+      cancelledAssignments,
+      closed: closed.count,
+      expired: expired.count,
+    };
   });
 }
 

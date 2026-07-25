@@ -113,6 +113,9 @@ async function main() {
     ...(worker !== "ok" ? [`Worker 状态：${worker}`] : []),
     ...(queue && queue.waiting > Number(process.env.QUEUE_WAITING_ALERT_THRESHOLD ?? 1000) ? [`队列等待任务：${queue.waiting}`] : []),
     ...(weeklyChallengeSetting?.enabled && !currentChallengePeriod ? ["当前周挑战周期缺失"] : []),
+    ...(weeklyChallengeSetting?.enabled && currentChallengePeriod
+      && ["FAILED", "CANCELLED"].includes(currentChallengePeriod.status)
+      ? [`当前周挑战周期状态异常：${currentChallengePeriod.status}`] : []),
     ...(currentChallengePeriod && currentChallengePeriod.status === "ACTIVE"
       && currentChallengePeriod._count.assignments !== currentChallengePeriod.audienceCount
       ? [`当前周挑战覆盖异常：${currentChallengePeriod._count.assignments}/${currentChallengePeriod.audienceCount}`] : []),

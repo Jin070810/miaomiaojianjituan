@@ -6,9 +6,14 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 
 const schema = z.object({
-  userIds: z.array(z.string().min(1)).min(1),
+  selectionMode: z.enum(["EXPLICIT", "ALL_ACTIVE_MEMBERS"]).default("EXPLICIT"),
+  userIds: z.array(z.string().min(1)).optional(),
   amount: z.number().int().min(-1_000_000).max(1_000_000).refine((amount) => amount !== 0),
   reason: z.string().trim().min(2).max(500),
+}).superRefine((input, context) => {
+  if (input.selectionMode === "EXPLICIT" && !input.userIds?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["userIds"], message: "至少选择一名成员" });
+  }
 });
 
 export async function POST(request: Request) {

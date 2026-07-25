@@ -3033,6 +3033,39 @@ a {
   padding: 37px 38px 60px;
 }
 
+.admin-module-state {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.admin-module-state > svg {
+  color: var(--brand-strong);
+}
+
+.admin-module-state > strong {
+  max-width: 520px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.admin-module-loading {
+  width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--brand-strong);
+  animation: admin-module-loading 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes admin-module-loading {
+  from { transform: scaleX(0.35); opacity: 0.45; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
 .admin-page-title {
   margin-bottom: 27px;
   display: flex;

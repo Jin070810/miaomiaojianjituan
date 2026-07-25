@@ -28,7 +28,7 @@
 
 周挑战首次启用或恢复发放时，使用 `Weekly Challenge Production Switch` workflow，不直接修改生产数据库。输入当前生产完整 commit SHA、成功的 `Weekly Challenge DeepSeek Shadow` run ID，选择 `enabled=true` 并确认生产变更。workflow 会验证双周期 300 人影子报告、奖励预算、最终失败批次、App/Worker SHA、DeepSeek 配置和健康状态，再通过管理员 API 更新开关并写入审计日志。
 
-紧急停止时运行同一 workflow 并选择 `enabled=false`。关闭后不激活新周期、不允许领取个人奖励，也不发放竞速奖励；历史任务和审计记录保留。
+紧急停止时运行同一 workflow 并选择 `enabled=false`；关闭路径不依赖历史影子 artifact 或健康全绿，只要求管理员 API 成功并确认开关已关闭。关闭后不激活新周期、不允许领取个人奖励，也不发放竞速奖励；历史任务和审计记录保留。
 
 生产 SSH 只允许密钥认证。日常发布使用专用 `deploy` 账号；不得在 workflow 或仓库中保存 root 密码、私钥或服务器 `.env.production`。
 

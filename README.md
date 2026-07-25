@@ -64,7 +64,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 ## v1.2.1 稳定性增强
 
 - 管理后台“系统设置”提供视频提交、积分转账和礼品兑换三个服务端运营开关；关闭入口不影响后台处理已有数据。
-- `ALERT_WEBHOOK_URL` 可接入外部告警系统；Worker 失败、Redis/Worker 不可用、队列滞留、每日对账异常和备份异常会发送脱敏告警。
+- 告警支持二选一或同时配置：`ALERT_WEBHOOK_URL` 接入外部 HTTP 系统；或者使用 `ALERT_EMAIL_TO`、`ALERT_SMTP_HOST`、`ALERT_SMTP_USER`、`ALERT_SMTP_PASSWORD` 配置 SMTP 邮件。Worker 失败、Redis/Worker 不可用、队列滞留、每日对账异常和备份异常都会发送递归脱敏后的告警。163 邮箱使用 `smtp.163.com:465`、`ALERT_SMTP_SECURE=true`，密码必须填写客户端授权码而不是网页登录密码。
 - 每日巡检执行 `npm run ops:daily-check`，备份校验执行 `npm run ops:verify-backups`；建议由 cron/任务计划程序运行并保留输出。
 - 管理后台系统设置可导出订单、积分、视频和审计四类脱敏 CSV；CSV 已防止公式注入，手机号、地址、收款码、密码和原始抓取 payload 不导出。
 
@@ -79,13 +79,15 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 - 视频撤销会在同一事务内重新计算任务，必要时冲正个人与竞速积分，并把竞速奖励改发给仍达标且最早完成的成员。
 - 管理后台可查看周期覆盖、预算、任务分布、模型批次和失败原因；“周挑战积分发放”开关默认关闭，关闭时保留只读查询。
 
-本地或 staging 配置 `DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `ALERT_WEBHOOK_URL` 后再启用周挑战。测试使用本地模拟服务，不读取真实密钥。生产镜像还必须在构建时注入 `APP_COMMIT_SHA` 与 `APP_BUILD_TIME`；健康接口会返回 App/Worker 版本并拒绝版本不一致的部署。
+本地或 staging 配置 `DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`，并配置 Webhook 或完整 SMTP 邮件告警后再启用周挑战。测试使用本地模拟服务，不读取真实密钥。生产镜像还必须在构建时注入 `APP_COMMIT_SHA` 与 `APP_BUILD_TIME`；健康接口会返回 App/Worker 版本并拒绝版本不一致的部署。
 
-真实 DeepSeek 上线验收必须使用全新的独立 PostgreSQL schema，名称以 `shadow_` 或 `staging_` 开头。先执行 migration，再设置 `WEEKLY_CHALLENGE_SHADOW_CONFIRM=I_UNDERSTAND_PAID_DEEPSEEK_SHADOW` 并运行 `npm run weekly:shadow`；脚本会生成 300 名纯合成匿名成员、回放五周聚合数据并连续生成两个挑战周期。脚本拒绝非空 schema 和 `public`，始终保持积分发放开关关闭，只输出覆盖、任务分布、预算、重试和 Token 聚合；完成后还必须成功发送一次告警，借此验证 `ALERT_WEBHOOK_URL`。
+真实 DeepSeek 上线验收必须使用全新的独立 PostgreSQL schema，名称以 `shadow_` 或 `staging_` 开头。先执行 migration，再设置 `WEEKLY_CHALLENGE_SHADOW_CONFIRM=I_UNDERSTAND_PAID_DEEPSEEK_SHADOW` 并运行 `npm run weekly:shadow`；脚本会生成 300 名纯合成匿名成员、回放五周聚合数据并连续生成两个挑战周期。脚本拒绝非空 schema 和 `public`，始终保持积分发放开关关闭，只输出覆盖、任务分布、预算、重试和 Token 聚合；完成后还必须成功发送一次 Webhook 或 SMTP 邮件告警。
 
 合并到 `main` 后也可以手动运行 GitHub Actions 的 `Weekly Challenge DeepSeek Shadow` workflow。该任务只使用 Actions 临时 PostgreSQL 服务，不连接生产数据库；DeepSeek 与告警配置从 `production` Environment 注入，聚合报告作为 30 天 artifact 留存。
 
-正式发布从 GitHub `production` Environment 读取变量 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 和 Secrets `DEEPSEEK_API_KEY`、`ALERT_WEBHOOK_URL`，由部署 workflow 写入服务器环境文件；禁止将这些密钥提交到仓库。
+正式发布从 GitHub `production` Environment 读取 DeepSeek 配置，以及 Webhook Secret 或 SMTP Variables/Secrets，由部署 workflow 写入服务器环境文件。包含手机号的收件地址和 SMTP 发件账号也按 Secret 管理；`DEEPSEEK_API_KEY`、`ALERT_WEBHOOK_URL`、`ALERT_EMAIL_TO`、`ALERT_EMAIL_FROM`、`ALERT_SMTP_USER`、`ALERT_SMTP_PASSWORD` 禁止提交到仓库。
+
+告警尚未配置时只允许使用部署 workflow 的 `confirm_alert_deferred` 显式受控灰度；workflow 会写入 `ALERTS_DEFERRED=true`，并把 `weeklyChallenges.enabled == false` 作为发布成功条件。该模式只能部署代码，不能启用周挑战或运行付费影子任务；补齐并验证告警后应恢复 `ALERTS_DEFERRED=false`。
 
 v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新增枚举、表、关系和索引。应用回滚时关闭周挑战开关并回退 Web/Worker，保留新增表和积分审计历史，不回退已执行 migration。完整验收与影子运行要求见 [`docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md`](docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md)。
 

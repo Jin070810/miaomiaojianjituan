@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { operationalAlertConfigurationStatus } from "@/lib/alerts";
 import { db } from "@/lib/db";
 import { runtimeConfigIssues } from "@/lib/config";
 import { checkRateLimitStore } from "@/lib/rate-limit";
@@ -36,7 +37,7 @@ export async function GET() {
     const weeklyChallengeIssue = process.env.NODE_ENV === "production" && weeklyChallenges?.enabled
       ? [
           ...(!weeklyChallenges.providerConfigured ? ["周挑战已启用但DeepSeek配置不完整"] : []),
-          ...(!process.env.ALERT_WEBHOOK_URL?.trim() ? ["周挑战已启用但告警Webhook未配置"] : []),
+          ...(!operationalAlertConfigurationStatus().configured ? ["周挑战已启用但告警通道未配置"] : []),
         ]
       : [];
     const weeklyChallengeStatusIssue = process.env.NODE_ENV === "production" && !weeklyChallenges

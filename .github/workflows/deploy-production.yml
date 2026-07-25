@@ -22,6 +22,11 @@ on:
         required: true
         default: false
         type: boolean
+      confirm_alert_deferred:
+        description: "仅在告警稍后配置且周挑战保持关闭时勾选；部署会强制验证开关关闭"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -103,11 +108,41 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_SMTP_HOST: ${{ vars.ALERT_SMTP_HOST }}
+          ALERT_SMTP_PORT: ${{ vars.ALERT_SMTP_PORT }}
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          ALERT_SMTP_SECURE: ${{ vars.ALERT_SMTP_SECURE }}
+          ALERTS_DEFERRED: ${{ inputs.confirm_alert_deferred }}
         run: |
           [[ "$DEEPSEEK_BASE_URL" == https://* ]]
           test -n "$DEEPSEEK_API_KEY"
           test -n "$DEEPSEEK_MODEL"
-          [[ "$ALERT_WEBHOOK_URL" == https://* ]]
+          webhook_configured=false
+          email_configured=false
+          if [[ -n "$ALERT_WEBHOOK_URL" ]]; then
+            [[ "$ALERT_WEBHOOK_URL" == https://* ]]
+            webhook_configured=true
+          fi
+          if [[ -n "$ALERT_EMAIL_TO" || -n "$ALERT_SMTP_HOST" || -n "$ALERT_SMTP_USER" || -n "$ALERT_SMTP_PASSWORD" ]]; then
+            if [[ -n "$ALERT_EMAIL_TO" && -n "$ALERT_SMTP_HOST" && -n "$ALERT_SMTP_USER" && -n "$ALERT_SMTP_PASSWORD" ]]; then
+              [[ -z "$ALERT_SMTP_PORT" || "$ALERT_SMTP_PORT" =~ ^[0-9]+$ ]]
+              if [[ -n "$ALERT_SMTP_PORT" ]]; then
+                (( ALERT_SMTP_PORT >= 1 && ALERT_SMTP_PORT <= 65535 ))
+              fi
+              [[ -z "$ALERT_SMTP_SECURE" || "$ALERT_SMTP_SECURE" == "true" || "$ALERT_SMTP_SECURE" == "false" ]]
+              email_configured=true
+            elif [[ "$ALERTS_DEFERRED" != "true" ]]; then
+              echo "SMTP 邮件告警配置不完整" >&2
+              exit 1
+            fi
+          fi
+          if [[ "$webhook_configured" != "true" && "$email_configured" != "true" ]]; then
+            [[ "$ALERTS_DEFERRED" == "true" ]]
+            echo "::warning::告警通道已明确延期，本次部署必须保持周挑战关闭"
+          fi
           # shellcheck disable=SC2029
           {
             cat <<'REMOTE_SCRIPT'
@@ -133,6 +168,14 @@ jobs:
             printf 'upsert_env DEEPSEEK_API_KEY %q\n' "$DEEPSEEK_API_KEY"
             printf 'upsert_env DEEPSEEK_MODEL %q\n' "$DEEPSEEK_MODEL"
             printf 'upsert_env ALERT_WEBHOOK_URL %q\n' "$ALERT_WEBHOOK_URL"
+            printf 'upsert_env ALERT_EMAIL_TO %q\n' "$ALERT_EMAIL_TO"
+            printf 'upsert_env ALERT_EMAIL_FROM %q\n' "$ALERT_EMAIL_FROM"
+            printf 'upsert_env ALERT_SMTP_HOST %q\n' "$ALERT_SMTP_HOST"
+            printf 'upsert_env ALERT_SMTP_PORT %q\n' "$ALERT_SMTP_PORT"
+            printf 'upsert_env ALERT_SMTP_USER %q\n' "$ALERT_SMTP_USER"
+            printf 'upsert_env ALERT_SMTP_PASSWORD %q\n' "$ALERT_SMTP_PASSWORD"
+            printf 'upsert_env ALERT_SMTP_SECURE %q\n' "$ALERT_SMTP_SECURE"
+            printf 'upsert_env ALERTS_DEFERRED %q\n' "$ALERTS_DEFERRED"
           } | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
             "bash -s -- $(printf '%q' "$PRODUCTION_PATH/.env.production")"
 
@@ -192,12 +235,16 @@ jobs:
         env:
           PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
+          ALERTS_DEFERRED: ${{ inputs.confirm_alert_deferred }}
         run: |
           for _ in {1..12}; do
             if health_json="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"; then
               printf '%s\n' "$health_json"
-              if jq -e --arg sha "$RELEASE_COMMIT" \
-                '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' \
+              if jq -e --arg sha "$RELEASE_COMMIT" --arg deferred "$ALERTS_DEFERRED" \
+                '.ok == true
+                  and .app.commit == $sha
+                  and .workerVersion.commit == $sha
+                  and ($deferred != "true" or .weeklyChallenges.enabled == false)' \
                 <<<"$health_json" >/dev/null; then
                 exit 0
               fi

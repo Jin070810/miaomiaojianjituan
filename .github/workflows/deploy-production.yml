@@ -99,7 +99,7 @@ jobs:
           EOF
           chmod 600 "$HOME/.ssh/config"
 
-      - name: Inject DeepSeek, alert, and OSS backup configuration
+      - name: Inject DeepSeek, alert, and backup configuration
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
@@ -116,6 +116,7 @@ jobs:
           ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
           ALERT_SMTP_SECURE: ${{ vars.ALERT_SMTP_SECURE }}
           ALERTS_DEFERRED: ${{ inputs.confirm_alert_deferred }}
+          BACKUP_STORAGE_MODE: ${{ vars.BACKUP_STORAGE_MODE }}
           OSS_BUCKET: ${{ vars.OSS_BUCKET }}
           OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT }}
           OSS_ECS_ROLE_NAME: ${{ vars.OSS_ECS_ROLE_NAME }}
@@ -148,12 +149,16 @@ jobs:
             [[ "$ALERTS_DEFERRED" == "true" ]]
             echo "::warning::告警通道已明确延期，本次部署必须保持周挑战关闭"
           fi
-          [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]
-          [[ "$OSS_ENDPOINT" =~ ^https://[^/]+\.aliyuncs\.com/?$ ]]
-          [[ "$OSS_ECS_ROLE_NAME" =~ ^[A-Za-z0-9_-]{1,64}$ ]]
-          [[ "${OSS_PREFIX:-miaomiao/production}" =~ ^[A-Za-z0-9/_-]{1,240}$ ]]
+          backup_storage_mode="${BACKUP_STORAGE_MODE:-local}"
+          [[ "$backup_storage_mode" == "local" || "$backup_storage_mode" == "oss" ]]
           [[ "${LOCAL_BACKUP_RETENTION_DAYS:-7}" =~ ^[0-9]+$ ]]
           (( ${LOCAL_BACKUP_RETENTION_DAYS:-7} >= 1 && ${LOCAL_BACKUP_RETENTION_DAYS:-7} <= 90 ))
+          if [[ "$backup_storage_mode" == "oss" ]]; then
+            [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]
+            [[ "$OSS_ENDPOINT" =~ ^https://[^/]+\.aliyuncs\.com/?$ ]]
+            [[ "$OSS_ECS_ROLE_NAME" =~ ^[A-Za-z0-9_-]{1,64}$ ]]
+            [[ "${OSS_PREFIX:-miaomiao/production}" =~ ^[A-Za-z0-9/_-]{1,240}$ ]]
+          fi
           # shellcheck disable=SC2029
           {
             cat <<'REMOTE_SCRIPT'
@@ -187,6 +192,7 @@ jobs:
             printf 'upsert_env ALERT_SMTP_PASSWORD %q\n' "$ALERT_SMTP_PASSWORD"
             printf 'upsert_env ALERT_SMTP_SECURE %q\n' "$ALERT_SMTP_SECURE"
             printf 'upsert_env ALERTS_DEFERRED %q\n' "$ALERTS_DEFERRED"
+            printf 'upsert_env BACKUP_STORAGE_MODE %q\n' "$backup_storage_mode"
             printf 'upsert_env OSS_BUCKET %q\n' "$OSS_BUCKET"
             printf 'upsert_env OSS_ENDPOINT %q\n' "$OSS_ENDPOINT"
             printf 'upsert_env OSS_ECS_ROLE_NAME %q\n' "$OSS_ECS_ROLE_NAME"

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertOssEndpointRegion, buildBackupObjectKey, loadOssBackupConfig, parseChecksumFile, pruneLocalBackups, sha256File } from "@/lib/oss-backup";
+import { assertOssEndpointRegion, buildBackupObjectKey, loadBackupStorageConfig, loadOssBackupConfig, parseChecksumFile, pruneLocalBackups, sha256File } from "@/lib/oss-backup";
 
 const originalEnvironment = { ...process.env };
 const temporaryDirectories: string[] = [];
@@ -13,7 +13,26 @@ afterEach(async () => {
 });
 
 describe("OSS backup helpers", () => {
+  it("defaults to local storage without requiring OSS configuration", () => {
+    delete process.env.BACKUP_STORAGE_MODE;
+    delete process.env.OSS_BUCKET;
+    delete process.env.OSS_ENDPOINT;
+    delete process.env.OSS_ECS_ROLE_NAME;
+    process.env.LOCAL_BACKUP_RETENTION_DAYS = "7";
+    expect(loadBackupStorageConfig()).toEqual({ mode: "local", localRetentionDays: 7 });
+    expect(() => loadOssBackupConfig()).toThrow("必须为 oss");
+  });
+
+  it("rejects invalid storage modes and retention", () => {
+    process.env.BACKUP_STORAGE_MODE = "s3";
+    expect(() => loadBackupStorageConfig()).toThrow("local 或 oss");
+    process.env.BACKUP_STORAGE_MODE = "local";
+    process.env.LOCAL_BACKUP_RETENTION_DAYS = "0";
+    expect(() => loadBackupStorageConfig()).toThrow("1 到 90");
+  });
+
   it("validates secretless ECS role configuration", () => {
+    process.env.BACKUP_STORAGE_MODE = "oss";
     process.env.OSS_BUCKET = "miaomiao-points-prod-backup-123-cn-hangzhou";
     process.env.OSS_ENDPOINT = "https://oss-cn-hangzhou.aliyuncs.com";
     process.env.OSS_ECS_ROLE_NAME = "miaomiao-points-backup-role";
@@ -29,6 +48,7 @@ describe("OSS backup helpers", () => {
   });
 
   it("rejects non-Aliyun endpoints and traversal prefixes", () => {
+    process.env.BACKUP_STORAGE_MODE = "oss";
     process.env.OSS_BUCKET = "miaomiao-backup-test";
     process.env.OSS_ENDPOINT = "https://example.com";
     process.env.OSS_ECS_ROLE_NAME = "backup-role";

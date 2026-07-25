@@ -24,18 +24,34 @@ export type OssBackupConfig = {
   localRetentionDays: number;
 };
 
+export type BackupStorageConfig = {
+  mode: "local" | "oss";
+  localRetentionDays: number;
+};
+
 function requiredEnvironment(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`缺少 ${name}`);
   return value;
 }
 
+export function loadBackupStorageConfig(): BackupStorageConfig {
+  const mode = (process.env.BACKUP_STORAGE_MODE?.trim().toLowerCase() || "local") as BackupStorageConfig["mode"];
+  const localRetentionDays = Number(process.env.LOCAL_BACKUP_RETENTION_DAYS ?? 7);
+  if (mode !== "local" && mode !== "oss") throw new Error("BACKUP_STORAGE_MODE 必须是 local 或 oss");
+  if (!Number.isInteger(localRetentionDays) || localRetentionDays < 1 || localRetentionDays > 90) {
+    throw new Error("LOCAL_BACKUP_RETENTION_DAYS 必须是 1 到 90 的整数");
+  }
+  return { mode, localRetentionDays };
+}
+
 export function loadOssBackupConfig(): OssBackupConfig {
+  const storage = loadBackupStorageConfig();
+  if (storage.mode !== "oss") throw new Error("BACKUP_STORAGE_MODE 必须为 oss 才能使用 OSS");
   const bucket = requiredEnvironment("OSS_BUCKET");
   const endpoint = requiredEnvironment("OSS_ENDPOINT");
   const roleName = requiredEnvironment("OSS_ECS_ROLE_NAME");
   const prefix = (process.env.OSS_PREFIX?.trim() || "miaomiao/production").replace(/^\/+|\/+$/g, "");
-  const localRetentionDays = Number(process.env.LOCAL_BACKUP_RETENTION_DAYS ?? 7);
   if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket)) throw new Error("OSS_BUCKET 格式无效");
   const endpointUrl = new URL(endpoint);
   if (endpointUrl.protocol !== "https:" || !endpointUrl.hostname.endsWith(".aliyuncs.com")) {
@@ -43,10 +59,7 @@ export function loadOssBackupConfig(): OssBackupConfig {
   }
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(roleName)) throw new Error("OSS_ECS_ROLE_NAME 格式无效");
   if (!/^[A-Za-z0-9/_-]{1,240}$/.test(prefix) || prefix.includes("..")) throw new Error("OSS_PREFIX 格式无效");
-  if (!Number.isInteger(localRetentionDays) || localRetentionDays < 1 || localRetentionDays > 90) {
-    throw new Error("LOCAL_BACKUP_RETENTION_DAYS 必须是 1 到 90 的整数");
-  }
-  return { bucket, endpoint: endpointUrl.origin, roleName, prefix, localRetentionDays };
+  return { bucket, endpoint: endpointUrl.origin, roleName, prefix, localRetentionDays: storage.localRetentionDays };
 }
 
 export function assertOssEndpointRegion(endpoint: string, regionId: string) {

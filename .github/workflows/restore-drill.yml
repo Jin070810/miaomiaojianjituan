@@ -1,4 +1,4 @@
-name: Monthly OSS Restore Drill
+name: Monthly Database Restore Drill
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-oss-restore-drill
+  group: production-database-restore-drill
   cancel-in-progress: false
 
 jobs:
@@ -30,26 +30,30 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
 
-      - name: Restore latest OSS backup into isolated PostgreSQL
+      - name: Restore latest backup into isolated PostgreSQL
         timeout-minutes: 20
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
           RUN_ID: ${{ github.run_id }}
+          BACKUP_STORAGE_MODE: ${{ vars.BACKUP_STORAGE_MODE }}
         run: |
           test -n "$PRODUCTION_PATH"
+          backup_storage_mode="${BACKUP_STORAGE_MODE:-local}"
+          [[ "$backup_storage_mode" == "local" || "$backup_storage_mode" == "oss" ]]
           remote_script="$(cat <<'REMOTE_SCRIPT'
           set -euo pipefail
           project_path="$1"
           run_id="$2"
+          storage_mode="$3"
           [[ "$run_id" =~ ^[0-9]+$ ]]
           cd "$project_path"
           container="miaomiao-restore-drill-$run_id"
           drill_dir="backups/restore-drill-$run_id"
           alert_failure() {
             docker compose --env-file .env.production run --rm --no-deps worker \
-              npm run ops:alert -- --source backup-restore-drill --severity critical --message "OSS 数据库月度恢复演练失败" || true
+              npm run ops:alert -- --source backup-restore-drill --severity critical --message "数据库月度恢复演练失败" || true
           }
           finish() {
             status=$?
@@ -61,8 +65,16 @@ jobs:
           }
           trap finish EXIT
           mkdir -m 700 -p "$drill_dir"
-          docker compose --env-file .env.production run --rm --no-deps worker \
-            npm run ops:download-backup -- --output "/app/backups/restore-drill-$run_id"
+          if [[ "$storage_mode" == "oss" ]]; then
+            docker compose --env-file .env.production run --rm --no-deps worker \
+              npm run ops:download-backup -- --output "/app/backups/restore-drill-$run_id"
+          else
+            source_backup="$(find backups -maxdepth 1 -type f -name 'miaomiao-*.dump' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+            test -n "$source_backup"
+            test -f "$source_backup.sha256"
+            sha256sum --check "$source_backup.sha256"
+            cp -- "$source_backup" "$drill_dir/$(basename "$source_backup")"
+          fi
           backup_file="$(find "$drill_dir" -maxdepth 1 -type f -name 'miaomiao-*.dump' -print -quit)"
           test -n "$backup_file"
           network="$(docker network ls --filter label=com.docker.compose.project=miaomiao-points --format '{{.Name}}' | head -n 1)"
@@ -83,14 +95,14 @@ jobs:
           REMOTE_SCRIPT
           )"
           printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
-            "bash -s -- $(printf '%q' "$PRODUCTION_PATH") $(printf '%q' "$RUN_ID")" \
+            "bash -s -- $(printf '%q' "$PRODUCTION_PATH") $(printf '%q' "$RUN_ID") $(printf '%q' "$backup_storage_mode")" \
             | tee "restore-drill-$RUN_ID.log"
 
       - name: Preserve restore drill evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: oss-restore-drill-${{ github.run_id }}
+          name: database-restore-drill-${{ github.run_id }}
           path: restore-drill-${{ github.run_id }}.log
           if-no-files-found: warn
           retention-days: 365

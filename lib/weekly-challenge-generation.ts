@@ -30,16 +30,30 @@ type MemberProfile = {
   newMember: boolean;
 };
 
-const taskSchema = z.object({
+const modelTaskSchema = z.object({
   memberRef: z.string().length(20),
   type: z.enum(["VIDEO_COUNT", "LIKE_SUM", "COMBINED"]),
   title: z.string().trim().min(2).max(40),
   description: z.string().trim().min(5).max(240),
   reason: z.string().trim().min(5).max(240),
-  targetVideoCount: z.number().int().positive().nullable(),
-  targetLikes: z.number().int().positive().nullable(),
+  targetVideoCount: z.number().int().nonnegative().nullable(),
+  targetLikes: z.number().int().nonnegative().nullable(),
   rewardPoints: z.number().int().min(10).max(1500),
 });
+
+function normalizeModelTask(task: z.infer<typeof modelTaskSchema>) {
+  return {
+    ...task,
+    targetVideoCount: task.type === "LIKE_SUM" && task.targetVideoCount === 0
+      ? null
+      : task.targetVideoCount,
+    targetLikes: task.type === "VIDEO_COUNT" && task.targetLikes === 0
+      ? null
+      : task.targetLikes,
+  };
+}
+
+const taskSchema = modelTaskSchema.transform(normalizeModelTask);
 
 const responseSchema = z.object({
   tasks: z.array(taskSchema).min(1).max(BATCH_SIZE),
@@ -48,6 +62,17 @@ const responseSchema = z.object({
 type GeneratedTask = z.infer<typeof taskSchema> & {
   userId: string;
   difficultyScore: number;
+};
+
+type DeepSeekUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+};
+
+type DeepSeekCompletion = {
+  content: string;
+  usage?: DeepSeekUsage;
+  streamEvents: number;
 };
 
 function median(values: number[]) {
@@ -259,6 +284,93 @@ function positiveIntegerEnv(name: string, fallback: number) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function parseModelOutput(content: string) {
+  return responseSchema.parse(JSON.parse(content));
+}
+
+async function readDeepSeekCompletion(response: Response): Promise<DeepSeekCompletion> {
+  if (!response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
+    const payload = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: DeepSeekUsage;
+    };
+    return {
+      content: payload.choices?.[0]?.message?.content ?? "",
+      usage: payload.usage,
+      streamEvents: 0,
+    };
+  }
+  if (!response.body) throw new Error("DeepSeek 流式响应缺少正文");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const eventData: string[] = [];
+  let buffer = "";
+  let content = "";
+  let usage: DeepSeekUsage | undefined;
+  let streamEvents = 0;
+
+  const consumeEvent = () => {
+    const data = eventData.join("\n").trim();
+    eventData.length = 0;
+    if (!data || data === "[DONE]") return;
+    let payload: {
+      choices?: Array<{
+        delta?: { content?: string };
+        message?: { content?: string };
+      }>;
+      usage?: DeepSeekUsage;
+    };
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      throw new Error("DeepSeek 流式响应包含非法 JSON");
+    }
+    streamEvents += 1;
+    content += payload.choices
+      ?.map((choice) => choice.delta?.content ?? choice.message?.content ?? "")
+      .join("") ?? "";
+    if (payload.usage) usage = payload.usage;
+  };
+
+  const consumeLine = (line: string) => {
+    const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (!normalized) {
+      consumeEvent();
+      return;
+    }
+    if (normalized.startsWith("data:")) eventData.push(normalized.slice(5).trimStart());
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      consumeLine(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+    }
+    if (done) break;
+  }
+  if (buffer) consumeLine(buffer);
+  if (eventData.length) consumeEvent();
+  return { content, usage, streamEvents };
+}
+
+function generationErrorCategory(error: unknown) {
+  if (error instanceof z.ZodError) return "validation";
+  if (error instanceof SyntaxError) return "parse";
+  if (error instanceof Error && error.name === "AbortError") return "timeout";
+  if (error instanceof Error && error.message.startsWith("DeepSeek HTTP")) return "provider_http";
+  if (error instanceof Error && error.message.includes("截止时间")) return "deadline";
+  return "generation";
+}
+
+function logBatchProgress(details: Record<string, string | number>) {
+  console.warn(`[weekly-challenge-progress] ${JSON.stringify(details)}`);
+}
+
 async function requestBatch(periodId: string, batchNumber: number, profiles: MemberProfile[], deadline: Date) {
   const config = deepSeekConfig();
   const prompt = buildPrompt(profiles);
@@ -283,6 +395,7 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
         memberCount: profiles.length,
       },
     });
+    logBatchProgress({ batchNumber, attemptNumber, status: "started", memberCount: profiles.length });
     try {
       const controller = new AbortController();
       const remainingMs = deadline.getTime() - Date.now();
@@ -291,36 +404,39 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
         () => controller.abort(),
         Math.min(positiveIntegerEnv("DEEPSEEK_TIMEOUT_MS", 45_000), remainingMs),
       );
-      const response = await fetch(`${config.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${config.apiKey}`,
-          "content-type": "application/json",
-          "x-request-id": requestId,
-        },
-        body: JSON.stringify({
-          model: config.model,
-          temperature: 0.4,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content: "你是积分活动任务规划器。严格遵守输入中的边界，只输出合法 JSON，不输出 Markdown。",
-            },
-            { role: "user", content: prompt },
-          ],
-        }),
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timer));
-      if (!response.ok) throw new Error(`DeepSeek HTTP ${response.status}`);
+      let completion: DeepSeekCompletion;
+      try {
+        const response = await fetch(`${config.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${config.apiKey}`,
+            "content-type": "application/json",
+            "x-request-id": requestId,
+          },
+          body: JSON.stringify({
+            model: config.model,
+            temperature: 0.4,
+            response_format: { type: "json_object" },
+            stream: true,
+            messages: [
+              {
+                role: "system",
+                content: "你是积分活动任务规划器。严格遵守输入中的边界，只输出合法 JSON，不输出 Markdown。",
+              },
+              { role: "user", content: prompt },
+            ],
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`DeepSeek HTTP ${response.status}`);
+        completion = await readDeepSeekCompletion(response);
+      } finally {
+        clearTimeout(timer);
+      }
       assertBeforeGenerationDeadline(deadline);
-      const payload = await response.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-      const content = payload.choices?.[0]?.message?.content;
+      const content = completion.content;
       if (!content) throw new Error("DeepSeek 未返回任务内容");
-      const parsed = responseSchema.parse(JSON.parse(content));
+      const parsed = parseModelOutput(content);
       const expectedRefs = new Set(profiles.map((profile) => profile.memberRef));
       const returnedRefs = new Set(parsed.tasks.map((task) => task.memberRef));
       if (returnedRefs.size !== parsed.tasks.length || returnedRefs.size !== expectedRefs.size) {
@@ -340,10 +456,19 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
         data: {
           status: "SUCCEEDED",
           latencyMs: Date.now() - startedAt,
-          inputTokens: payload.usage?.prompt_tokens,
-          outputTokens: payload.usage?.completion_tokens,
+          inputTokens: completion.usage?.prompt_tokens,
+          outputTokens: completion.usage?.completion_tokens,
           validatedOutput: parsed as Prisma.InputJsonValue,
         },
+      });
+      logBatchProgress({
+        batchNumber,
+        attemptNumber,
+        status: "succeeded",
+        latencyMs: Date.now() - startedAt,
+        streamEvents: completion.streamEvents,
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
       });
       return tasks;
     } catch (error) {
@@ -355,6 +480,13 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
           latencyMs: Date.now() - startedAt,
           error: error instanceof Error ? error.message.slice(0, 1000) : "模型请求失败",
         },
+      });
+      logBatchProgress({
+        batchNumber,
+        attemptNumber,
+        status: "failed",
+        latencyMs: Date.now() - startedAt,
+        errorCategory: generationErrorCategory(error),
       });
       if (offset < 3) {
         const retryDelay = offset * positiveIntegerEnv("DEEPSEEK_RETRY_BASE_MS", 1500);
@@ -529,4 +661,7 @@ export const weeklyChallengeGenerationInternals = {
   normalizeRewards,
   buildPrompt,
   generationDeadline,
+  normalizeModelTask,
+  parseModelOutput,
+  readDeepSeekCompletion,
 };

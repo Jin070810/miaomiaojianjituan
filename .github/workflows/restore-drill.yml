@@ -1,0 +1,108 @@
+name: Monthly Database Restore Drill
+
+on:
+  schedule:
+    - cron: "45 18 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-database-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          test -n "$PRODUCTION_USER"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Restore latest backup into isolated PostgreSQL
+        timeout-minutes: 20
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          RUN_ID: ${{ github.run_id }}
+          BACKUP_STORAGE_MODE: ${{ vars.BACKUP_STORAGE_MODE }}
+        run: |
+          test -n "$PRODUCTION_PATH"
+          backup_storage_mode="${BACKUP_STORAGE_MODE:-local}"
+          [[ "$backup_storage_mode" == "local" || "$backup_storage_mode" == "oss" ]]
+          remote_script="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          project_path="$1"
+          run_id="$2"
+          storage_mode="$3"
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          cd "$project_path"
+          container="miaomiao-restore-drill-$run_id"
+          drill_dir="backups/restore-drill-$run_id"
+          alert_failure() {
+            docker compose --env-file .env.production run --rm --no-deps worker \
+              npm run ops:alert -- --source backup-restore-drill --severity critical --message "数据库月度恢复演练失败" || true
+          }
+          finish() {
+            status=$?
+            trap - EXIT
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            rm -rf -- "$drill_dir"
+            if (( status != 0 )); then alert_failure; fi
+            exit "$status"
+          }
+          trap finish EXIT
+          mkdir -m 700 -p "$drill_dir"
+          if [[ "$storage_mode" == "oss" ]]; then
+            docker compose --env-file .env.production run --rm --no-deps worker \
+              npm run ops:download-backup -- --output "/app/backups/restore-drill-$run_id"
+          else
+            source_backup="$(find backups -maxdepth 1 -type f -name 'miaomiao-*.dump' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+            test -n "$source_backup"
+            test -f "$source_backup.sha256"
+            sha256sum --check "$source_backup.sha256"
+            cp -- "$source_backup" "$drill_dir/$(basename "$source_backup")"
+          fi
+          backup_file="$(find "$drill_dir" -maxdepth 1 -type f -name 'miaomiao-*.dump' -print -quit)"
+          test -n "$backup_file"
+          network="$(docker network ls --filter label=com.docker.compose.project=miaomiao-points --format '{{.Name}}' | head -n 1)"
+          test -n "$network"
+          password="$(openssl rand -hex 24)"
+          docker run --detach --rm --name "$container" --network "$network" \
+            -e POSTGRES_PASSWORD="$password" -e POSTGRES_DB=miaomiao_restore postgres:16-alpine >/dev/null
+          for _ in $(seq 1 30); do
+            docker exec "$container" pg_isready -U postgres -d miaomiao_restore >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec "$container" pg_isready -U postgres -d miaomiao_restore >/dev/null
+          docker exec -i "$container" pg_restore --no-owner --no-privileges -U postgres -d miaomiao_restore < "$backup_file"
+          database_url="postgresql://postgres:$password@$container:5432/miaomiao_restore?schema=public"
+          docker compose --env-file .env.production run --rm --no-deps -e DATABASE_URL="$database_url" worker npm run data:reconcile
+          docker exec "$container" psql -U postgres -d miaomiao_restore -Atc \
+            'SELECT json_build_object('"'"'users'"'"', COUNT(*)) FROM "User";'
+          REMOTE_SCRIPT
+          )"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "bash -s -- $(printf '%q' "$PRODUCTION_PATH") $(printf '%q' "$RUN_ID") $(printf '%q' "$backup_storage_mode")" \
+            | tee "restore-drill-$RUN_ID.log"
+
+      - name: Preserve restore drill evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: database-restore-drill-${{ github.run_id }}
+          path: restore-drill-${{ github.run_id }}.log
+          if-no-files-found: warn
+          retention-days: 365

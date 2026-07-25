@@ -1,0 +1,78 @@
+name: Production Database Backup
+
+on:
+  schedule:
+    - cron: "15 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-database-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          test -n "$PRODUCTION_USER"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Create and verify backup
+        timeout-minutes: 15
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          BACKUP_STORAGE_MODE: ${{ vars.BACKUP_STORAGE_MODE }}
+          LOCAL_BACKUP_RETENTION_DAYS: ${{ vars.LOCAL_BACKUP_RETENTION_DAYS }}
+        run: |
+          test -n "$PRODUCTION_PATH"
+          backup_storage_mode="${BACKUP_STORAGE_MODE:-local}"
+          local_retention_days="${LOCAL_BACKUP_RETENTION_DAYS:-7}"
+          [[ "$backup_storage_mode" == "local" || "$backup_storage_mode" == "oss" ]]
+          [[ "$local_retention_days" =~ ^[0-9]+$ ]]
+          (( local_retention_days >= 1 && local_retention_days <= 90 ))
+          remote_script="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          project_path="$1"
+          storage_mode="$2"
+          retention_days="$3"
+          cd "$project_path"
+          alert_failure() {
+            docker compose --env-file .env.production run --rm --no-deps worker \
+              npm run ops:alert -- --source production-backup --severity critical --message "生产数据库备份工作流失败" || true
+          }
+          finish() {
+            status=$?
+            trap - EXIT
+            if (( status != 0 )); then alert_failure; fi
+            exit "$status"
+          }
+          trap finish EXIT
+          bash scripts/backup-db.sh backups .env.production "$retention_days"
+          latest="$(find backups -maxdepth 1 -type f -name 'miaomiao-*.dump' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          test -n "$latest"
+          sha256sum --check "$latest.sha256"
+          if [[ "$storage_mode" == "oss" ]]; then
+            docker compose --env-file .env.production run --rm --no-deps worker \
+              npm run ops:upload-backup -- --file "/app/backups/$(basename "$latest")"
+          else
+            echo "本地备份已生成并校验：$latest"
+          fi
+          REMOTE_SCRIPT
+          )"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "bash -s -- $(printf '%q' "$PRODUCTION_PATH") $(printf '%q' "$backup_storage_mode") $(printf '%q' "$local_retention_days")"

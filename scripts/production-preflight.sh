@@ -39,6 +39,12 @@ alert_smtp_user="$(env_value ALERT_SMTP_USER)"
 alert_smtp_password="$(env_value ALERT_SMTP_PASSWORD)"
 alert_smtp_secure="$(env_value ALERT_SMTP_SECURE)"
 alerts_deferred="$(env_value ALERTS_DEFERRED)"
+backup_storage_mode="$(env_value BACKUP_STORAGE_MODE)"
+oss_bucket="$(env_value OSS_BUCKET)"
+oss_endpoint="$(env_value OSS_ENDPOINT)"
+oss_role_name="$(env_value OSS_ECS_ROLE_NAME)"
+oss_prefix="$(env_value OSS_PREFIX)"
+local_backup_retention_days="$(env_value LOCAL_BACKUP_RETENTION_DAYS)"
 if [[ -z "$database_url" ]]; then
   database_url="$(env_value DATABASE_URL)"
 fi
@@ -77,10 +83,23 @@ if [[ "$webhook_configured" != "true" && "$email_configured" != "true" ]]; then
   echo "警告：告警通道已明确延期，周挑战必须保持关闭。" >&2
 fi
 
+backup_storage_mode="${backup_storage_mode:-local}"
+[[ "$backup_storage_mode" == "local" || "$backup_storage_mode" == "oss" ]] \
+  || fail "BACKUP_STORAGE_MODE 必须是 local 或 oss"
+[[ "$local_backup_retention_days" =~ ^[0-9]+$ ]] || fail "LOCAL_BACKUP_RETENTION_DAYS 必须是整数"
+(( local_backup_retention_days >= 1 && local_backup_retention_days <= 90 )) \
+  || fail "LOCAL_BACKUP_RETENTION_DAYS 必须在 1 到 90 之间"
+if [[ "$backup_storage_mode" == "oss" ]]; then
+  [[ "$oss_bucket" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || fail "OSS_BUCKET 格式无效"
+  [[ "$oss_endpoint" =~ ^https://[^/]+\.aliyuncs\.com/?$ ]] || fail "OSS_ENDPOINT 必须是阿里云 HTTPS OSS 地址"
+  [[ "$oss_role_name" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "OSS_ECS_ROLE_NAME 格式无效"
+  [[ "$oss_prefix" =~ ^[A-Za-z0-9/_-]{1,240}$ && "$oss_prefix" != *".."* ]] || fail "OSS_PREFIX 格式无效"
+fi
+
 [[ -s "$project_dir/certs/fullchain.pem" ]] || fail "缺少 certs/fullchain.pem"
 [[ -s "$project_dir/certs/privkey.pem" ]] || fail "缺少 certs/privkey.pem"
 openssl x509 -in "$project_dir/certs/fullchain.pem" -checkend 604800 -noout >/dev/null \
   || fail "HTTPS 证书将在 7 天内过期或无效"
 
 docker compose --env-file "$env_file" --profile production config --quiet
-echo "生产前置检查通过：Docker、密钥、数据库、DeepSeek、告警和 HTTPS 证书均符合要求。"
+echo "生产前置检查通过：Docker、密钥、数据库、DeepSeek、告警、${backup_storage_mode} 备份和 HTTPS 证书均符合要求。"

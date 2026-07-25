@@ -24,8 +24,8 @@ export async function GET() {
       take: 50,
     }),
     db.gift.findMany({
-      where: { active: true },
-      orderBy: [{ stock: "desc" }, { createdAt: "desc" }],
+      where: { active: true, deletedAt: null },
+      orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
       take: 100,
     }),
     db.redemptionOrder.findMany({

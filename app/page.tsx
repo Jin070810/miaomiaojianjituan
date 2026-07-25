@@ -1551,7 +1551,7 @@ export default function MemberApp() {
       points: gift.pointsCost,
       stock: gift.stock,
       kind: gift.kind,
-      image: gift.imageUrl && (gift.imageUrl.startsWith("http") || gift.imageUrl.startsWith("/")) ? gift.imageUrl : gifts[index % gifts.length].image,
+      image: gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl) ? gift.imageUrl : gifts[index % gifts.length].image,
       tag: gift.stock > 0 ? "可兑换" : "已售罄",
       tone: gifts[index % gifts.length].tone,
     }));

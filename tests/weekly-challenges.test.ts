@@ -158,4 +158,85 @@ describe("AI 周挑战核心规则", () => {
     expect(prompt).not.toContain(internalUserId);
     expect(prompt).not.toMatch(/nickname|kuaishou|phone|address|balance|videoUrl/i);
   });
+
+  it("normalizes only inactive DeepSeek zero sentinels to null", () => {
+    const parsed = weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
+      tasks: [
+        {
+          memberRef,
+          type: "VIDEO_COUNT",
+          title: "数量提升挑战",
+          description: "完成本周审核通过视频数量目标",
+          reason: "依据匿名四周数量基线生成",
+          targetVideoCount: 5,
+          targetLikes: 0,
+          rewardPoints: 100,
+        },
+        {
+          memberRef,
+          type: "LIKE_SUM",
+          title: "点赞提升挑战",
+          description: "完成本周审核通过视频点赞目标",
+          reason: "依据匿名四周点赞基线生成",
+          targetVideoCount: 0,
+          targetLikes: 1400,
+          rewardPoints: 100,
+        },
+      ],
+    }));
+    expect(parsed.tasks[0]).toMatchObject({ targetVideoCount: 5, targetLikes: null });
+    expect(parsed.tasks[1]).toMatchObject({ targetVideoCount: null, targetLikes: 1400 });
+  });
+
+  it("rejects required zero targets and negative model output", () => {
+    const parsed = weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
+      tasks: [{
+        memberRef,
+        type: "COMBINED",
+        title: "组合提升挑战",
+        description: "同时完成视频数量和点赞目标",
+        reason: "依据匿名四周综合基线生成",
+        targetVideoCount: 0,
+        targetLikes: 1400,
+        rewardPoints: 100,
+      }],
+    }));
+    expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask(parsed.tasks[0], profile()))
+      .toThrow("视频目标越界");
+    expect(() => weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
+      tasks: [{ ...parsed.tasks[0], targetVideoCount: -1 }],
+    }))).toThrow();
+  });
+
+  it("collects streamed DeepSeek content and keeps JSON response compatibility", async () => {
+    const content = JSON.stringify({
+      tasks: [{
+        memberRef,
+        type: "VIDEO_COUNT",
+        title: "流式数量挑战",
+        description: "完成本周审核通过视频数量目标",
+        reason: "依据匿名四周数量基线生成",
+        targetVideoCount: 5,
+        targetLikes: 0,
+        rewardPoints: 100,
+      }],
+    });
+    const splitAt = Math.floor(content.length / 2);
+    const streamResponse = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(0, splitAt) } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(splitAt) } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 8 } })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "content-type": "text/event-stream" } });
+    const streamed = await weeklyChallengeGenerationInternals.readDeepSeekCompletion(streamResponse);
+    expect(streamed).toMatchObject({ content, streamEvents: 3, usage: { prompt_tokens: 12, completion_tokens: 8 } });
+    expect(weeklyChallengeGenerationInternals.parseModelOutput(streamed.content).tasks[0].targetLikes).toBeNull();
+
+    const jsonResponse = new Response(JSON.stringify({
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 10, completion_tokens: 7 },
+    }), { headers: { "content-type": "application/json" } });
+    const json = await weeklyChallengeGenerationInternals.readDeepSeekCompletion(jsonResponse);
+    expect(json).toMatchObject({ content, streamEvents: 0, usage: { prompt_tokens: 10, completion_tokens: 7 } });
+  });
 });

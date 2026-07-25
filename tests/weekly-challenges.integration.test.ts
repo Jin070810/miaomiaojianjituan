@@ -25,6 +25,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
   const userIds: string[] = [];
   const periodIds: string[] = [];
   let server: http.Server;
+  let streamedRequestCount = 0;
   let responseMode: "valid" | "missing-member" | "http-429" | "http-500" | "invalid-json" | "timeout" = "valid";
 
   beforeAll(async () => {
@@ -39,8 +40,10 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
             return;
           }
           const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            stream?: boolean;
             messages: Array<{ role: string; content: string }>;
           };
+          if (body.stream) streamedRequestCount += 1;
           const prompt = JSON.parse(body.messages.find((message) => message.role === "user")?.content ?? "{}") as {
             members: Array<{ memberRef: string; allowedTargets: { minimumVideos: number } }>;
           };
@@ -52,15 +55,17 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
             description: "完成本周审核通过视频数量目标",
             reason: "依据匿名四周数量趋势生成",
             targetVideoCount: member.allowedTargets.minimumVideos,
-            targetLikes: null,
+            targetLikes: 0,
             rewardPoints: 1500,
           }));
           const send = () => {
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({
-              choices: [{ message: { content: responseMode === "invalid-json" ? "{" : JSON.stringify({ tasks }) } }],
-              usage: { prompt_tokens: 100, completion_tokens: 100 },
-            }));
+            const content = responseMode === "invalid-json" ? "{" : JSON.stringify({ tasks });
+            const splitAt = Math.floor(content.length / 2);
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(0, splitAt) } }] })}\n\n`);
+            response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(splitAt) } }] })}\n\n`);
+            response.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 100 } })}\n\n`);
+            response.end("data: [DONE]\n\n");
           };
           if (responseMode === "timeout") setTimeout(send, 100);
           else send();
@@ -149,6 +154,8 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     const assignments = await db.weeklyChallengeAssignment.findMany({ where: { periodId: period.id } });
     expect(period.status).toBe("READY");
     expect(assignments).toHaveLength(300);
+    expect(assignments.every((assignment) => assignment.targetLikes === null)).toBe(true);
+    expect(streamedRequestCount).toBe(12);
     expect(assignments.reduce((sum, assignment) => sum + assignment.rewardPoints, 0)).toBeLessThanOrEqual(10_000);
     expect(assignments.every((assignment) =>
       Number.isInteger(assignment.rewardPoints)

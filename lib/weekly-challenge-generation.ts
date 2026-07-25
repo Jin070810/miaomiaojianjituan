@@ -3,6 +3,7 @@ import { Prisma, WeeklyChallengeType } from "@prisma/client";
 import { z } from "zod";
 import { db } from "./db";
 import { sendOperationalAlert } from "./alerts";
+import { generationFailureCategory } from "./weekly-challenge-diagnostics";
 import {
   activateAndCloseWeeklyChallenges,
   nextShanghaiWeekBounds,
@@ -257,6 +258,11 @@ function buildPrompt(profiles: MemberProfile[]) {
       rewardRange: [10, 1500],
       preferHighChallengeLowReward: true,
       privacy: "不得推断或输出成员身份，不得在文案中比较或点名其他成员",
+      copyLength: {
+        title: "6-12 个中文字符",
+        description: "18-40 个中文字符，只写本周行动要求",
+        reason: "18-40 个中文字符，只说明匿名基线依据",
+      },
       output: "只返回 JSON：{tasks:[{memberRef,type,title,description,reason,targetVideoCount,targetLikes,rewardPoints}]}",
     },
     members,
@@ -358,20 +364,31 @@ async function readDeepSeekCompletion(response: Response): Promise<DeepSeekCompl
   return { content, usage, streamEvents };
 }
 
-function generationErrorCategory(error: unknown) {
-  if (error instanceof z.ZodError) return "validation";
-  if (error instanceof SyntaxError) return "parse";
-  if (error instanceof Error && error.name === "AbortError") return "timeout";
-  if (error instanceof Error && error.message.startsWith("DeepSeek HTTP")) return "provider_http";
-  if (error instanceof Error && error.message.includes("截止时间")) return "deadline";
-  return "generation";
+function deepSeekTimeoutMs() {
+  return positiveIntegerEnv("DEEPSEEK_TIMEOUT_MS", 75_000);
 }
 
 function logBatchProgress(details: Record<string, string | number>) {
   console.warn(`[weekly-challenge-progress] ${JSON.stringify(details)}`);
 }
 
-async function requestBatch(periodId: string, batchNumber: number, profiles: MemberProfile[], deadline: Date) {
+async function refreshGenerationLease(periodId: string, generationRunId: string) {
+  const heartbeatAt = new Date();
+  const refreshed = await db.weeklyChallengePeriod.updateMany({
+    where: { id: periodId, status: "GENERATING", generationRunId },
+    data: { generationStartedAt: heartbeatAt },
+  });
+  if (refreshed.count !== 1) throw new Error("周挑战生成租约已失效");
+  return heartbeatAt;
+}
+
+async function requestBatch(
+  periodId: string,
+  generationRunId: string,
+  batchNumber: number,
+  profiles: MemberProfile[],
+  deadline: Date,
+) {
   const config = deepSeekConfig();
   const prompt = buildPrompt(profiles);
   const promptHash = crypto.createHash("sha256").update(prompt).digest("hex");
@@ -379,6 +396,7 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
   const previousAttempts = await db.weeklyChallengeGenerationAttempt.count({ where: { periodId, batchNumber } });
   for (let offset = 1; offset <= 3; offset += 1) {
     assertBeforeGenerationDeadline(deadline);
+    await refreshGenerationLease(periodId, generationRunId);
     const attemptNumber = previousAttempts + offset;
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
@@ -402,7 +420,7 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
       if (remainingMs <= 0) throw new Error("已超过周日 23:00 生成截止时间");
       const timer = setTimeout(
         () => controller.abort(),
-        Math.min(positiveIntegerEnv("DEEPSEEK_TIMEOUT_MS", 45_000), remainingMs),
+        Math.min(deepSeekTimeoutMs(), remainingMs),
       );
       let completion: DeepSeekCompletion;
       try {
@@ -421,7 +439,7 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
             messages: [
               {
                 role: "system",
-                content: "你是积分活动任务规划器。严格遵守输入中的边界，只输出合法 JSON，不输出 Markdown。",
+                content: "你是积分活动任务规划器。严格遵守输入中的边界，文案必须简洁，只输出合法 JSON，不输出 Markdown。",
               },
               { role: "user", content: prompt },
             ],
@@ -486,7 +504,7 @@ async function requestBatch(periodId: string, batchNumber: number, profiles: Mem
         attemptNumber,
         status: "failed",
         latencyMs: Date.now() - startedAt,
-        errorCategory: generationErrorCategory(error),
+        errorCategory: generationFailureCategory(error),
       });
       if (offset < 3) {
         const retryDelay = offset * positiveIntegerEnv("DEEPSEEK_RETRY_BASE_MS", 1500);
@@ -567,7 +585,13 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
     if (profiles.length !== audience.length) throw new Error("冻结成员中存在已停用或缺失账号");
     const tasks: GeneratedTask[] = [];
     for (let index = 0; index < profiles.length; index += BATCH_SIZE) {
-      tasks.push(...await requestBatch(period.id, Math.floor(index / BATCH_SIZE), profiles.slice(index, index + BATCH_SIZE), deadline));
+      tasks.push(...await requestBatch(
+        period.id,
+        runId,
+        Math.floor(index / BATCH_SIZE),
+        profiles.slice(index, index + BATCH_SIZE),
+        deadline,
+      ));
     }
     assertBeforeGenerationDeadline(deadline);
     const suggestedTotalRewards = tasks.reduce((sum, task) => sum + task.rewardPoints, 0);
@@ -664,4 +688,6 @@ export const weeklyChallengeGenerationInternals = {
   normalizeModelTask,
   parseModelOutput,
   readDeepSeekCompletion,
+  deepSeekTimeoutMs,
+  refreshGenerationLease,
 };

@@ -40,6 +40,7 @@ jobs:
       DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
+      DEEPSEEK_TIMEOUT_MS: "75000"
       ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
       ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
       ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
@@ -58,11 +59,13 @@ jobs:
       - run: npm ci
       - run: npx prisma migrate deploy
       - name: Run paid DeepSeek shadow
+        timeout-minutes: 60
         run: |
           set -o pipefail
           mkdir -p output/weekly-shadow
           npm --silent run weekly:shadow | tee output/weekly-shadow/report.json
       - name: Upload shadow report
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: weekly-challenge-deepseek-shadow

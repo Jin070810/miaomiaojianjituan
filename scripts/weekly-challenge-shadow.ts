@@ -2,12 +2,17 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import { db } from "../lib/db";
 import { sendOperationalAlert } from "../lib/alerts";
+import {
+  generationFailureCategory,
+  summarizeGenerationAttempts,
+} from "../lib/weekly-challenge-diagnostics";
 import { generateWeeklyChallengePeriod } from "../lib/weekly-challenge-generation";
 import { nextShanghaiWeekBounds } from "../lib/weekly-challenges";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MEMBER_COUNT = 300;
 const CONFIRMATION = "I_UNDERSTAND_PAID_DEEPSEEK_SHADOW";
+let reportSchema: string | null = null;
 
 function assertShadowEnvironment() {
   if (process.env.WEEKLY_CHALLENGE_SHADOW_CONFIRM !== CONFIRMATION) {
@@ -19,6 +24,7 @@ function assertShadowEnvironment() {
   if (!/^(shadow|staging)[-_][a-z0-9_-]+$/i.test(schema)) {
     throw new Error("影子运行只允许使用名称以 shadow_、shadow-、staging_ 或 staging- 开头的独立 schema");
   }
+  reportSchema = schema;
   for (const key of ["DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL"] as const) {
     if (!process.env[key]?.trim()) throw new Error(`缺少 ${key}`);
   }
@@ -126,7 +132,14 @@ async function periodReport(periodId: string) {
     include: {
       assignments: { select: { type: true, rewardPoints: true } },
       attempts: {
-        select: { status: true, inputTokens: true, outputTokens: true },
+        select: {
+          batchNumber: true,
+          status: true,
+          latencyMs: true,
+          inputTokens: true,
+          outputTokens: true,
+          error: true,
+        },
       },
     },
   });
@@ -136,11 +149,7 @@ async function periodReport(periodId: string) {
     result[row.type] = (result[row.type] ?? 0) + 1;
     return result;
   }, {});
-  const failedAttempts = period.attempts.filter((row) => row.status === "FAILED").length;
-  const tokens = period.attempts.reduce(
-    (sum, row) => sum + (row.inputTokens ?? 0) + (row.outputTokens ?? 0),
-    0,
-  );
+  const attemptSummary = summarizeGenerationAttempts(period.attempts);
   if (period.status !== "READY") throw new Error(`影子周期未就绪：${period.status}`);
   if (period.assignments.length !== MEMBER_COUNT) {
     throw new Error(`影子周期覆盖不完整：${period.assignments.length}/${MEMBER_COUNT}`);
@@ -159,16 +168,55 @@ async function periodReport(periodId: string) {
     totalRewards,
     minimumReward: Math.min(...rewards),
     maximumReward: Math.max(...rewards),
-    attempts: period.attempts.length,
-    failedAttempts,
-    tokens,
+    ...attemptSummary,
+    tokens: attemptSummary.totalTokens,
     model: period.model,
     promptVersion: period.promptVersion,
   };
 }
 
+async function failureReport(error: unknown) {
+  const periods = await db.weeklyChallengePeriod.findMany({
+    orderBy: { periodStart: "asc" },
+    include: {
+      assignments: { select: { rewardPoints: true } },
+      attempts: {
+        select: {
+          batchNumber: true,
+          status: true,
+          latencyMs: true,
+          inputTokens: true,
+          outputTokens: true,
+          error: true,
+        },
+      },
+    },
+  });
+  const switchState = await db.systemSetting.findUnique({ where: { key: "WEEKLY_CHALLENGES" } });
+  return {
+    success: false,
+    schema: reportSchema,
+    syntheticMembers: MEMBER_COUNT,
+    errorCategory: generationFailureCategory(error),
+    challengePeriods: periods.map((period) => ({
+      periodStart: period.periodStart.toISOString(),
+      status: period.status,
+      audienceCount: period.audienceCount,
+      assignmentCount: period.assignments.length,
+      totalRewards: period.assignments.reduce((sum, assignment) => sum + assignment.rewardPoints, 0),
+      rewardBudget: period.personalRewardBudget,
+      model: period.model,
+      promptVersion: period.promptVersion,
+      ...summarizeGenerationAttempts(period.attempts),
+    })),
+    rewardsEnabled: switchState?.enabled ?? null,
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
 async function main() {
   const schema = assertShadowEnvironment();
+  reportSchema = schema;
   await assertCleanSchema();
   const runId = crypto.randomBytes(5).toString("hex");
   const [firstStart, secondStart] = shadowPeriodStarts();
@@ -189,6 +237,7 @@ async function main() {
   const switchState = await db.systemSetting.findUniqueOrThrow({ where: { key: "WEEKLY_CHALLENGES" } });
   if (switchState.enabled) throw new Error("影子运行期间周挑战开关不得开启");
   const result = {
+    success: true,
     schema,
     syntheticMembers: MEMBER_COUNT,
     historicalWeeks: 5,
@@ -212,7 +261,18 @@ async function main() {
 }
 
 main()
-  .catch((error) => {
+  .catch(async (error) => {
+    try {
+      console.log(JSON.stringify(await failureReport(error), null, 2));
+    } catch {
+      console.log(JSON.stringify({
+        success: false,
+        schema: reportSchema,
+        errorCategory: generationFailureCategory(error),
+        reportUnavailable: true,
+        reviewedAt: new Date().toISOString(),
+      }, null, 2));
+    }
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   })

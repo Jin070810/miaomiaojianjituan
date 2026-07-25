@@ -157,6 +157,26 @@ describe("AI 周挑战核心规则", () => {
     expect(prompt).toContain(opaque);
     expect(prompt).not.toContain(internalUserId);
     expect(prompt).not.toMatch(/nickname|kuaishou|phone|address|balance|videoUrl/i);
+    expect(JSON.parse(prompt).policies.copyLength).toEqual({
+      title: "6-12 个中文字符",
+      description: "18-40 个中文字符，只写本周行动要求",
+      reason: "18-40 个中文字符，只说明匿名基线依据",
+    });
+  });
+
+  it("uses a 75 second provider timeout unless a positive override is configured", () => {
+    const previous = process.env.DEEPSEEK_TIMEOUT_MS;
+    try {
+      delete process.env.DEEPSEEK_TIMEOUT_MS;
+      expect(weeklyChallengeGenerationInternals.deepSeekTimeoutMs()).toBe(75_000);
+      process.env.DEEPSEEK_TIMEOUT_MS = "90000";
+      expect(weeklyChallengeGenerationInternals.deepSeekTimeoutMs()).toBe(90_000);
+      process.env.DEEPSEEK_TIMEOUT_MS = "0";
+      expect(weeklyChallengeGenerationInternals.deepSeekTimeoutMs()).toBe(75_000);
+    } finally {
+      if (previous === undefined) delete process.env.DEEPSEEK_TIMEOUT_MS;
+      else process.env.DEEPSEEK_TIMEOUT_MS = previous;
+    }
   });
 
   it("normalizes only inactive DeepSeek zero sentinels to null", () => {

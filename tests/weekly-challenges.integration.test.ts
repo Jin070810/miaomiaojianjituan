@@ -2,7 +2,10 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { generateWeeklyChallengePeriod } from "@/lib/weekly-challenge-generation";
+import {
+  generateWeeklyChallengePeriod,
+  weeklyChallengeGenerationInternals,
+} from "@/lib/weekly-challenge-generation";
 import {
   activateAndCloseWeeklyChallenges,
   claimWeeklyChallenge,
@@ -16,6 +19,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const generatedPeriodStart = new Date("2031-01-05T16:00:00.000Z");
   const failedPeriodStart = new Date("2031-01-12T16:00:00.000Z");
+  const heartbeatPeriodStart = new Date("2031-02-16T16:00:00.000Z");
   const providerFailureCases = [
     ["http-429", new Date("2031-01-19T16:00:00.000Z")],
     ["http-500", new Date("2031-01-26T16:00:00.000Z")],
@@ -84,7 +88,12 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     process.env.DEEPSEEK_RETRY_BASE_MS = "5";
 
     const stalePeriods = await db.weeklyChallengePeriod.findMany({
-      where: { periodStart: { in: [generatedPeriodStart, failedPeriodStart, ...providerFailureCases.map((entry) => entry[1])] } },
+      where: { periodStart: { in: [
+        generatedPeriodStart,
+        failedPeriodStart,
+        heartbeatPeriodStart,
+        ...providerFailureCases.map((entry) => entry[1]),
+      ] } },
       select: { id: true },
     });
     if (stalePeriods.length) {
@@ -191,6 +200,32 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       where: { periodId: period.id, status: "FAILED" },
     })).toBe(3);
   }, 30_000);
+
+  it("refreshes only the active generation run lease", async () => {
+    const generationRunId = `lease-${suffix}`;
+    const staleHeartbeat = new Date("2020-01-01T00:00:00.000Z");
+    const period = await db.weeklyChallengePeriod.create({
+      data: {
+        periodStart: heartbeatPeriodStart,
+        periodEnd: new Date(heartbeatPeriodStart.getTime() + 7 * 24 * 60 * 60 * 1000),
+        claimEndsAt: new Date(heartbeatPeriodStart.getTime() + 10 * 24 * 60 * 60 * 1000),
+        status: "GENERATING",
+        model: "mock",
+        audienceSnapshot: [],
+        audienceCount: 0,
+        generationRunId,
+        generationStartedAt: staleHeartbeat,
+      },
+    });
+    periodIds.push(period.id);
+
+    const refreshedAt = await weeklyChallengeGenerationInternals.refreshGenerationLease(period.id, generationRunId);
+    expect(refreshedAt.getTime()).toBeGreaterThan(staleHeartbeat.getTime());
+    expect((await db.weeklyChallengePeriod.findUniqueOrThrow({ where: { id: period.id } })).generationStartedAt)
+      .toEqual(refreshedAt);
+    await expect(weeklyChallengeGenerationInternals.refreshGenerationLease(period.id, "wrong-run"))
+      .rejects.toThrow("租约已失效");
+  });
 
   it("cancels a ready period that missed its activation window", async () => {
     const user = await db.user.create({

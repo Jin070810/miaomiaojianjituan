@@ -56,4 +56,11 @@ describe("成员端品牌视觉库", () => {
       expect(source).not.toContain(copy);
     }
   });
+
+  it("成功态按钮进入对应记录页", () => {
+    const source = readFileSync(path.resolve(__dirname, "..", "app", "page.tsx"), "utf8");
+
+    expect(source).toContain('onComplete={() => { closeDialog(); handleNavigate("videos"); }}');
+    expect(source).toContain('onComplete={() => { closeDialog(); handleNavigate("orders"); }}');
+  });
 });

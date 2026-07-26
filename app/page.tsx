@@ -1193,7 +1193,7 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SubmitDialog({ onClose }: { onClose: () => void }) {
+function SubmitDialog({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
   const [link, setLink] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1283,7 +1283,7 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
           <div className="success-symbol"><ClipboardCheck size={30} /></div>
           <h3>提交成功啦</h3>
           <p>我们正在检查视频和点赞数，一般需要 1–2 分钟。可以去「我的切片」看看进度。</p>
-          <button className="primary-button full-button" onClick={onClose}>查看我的切片</button>
+          <button className="primary-button full-button" onClick={onComplete}>查看我的切片</button>
         </div>
       )}
     </ModalShell>
@@ -1364,10 +1364,12 @@ function TransferDialog({ onClose, balance }: { onClose: () => void; balance: nu
 function RedeemDialog({
   gift,
   onClose,
+  onComplete,
   balance,
 }: {
   gift: DisplayGift | null;
   onClose: () => void;
+  onComplete: () => void;
   balance: number;
 }) {
   const [done, setDone] = useState(false);
@@ -1465,7 +1467,7 @@ function RedeemDialog({
           <div className="success-symbol yellow-symbol"><PackageCheck size={30} /></div>
           <h3>兑换成功啦</h3>
           <p>{gift?.kind === "PHYSICAL" ? "申请已经收好，礼物发出后会通知你。" : "申请已经收好，积分礼物准备好后会通知你。"}</p>
-          <button className="primary-button full-button" onClick={onClose}>查看兑换记录</button>
+          <button className="primary-button full-button" onClick={onComplete}>查看兑换记录</button>
         </div>
       )}
     </ModalShell>
@@ -1634,9 +1636,9 @@ export default function MemberApp() {
         {page}
         <BottomNav active={navigationView} onChange={handleNavigate} />
       </div>
-      {dialog === "submit" && <SubmitDialog onClose={closeDialog} />}
+      {dialog === "submit" && <SubmitDialog onClose={closeDialog} onComplete={() => { closeDialog(); handleNavigate("videos"); }} />}
       {dialog === "transfer" && <TransferDialog balance={dashboard.user.balance} onClose={closeDialog} />}
-      {dialog === "redeem" && <RedeemDialog balance={dashboard.user.balance} gift={selectedGift ?? giftRows[0] ?? null} onClose={closeDialog} />}
+      {dialog === "redeem" && <RedeemDialog balance={dashboard.user.balance} gift={selectedGift ?? giftRows[0] ?? null} onClose={closeDialog} onComplete={() => { closeDialog(); handleNavigate("orders"); }} />}
       {dialog === "profile" && <ProfileEditDialog user={dashboard.user} onClose={closeDialog} />}
       {dialog === "recipient" && <RecipientProfileDialog onClose={closeDialog} />}
       {dialog === "password" && <PasswordDialog onClose={closeDialog} />}

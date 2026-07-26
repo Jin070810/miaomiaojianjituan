@@ -511,7 +511,7 @@ function ChallengeView({
     } : null,
   ].filter((item): item is NonNullable<typeof item> => Boolean(item));
   const isEnded = ["REVERSED", "EXPIRED"].includes(challenge.status);
-  const canClaim = challenge.claimable && challenge.rewardsEnabled && !claiming;
+  const canClaim = challenge.claimable && challenge.rewardsEnabled;
   const claimed = challenge.status === "CLAIMED";
 
   return (
@@ -583,7 +583,7 @@ function ChallengeView({
       {claimed ? (
         <button className="journal-primary challenge-main-action" disabled><CheckCircle size={21} weight="fill" /> 奖励已到账</button>
       ) : canClaim ? (
-        <button className="journal-primary challenge-main-action" onClick={() => void claim()}><Coins size={21} /> {claiming ? "正在领取..." : `领取 ${challenge.rewardPoints.toLocaleString()} 积分`}</button>
+        <button className="journal-primary challenge-main-action" disabled={claiming} onClick={() => void claim()}><Coins size={21} /> {claiming ? "正在领取..." : `领取 ${challenge.rewardPoints.toLocaleString()} 积分`}</button>
       ) : (
         <button className="journal-primary challenge-main-action" disabled={isEnded || challenge.progress.qualified || !challenge.rewardsEnabled} onClick={() => onNavigate("videos")}>
           {isEnded ? "任务已经结束" : !challenge.rewardsEnabled ? "奖励暂时不能领取" : challenge.progress.qualified ? "等待领取开放" : <><Scissors size={21} /> 继续提交切片</>}

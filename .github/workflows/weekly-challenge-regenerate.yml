@@ -1,0 +1,124 @@
+name: Regenerate Weekly Challenge
+
+on:
+  workflow_dispatch:
+    inputs:
+      period_start:
+        description: "上海时间周期起点对应的 ISO 时间，例如 2026-07-26T16:00:00.000Z"
+        required: true
+        type: string
+      confirm_production:
+        description: "确认使用正式成员最近两周数据重新生成任务"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-weekly-challenge-regeneration
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_production
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+      ADMIN_KUAISHOU_IDS: ${{ secrets.ADMIN_KUAISHOU_IDS }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      PERIOD_START: ${{ inputs.period_start }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          [[ "$PERIOD_START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.000Z$ ]]
+          test -n "$PRODUCTION_DOMAIN"
+          test -n "$ADMIN_KUAISHOU_IDS"
+          test -n "$ADMIN_PASSWORD"
+
+      - name: Login as production administrator
+        run: |
+          set -euo pipefail
+          origin="https://$PRODUCTION_DOMAIN"
+          work_dir="$RUNNER_TEMP/weekly-challenge-regenerate"
+          mkdir -p "$work_dir"
+          admin_id="${ADMIN_KUAISHOU_IDS%%,*}"
+          admin_id="$(xargs <<<"$admin_id")"
+          login_status="$({
+            jq -n --arg kuaishouId "$admin_id" --arg password "$ADMIN_PASSWORD" \
+              '{kuaishouId: $kuaishouId, password: $password}' |
+              curl --silent --show-error \
+                --output "$work_dir/login.json" \
+                --write-out '%{http_code}' \
+                --cookie-jar "$work_dir/cookies.txt" \
+                --header 'content-type: application/json' \
+                --header "origin: $origin" \
+                --data-binary @- \
+                "$origin/api/auth/login"
+          })"
+          test "$login_status" = "200"
+          jq -e '.user.role == "ADMIN"' "$work_dir/login.json" >/dev/null
+
+      - name: Select and regenerate target period
+        run: |
+          set -euo pipefail
+          origin="https://$PRODUCTION_DOMAIN"
+          work_dir="$RUNNER_TEMP/weekly-challenge-regenerate"
+          periods_status="$(curl --silent --show-error \
+            --output "$work_dir/periods.json" \
+            --write-out '%{http_code}' \
+            --cookie "$work_dir/cookies.txt" \
+            "$origin/api/admin/weekly-challenges?take=50")"
+          test "$periods_status" = "200"
+          period_id="$(jq -r --arg start "$PERIOD_START" '
+            .periods[]
+            | select(.periodStart == $start and .status == "READY")
+            | .id
+          ' "$work_dir/periods.json" | head -n 1)"
+          test -n "$period_id"
+          policy="$(jq -r --arg id "$period_id" '.periods[] | select(.id == $id) | .rewardPolicyVersion' "$work_dir/periods.json")"
+          test "$policy" != "tiered-v2-hard-combined"
+
+          response_status="$(curl --silent --show-error \
+            --output "$work_dir/submit.json" \
+            --write-out '%{http_code}' \
+            --cookie "$work_dir/cookies.txt" \
+            --header "origin: $origin" \
+            --request POST \
+            "$origin/api/admin/weekly-challenges/$period_id/upgrade-tiered-rewards")"
+          test "$response_status" = "202"
+          jq -e --arg id "$period_id" '.queued == true and .periodId == $id' "$work_dir/submit.json" >/dev/null
+          printf '%s\n' "$period_id" > "$work_dir/period-id"
+
+      - name: Verify regenerated period is ready
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          origin="https://$PRODUCTION_DOMAIN"
+          work_dir="$RUNNER_TEMP/weekly-challenge-regenerate"
+          period_id="$(cat "$work_dir/period-id")"
+          for _ in {1..90}; do
+            curl --silent --show-error \
+              --output "$work_dir/detail.json" \
+              --cookie "$work_dir/cookies.txt" \
+              "$origin/api/admin/weekly-challenges/$period_id"
+            status="$(jq -r '.period.status' "$work_dir/detail.json")"
+            policy="$(jq -r '.period.rewardPolicyVersion' "$work_dir/detail.json")"
+            prompt="$(jq -r '.period.promptVersion' "$work_dir/detail.json")"
+            audience="$(jq -r '.period.audienceCount' "$work_dir/detail.json")"
+            assignments="$(jq '.period.assignments | length' "$work_dir/detail.json")"
+            printf 'status=%s policy=%s prompt=%s audience=%s assignments=%s\n' "$status" "$policy" "$prompt" "$audience" "$assignments"
+            if [[ "$status" == "READY" && "$policy" == "tiered-v2-hard-combined" && "$prompt" == "weekly-challenge-v4-hard-combined-two-week" && "$audience" == "$assignments" ]]; then
+              exit 0
+            fi
+            if [[ "$status" == "FAILED" ]]; then
+              jq -r '.period.failureReason // "unknown generation failure"' "$work_dir/detail.json" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "周挑战重新生成在 15 分钟内未完成" >&2
+          exit 1

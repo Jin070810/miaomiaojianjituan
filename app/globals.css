@@ -224,6 +224,47 @@ a {
   gap: 14px;
 }
 
+.gift-image-upload {
+  min-height: 104px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  background: #fafbfb;
+}
+
+.gift-image-upload img {
+  width: 84px;
+  height: 84px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: white;
+}
+
+.gift-image-upload > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.gift-image-upload-button {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.gift-image-upload-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .page-title {
   margin: 0;
   font-size: 22px;
@@ -3615,7 +3656,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 7px;
   display: grid;
-  grid-template-columns: 64px 1fr 30px;
+  grid-template-columns: 64px minmax(0, 1fr) 64px;
   align-items: center;
   gap: 9px;
 }
@@ -3642,6 +3683,41 @@ a {
 .gift-admin-card span {
   color: var(--muted);
   font-size: 10px;
+}
+
+.gift-admin-card .gift-catalog-state {
+  width: fit-content;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.gift-catalog-state.active {
+  color: #0f7a64;
+}
+
+.gift-catalog-state.inactive {
+  color: var(--muted);
+}
+
+.gift-admin-actions {
+  padding-right: 5px;
+  display: grid;
+  grid-template-columns: repeat(2, 28px);
+  gap: 3px;
+}
+
+.gift-admin-actions .table-more {
+  width: 28px;
+  height: 28px;
+}
+
+.gift-admin-actions .danger-action {
+  color: #c2392f;
+}
+
+.gift-admin-actions .table-more:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .order-status-row {

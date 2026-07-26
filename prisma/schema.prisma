@@ -299,10 +299,14 @@ model Gift {
   imageUrl      String?
   description   String?
   active        Boolean           @default(true)
+  displayOrder  Int               @default(0)
+  deletedAt     DateTime?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
   orders        RedemptionOrder[]
   rankingAwards RankingAward[]
+
+  @@index([deletedAt, active, displayOrder])
 }
 
 model RedemptionOrder {

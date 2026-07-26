@@ -13,6 +13,8 @@ const actionLabels: Record<string, string> = {
   CLAIM_SHIPPING: "填写领奖收货信息",
   FEISHU_GIFT_IMAGE_IMPORTED: "导入飞书礼品图片",
   GIFT_CREATED: "创建礼品",
+  GIFT_DELETED: "删除礼品",
+  GIFT_REORDERED: "调整礼品顺序",
   GIFT_UPDATED: "修改礼品",
   LOGIN_FAILED: "登录失败",
   LOGIN_SUCCEEDED: "登录成功",

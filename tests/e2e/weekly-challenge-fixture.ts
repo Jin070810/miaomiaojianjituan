@@ -151,7 +151,7 @@ export async function login(page: import("@playwright/test").Page, kuaishouId: s
   await page.getByLabel("快手 ID").fill(kuaishouId);
   await page.getByLabel("密码", { exact: true }).fill(e2ePassword);
   const loginResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "进入积分中心" }).click();
+  await page.getByRole("button", { name: "进入剪辑团" }).click();
   const response = await loginResponse;
   const result = await response.json();
   if (!response.ok()) throw new Error(`E2E 登录失败：${result.error ?? response.status()}`);

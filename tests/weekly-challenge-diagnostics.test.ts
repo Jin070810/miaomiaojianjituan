@@ -54,6 +54,7 @@ describe("周挑战匿名生成诊断", () => {
     expect(generationFailureCategory(z.enum(["VIDEO_COUNT"]).safeParse("UNKNOWN").error)).toBe("schema_validation");
     expect(generationFailureCategory(new Error("DeepSeek 返回了重复或缺失的成员任务"))).toBe("coverage");
     expect(generationFailureCategory(new Error("成员目标越界"))).toBe("business_validation");
+    expect(generationFailureCategory(new Error("成员的视频基线判断超过历史峰值"))).toBe("business_validation");
     expect(generationFailureCategory(new Error("周挑战生成租约已失效"))).toBe("lease_lost");
     expect(generationFailureCategory(new Error("缺少 DEEPSEEK_API_KEY"))).toBe("configuration");
   });

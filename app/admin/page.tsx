@@ -1215,7 +1215,7 @@ function WeeklyChallengesAdmin({
       await onUpgrade(period);
       await loadDetail(period);
     } catch (upgradeError) {
-      setError(upgradeError instanceof Error ? upgradeError.message : "阶梯奖励升级失败");
+      setError(upgradeError instanceof Error ? upgradeError.message : "任务重新生成提交失败");
     } finally {
       setUpgradingId(null);
     }
@@ -1228,7 +1228,7 @@ function WeeklyChallengesAdmin({
       </div>
       {error && <div className="order-feedback error" role="alert"><AlertTriangle size={17} />{error}</div>}
       <section className="admin-panel">
-        <div className="admin-panel-head"><div><h2>任务周期</h2><p>仅上周提交过有效视频的成员参与；个人最高累计奖励 1,000 分，竞速奖励固定 2,000 分</p></div></div>
+        <div className="admin-panel-head"><div><h2>任务周期</h2><p>仅上周提交过有效视频的成员参与；每个任务同时考核发布量和点赞量，个人最高累计奖励 1,000 分</p></div></div>
         <div className="data-table-wrap">
           <table className="data-table weekly-period-table">
             <thead><tr><th>周期</th><th>状态</th><th>覆盖</th><th>匿名任务分布</th><th>理论奖励</th><th>模型</th><th>竞速冠军</th><th /></tr></thead>
@@ -1245,7 +1245,7 @@ function WeeklyChallengesAdmin({
                     <td><strong>{rewardTotal.toLocaleString()} 分</strong><small>上限 {period.personalRewardBudget.toLocaleString()}</small></td>
                     <td><strong>{period.model}</strong><small>{period.promptVersion} · {period.rewardPolicyVersion}</small></td>
                     <td>{period.raceWinner && !period.raceWinner.reversedAt ? <><strong>{period.raceWinner.user.nickname}</strong><small>{period.raceWinner.rewardPoints.toLocaleString()} 分</small></> : <span>尚未产生</span>}</td>
-                    <td><div className="table-actions-inline"><button className="secondary-button mini-button" disabled={loadingId === period.id} onClick={() => void loadDetail(period)}>{loadingId === period.id ? "加载中" : "查看"}</button>{period.status === "FAILED" && <button className="secondary-button mini-button" onClick={() => void onRetry(period)}>重试</button>}{period.status === "READY" && period.rewardPolicyVersion !== "tiered-v1" && <button className="secondary-button mini-button" disabled={upgradingId === period.id} onClick={() => void upgradePeriod(period)}>{upgradingId === period.id ? "升级中" : "升级阶梯奖励"}</button>}</div></td>
+                    <td><div className="table-actions-inline"><button className="secondary-button mini-button" disabled={loadingId === period.id} onClick={() => void loadDetail(period)}>{loadingId === period.id ? "加载中" : "查看"}</button>{period.status === "FAILED" && <button className="secondary-button mini-button" onClick={() => void onRetry(period)}>重试</button>}{period.status === "READY" && period.rewardPolicyVersion !== "tiered-v2-hard-combined" && <button className="secondary-button mini-button" disabled={upgradingId === period.id} onClick={() => void upgradePeriod(period)}>{upgradingId === period.id ? "提交中" : "按两周数据重新生成"}</button>}</div></td>
                   </tr>
                 );
               })}
@@ -1273,7 +1273,7 @@ function WeeklyChallengesAdmin({
                     <td><strong>{assignment.title}</strong><small>{assignment.aiReason}</small></td>
                     <td><span>{assignment.baselineVideoCount} → {assignment.targetVideoCount ?? "—"} 条</span><small>{assignment.baselineLikes.toLocaleString()} → {assignment.targetLikes?.toLocaleString() ?? "—"} 赞</small></td>
                     <td><span>{assignment.progress.videoCount} 条</span><small>{assignment.progress.likes.toLocaleString()} 赞</small></td>
-                    <td><strong>最高 {assignment.rewardPoints.toLocaleString()}</strong><small>已领 {assignment.claimedRewardPoints.toLocaleString()} · 难度 {assignment.difficultyScore}</small>{assignment.rewardTiers && <small>{assignment.rewardTiers.map((tier) => `${tier.rewardPoints}分`).join(" / ")}</small>}</td>
+                    <td><strong>最高 {assignment.rewardPoints.toLocaleString()}</strong><small>已领 {assignment.claimedRewardPoints.toLocaleString()} · 难度 {assignment.difficultyScore}</small>{assignment.rewardTiers && <small>{assignment.rewardTiers.map((tier) => `${tier.label}：${tier.targetVideoCount ?? "—"}条 + ${tier.targetLikes?.toLocaleString() ?? "—"}赞 / ${tier.rewardPoints}分`).join("；")}</small>}</td>
                     <td><span className={`status-chip ${assignment.status === "CLAIMED" ? "success" : assignment.status === "REVERSED" ? "danger" : "warning"}`}>{assignmentStatusLabel[assignment.status] ?? assignment.status}</span></td>
                   </tr>
                 ))}</tbody>
@@ -1903,12 +1903,12 @@ export default function AdminPage() {
       method: "POST",
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error ?? "周挑战阶梯奖励升级失败");
+    if (!response.ok) throw new Error(result.error ?? "周挑战重新生成提交失败");
     const refreshed = await fetchAdminPage("/api/admin/weekly-challenges?take=10", "周挑战周期刷新失败");
     setData((current) => current ? { ...current, weeklyChallengePeriods: refreshed.periods ?? [] } : current);
     setAdminFeedback({
       type: "success",
-      message: `已升级 ${result.upgradedAssignmentCount} 个任务，并移除 ${result.removedInactiveAssignmentCount} 个上周无有效提交的任务`,
+      message: `已按 ${result.audienceCount} 名上周投稿成员提交重新生成；成功前旧任务不会发布`,
     });
   }
   async function handlePointAdjustment(input: { selectionMode: "EXPLICIT" | "ALL_ACTIVE_MEMBERS"; userIds?: string[]; amount: number; reason: string }) {

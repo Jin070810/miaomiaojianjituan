@@ -22,7 +22,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const BATCH_SIZE = 25;
 const RACE_REWARD = 2_000;
-const PROMPT_VERSION = "weekly-challenge-v3-tiered-rewards";
+const PROMPT_VERSION = "weekly-challenge-v4-hard-combined-two-week";
 
 type MemberProfile = {
   userId: string;
@@ -30,6 +30,14 @@ type MemberProfile = {
   tenureDays: number;
   weeklyVideoCounts: number[];
   weeklyLikeSums: number[];
+  referenceWeeks: Array<{
+    relativeWeek: "two-weeks-ago" | "previous-week";
+    videoCount: number;
+    likesTotal: number;
+    likesAverage: number;
+    likesMax: number;
+    likesMin: number;
+  }>;
   baselineVideoCount: number;
   baselineLikes: number;
   bestVideoCount: number;
@@ -40,28 +48,18 @@ type MemberProfile = {
 
 const modelTaskSchema = z.object({
   memberRef: z.string().length(20),
-  type: z.enum(["VIDEO_COUNT", "LIKE_SUM", "COMBINED"]),
+  type: z.literal("COMBINED"),
+  baselineVideoCount: z.number().int().nonnegative(),
+  baselineLikes: z.number().int().nonnegative(),
   title: z.string().trim().min(2).max(40),
   description: z.string().trim().min(5).max(240),
   reason: z.string().trim().min(5).max(240),
-  targetVideoCount: z.number().int().nonnegative().nullable(),
-  targetLikes: z.number().int().nonnegative().nullable(),
+  targetVideoCount: z.number().int().positive(),
+  targetLikes: z.number().int().positive(),
   rewardPoints: z.number().int().min(100).max(1000),
 });
 
-function normalizeModelTask(task: z.infer<typeof modelTaskSchema>) {
-  return {
-    ...task,
-    targetVideoCount: task.type === "LIKE_SUM" && task.targetVideoCount === 0
-      ? null
-      : task.targetVideoCount,
-    targetLikes: task.type === "VIDEO_COUNT" && task.targetLikes === 0
-      ? null
-      : task.targetLikes,
-  };
-}
-
-const taskSchema = modelTaskSchema.transform(normalizeModelTask);
+const taskSchema = modelTaskSchema;
 
 const responseSchema = z.object({
   tasks: z.array(taskSchema).min(1).max(BATCH_SIZE),
@@ -84,21 +82,8 @@ type DeepSeekCompletion = {
   streamEvents: number;
 };
 
-function median(values: number[]) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? Math.floor((sorted[middle - 1] + sorted[middle]) / 2)
-    : sorted[middle];
-}
-
-function weekIndex(submittedAt: Date, baselineStart: Date) {
-  return Math.floor((submittedAt.getTime() - baselineStart.getTime()) / (7 * DAY_MS));
-}
-
 async function buildProfiles(periodStart: Date, userIds: string[]) {
-  const baselineStart = new Date(periodStart.getTime() - 28 * DAY_MS);
+  const referenceStart = new Date(periodStart.getTime() - 14 * DAY_MS);
   const [users, videos, historicalTasks] = await Promise.all([
     db.user.findMany({
       where: { id: { in: userIds }, active: true, role: "MEMBER" },
@@ -108,7 +93,7 @@ async function buildProfiles(periodStart: Date, userIds: string[]) {
       where: {
         userId: { in: userIds },
         status: "APPROVED",
-        submittedAt: { gte: baselineStart, lt: periodStart },
+        submittedAt: { gte: referenceStart, lt: periodStart },
       },
       select: { userId: true, submittedAt: true, likes: true },
     }),
@@ -126,82 +111,71 @@ async function buildProfiles(periodStart: Date, userIds: string[]) {
     history.set(row.userId, current);
   }
   const raw = users.map((user) => {
-    const weeklyVideoCounts = [0, 0, 0, 0];
-    const weeklyLikeSums = [0, 0, 0, 0];
-    for (const video of videos) {
-      if (video.userId !== user.id) continue;
-      const index = weekIndex(video.submittedAt, baselineStart);
-      if (index < 0 || index > 3) continue;
-      weeklyVideoCounts[index] += 1;
-      weeklyLikeSums[index] += video.likes ?? 0;
-    }
+    const referenceWeeks = [0, 1].map((weekIndex) => {
+      const weekStart = new Date(referenceStart.getTime() + weekIndex * 7 * DAY_MS);
+      const weekEnd = new Date(weekStart.getTime() + 7 * DAY_MS);
+      const weekVideos = videos.filter((video) =>
+        video.userId === user.id
+        && video.submittedAt >= weekStart
+        && video.submittedAt < weekEnd);
+      const likes = weekVideos.map((video) => video.likes ?? 0);
+      const likesTotal = likes.reduce((sum, value) => sum + value, 0);
+      return {
+        relativeWeek: weekIndex === 0 ? "two-weeks-ago" as const : "previous-week" as const,
+        videoCount: weekVideos.length,
+        likesTotal,
+        likesAverage: weekVideos.length ? Math.floor(likesTotal / weekVideos.length) : 0,
+        likesMax: likes.length ? Math.max(...likes) : 0,
+        likesMin: likes.length ? Math.min(...likes) : 0,
+      };
+    });
     const record = history.get(user.id) ?? { completed: 0, total: 0 };
     const tenureDays = Math.max(0, Math.floor((periodStart.getTime() - user.createdAt.getTime()) / DAY_MS));
     return {
       userId: user.id,
       memberRef: opaqueMemberRef(periodStart, user.id),
       tenureDays,
-      weeklyVideoCounts,
-      weeklyLikeSums,
-      baselineVideoCount: median(weeklyVideoCounts),
-      baselineLikes: median(weeklyLikeSums),
-      bestVideoCount: Math.max(...weeklyVideoCounts),
-      bestLikes: Math.max(...weeklyLikeSums),
+      weeklyVideoCounts: [0, 0, referenceWeeks[0].videoCount, referenceWeeks[1].videoCount],
+      weeklyLikeSums: [0, 0, referenceWeeks[0].likesTotal, referenceWeeks[1].likesTotal],
+      referenceWeeks,
+      baselineVideoCount: 0,
+      baselineLikes: 0,
+      bestVideoCount: Math.max(...referenceWeeks.map((week) => week.videoCount)),
+      bestLikes: Math.max(...referenceWeeks.map((week) => week.likesTotal)),
       previousChallengeCompletionRate: record.total ? Math.floor(record.completed * 100 / record.total) : 0,
       newMember: tenureDays < 14,
     };
   });
-  return applyNewMemberCohortBaselines(raw);
-}
-
-function applyNewMemberCohortBaselines(profiles: MemberProfile[]) {
-  const teamVideoMedian = median(profiles.map((profile) => profile.baselineVideoCount));
-  const teamLikesMedian = median(profiles.map((profile) => profile.baselineLikes));
-  return profiles.map((profile): MemberProfile => {
-    if (!profile.newMember) return profile;
-    const stage = Math.floor(profile.tenureDays / 7);
-    const cohort = profiles.filter((candidate) =>
-      candidate.newMember && Math.floor(candidate.tenureDays / 7) === stage);
-    const cohortVideoMedian = median(cohort.map((candidate) => candidate.baselineVideoCount));
-    const cohortLikesMedian = median(cohort.map((candidate) => candidate.baselineLikes));
-    return {
-      ...profile,
-      baselineVideoCount: Math.max(profile.baselineVideoCount, cohortVideoMedian || teamVideoMedian),
-      baselineLikes: Math.max(profile.baselineLikes, cohortLikesMedian || teamLikesMedian),
-    };
-  });
+  return raw;
 }
 
 function validateGeneratedTask(task: z.infer<typeof taskSchema>, profile: MemberProfile): GeneratedTask {
-  const bounds = targetBounds(profile);
-  if (profile.newMember && task.type === "LIKE_SUM") {
-    throw new Error(`新人 ${profile.memberRef} 的任务必须包含至少 2 条通过视频`);
+  if (task.type !== "COMBINED") {
+    throw new Error(`成员 ${profile.memberRef} 必须同时包含视频和点赞目标`);
   }
-  const videoRequired = task.type === "VIDEO_COUNT" || task.type === "COMBINED";
-  const likesRequired = task.type === "LIKE_SUM" || task.type === "COMBINED";
-  if (videoRequired) {
-    if (task.targetVideoCount === null || task.targetVideoCount < bounds.minimumVideos || task.targetVideoCount > bounds.maximumVideos) {
-      throw new Error(`成员 ${profile.memberRef} 的视频目标越界`);
-    }
-  } else if (task.targetVideoCount !== null) {
-    throw new Error(`成员 ${profile.memberRef} 的视频目标不应存在`);
+  if (task.baselineVideoCount > profile.bestVideoCount) {
+    throw new Error(`成员 ${profile.memberRef} 的视频基线判断超过历史峰值`);
   }
-  if (likesRequired) {
-    if (task.targetLikes === null || task.targetLikes < bounds.minimumLikes || task.targetLikes > bounds.maximumLikes) {
-      throw new Error(`成员 ${profile.memberRef} 的点赞目标越界`);
-    }
-  } else if (task.targetLikes !== null) {
-    throw new Error(`成员 ${profile.memberRef} 的点赞目标不应存在`);
+  if (task.baselineLikes > profile.bestLikes) {
+    throw new Error(`成员 ${profile.memberRef} 的点赞基线判断超过历史峰值`);
   }
-  const rewardTiers = buildRewardTiers(profile, task);
+  const judgedProfile = {
+    ...profile,
+    baselineVideoCount: task.baselineVideoCount,
+    baselineLikes: task.baselineLikes,
+  };
+  const rewardTiers = buildRewardTiers(judgedProfile, task);
   const finalTier = rewardTiers[rewardTiers.length - 1];
+  if (finalTier.targetVideoCount === null || finalTier.targetLikes === null) {
+    throw new Error(`成员 ${profile.memberRef} 的综合任务必须同时有视频和点赞目标`);
+  }
   return {
     ...task,
     targetVideoCount: finalTier.targetVideoCount,
     targetLikes: finalTier.targetLikes,
     rewardPoints: finalTier.rewardPoints,
     userId: profile.userId,
-    difficultyScore: difficultyForTargets(profile, finalTier.targetVideoCount, finalTier.targetLikes, task.type),
+    difficultyScore: difficultyForTargets(judgedProfile, finalTier.targetVideoCount, finalTier.targetLikes, task.type),
     rewardTiers,
   };
 }
@@ -209,47 +183,34 @@ function validateGeneratedTask(task: z.infer<typeof taskSchema>, profile: Member
 function buildPrompt(profiles: MemberProfile[], previousValidationError?: string) {
   const members = profiles.map((profile) => ({
     memberRef: profile.memberRef,
-    tenureDays: profile.tenureDays,
-    weeklyVideoCounts: profile.weeklyVideoCounts,
-    weeklyLikeSums: profile.weeklyLikeSums,
-    baselineVideoCount: profile.baselineVideoCount,
-    baselineLikes: profile.baselineLikes,
-    bestVideoCount: profile.bestVideoCount,
-    bestLikes: profile.bestLikes,
-    previousChallengeCompletionRate: profile.previousChallengeCompletionRate,
-    newMember: profile.newMember,
-    allowedTypes: profile.newMember
-      ? ["VIDEO_COUNT", "COMBINED"]
-      : ["VIDEO_COUNT", "LIKE_SUM", "COMBINED"],
-    allowedTargets: targetBounds(profile),
+    referenceWeeks: profile.referenceWeeks,
   }));
   return JSON.stringify({
-    objective: "为每位剪辑团成员生成一个有挑战性但可完成的周任务。每位成员必须且只能出现一次。",
+    objective: "为每位剪辑团成员生成一个困难但值得尝试的综合周任务。每位成员必须且只能出现一次。",
     policies: {
       coverage: `必须返回 ${profiles.length} 条任务，每个输入 memberRef 必须且只能出现一次`,
-      typeSelection: "每名成员的 type 必须来自该成员的 allowedTypes；新人不允许 LIKE_SUM",
+      typeSelection: "每名成员的 type 必须为 COMBINED，必须同时完成视频发布数量和累计点赞目标",
       targetRules: {
-        VIDEO_COUNT: "targetVideoCount 必须在成员允许区间内，targetLikes 必须为 null",
-        LIKE_SUM: "targetLikes 必须在成员允许区间内，targetVideoCount 必须为 null",
-        COMBINED: "targetVideoCount 和 targetLikes 都必须在成员各自允许区间内",
+        COMBINED: "必须同时给出正整数 targetVideoCount 和 targetLikes；目标应明显高于模型判断的基线，不能选择只完成单项的任务；服务端会按困难度规则抬高或限幅最终三阶段目标",
       },
+      baselineRules: "baselineVideoCount 和 baselineLikes 必须根据输入的最近两周逐周数据自行判断，不能机械取中位数；只能返回非负整数且不得超过对应两周历史峰值",
       integerOnly: true,
       rewardRange: [100, 1000],
-      rewardPolicy: "服务端会根据最终难度生成 3 个累计阶梯奖励，第一阶段 100 分，最终累计奖励 300-1000 分；模型返回的 rewardPoints 仅作兼容字段，不决定实际发放",
-      preferHighChallengeLowReward: false,
+      rewardPolicy: "服务端会根据最终难度生成 3 个累计阶梯奖励：够一够、努努力、很难但可试。第一阶段 100 分，最终累计奖励 300-1000 分；模型返回的 rewardPoints 仅作兼容字段，不决定实际发放",
+      preferHighChallengeLowReward: true,
       privacy: "不得推断或输出成员身份，不得在文案中比较或点名其他成员",
       copyLength: {
         title: "6-12 个中文字符",
         description: "18-40 个中文字符，只写本周行动要求",
         reason: "18-40 个中文字符，只说明匿名基线依据",
       },
-      output: "只返回 JSON：{tasks:[{memberRef,type,title,description,reason,targetVideoCount,targetLikes,rewardPoints}]}",
+      output: "只返回 JSON：{tasks:[{memberRef,type:\"COMBINED\",baselineVideoCount,baselineLikes,title,description,reason,targetVideoCount,targetLikes,rewardPoints}]}",
     },
     ...(previousValidationError
       ? {
           retryCorrection: {
             previousValidationError,
-            instruction: "修正上一版输出，重新返回本批全部成员且只使用每名成员的 allowedTypes 和 allowedTargets",
+            instruction: "修正上一版输出，重新返回本批全部成员并严格遵守 COMBINED 类型、基线与字段约束",
           },
         }
       : {}),
@@ -652,8 +613,8 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
             periodId: period!.id,
             userId: task.userId,
             type: task.type as WeeklyChallengeType,
-            baselineVideoCount: profile.baselineVideoCount,
-            baselineLikes: profile.baselineLikes,
+            baselineVideoCount: task.baselineVideoCount,
+            baselineLikes: task.baselineLikes,
             weeklyVideoCounts: profile.weeklyVideoCounts,
             weeklyLikeSums: profile.weeklyLikeSums,
             targetVideoCount: task.targetVideoCount,
@@ -718,15 +679,12 @@ export async function runWeeklyChallengeMaintenance(now = new Date()) {
 }
 
 export const weeklyChallengeGenerationInternals = {
-  median,
-  applyNewMemberCohortBaselines,
   targetBounds,
   buildRewardTiers,
   difficultyForTargets,
   validateGeneratedTask,
   buildPrompt,
   generationDeadline,
-  normalizeModelTask,
   parseModelOutput,
   readDeepSeekCompletion,
   deepSeekTimeoutMs,

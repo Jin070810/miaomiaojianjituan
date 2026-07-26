@@ -15,7 +15,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       ip: getClientIp(request),
       requestId: requestId(),
     });
-    const job = await enqueueWeeklyChallengeGeneration(result.periodStart, true);
+    const job = await enqueueWeeklyChallengeGeneration(result.periodStart, true, true);
     return NextResponse.json({ ...result, queued: true, jobId: job.id }, { status: 202 });
   } catch (error) {
     return NextResponse.json({

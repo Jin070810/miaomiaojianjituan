@@ -21,6 +21,7 @@ const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
   await generateWeeklyChallengePeriod({
     periodStart: new Date(job.data.periodStart),
     retryFailed: Boolean(job.data.retryFailed),
+    allowLateGeneration: Boolean(job.data.allowLateGeneration),
   });
 }, {
   connection: connection(),

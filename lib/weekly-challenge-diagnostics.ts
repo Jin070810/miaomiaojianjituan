@@ -18,7 +18,9 @@ export function generationFailureCategory(error: unknown) {
   if (/zod|invalid enum|invalid_(?:type|value)|number must|string must|too_small|too_big/i.test(message)) {
     return "schema_validation";
   }
-  if (/目标越界|目标不应存在|至少 2 条通过视频/i.test(message)) return "business_validation";
+  if (/目标越界|目标不应存在|基线判断超过历史峰值|必须同时包含视频和点赞目标/i.test(message)) {
+    return "business_validation";
+  }
   if (/截止时间/i.test(message)) return "deadline";
   if (/租约已失效/i.test(message)) return "lease_lost";
   if (/配置不完整|缺少 (database_url|deepseek_|alert_)/i.test(message)) return "configuration";

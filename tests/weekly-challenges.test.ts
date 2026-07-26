@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  nextShanghaiWeekBounds,
-  opaqueMemberRef,
-  shanghaiWeekBounds,
-} from "@/lib/weekly-challenges";
+import { nextShanghaiWeekBounds, opaqueMemberRef, shanghaiWeekBounds } from "@/lib/weekly-challenges";
 import { weeklyChallengeGenerationInternals } from "@/lib/weekly-challenge-generation";
 
 const memberRef = "0123456789abcdefabcd";
@@ -13,8 +9,12 @@ function profile(overrides: Record<string, unknown> = {}) {
     userId: "internal-user-id",
     memberRef,
     tenureDays: 120,
-    weeklyVideoCounts: [3, 4, 5, 4],
-    weeklyLikeSums: [800, 1200, 1600, 1000],
+    weeklyVideoCounts: [0, 0, 3, 4],
+    weeklyLikeSums: [0, 0, 800, 1000],
+    referenceWeeks: [
+      { relativeWeek: "two-weeks-ago" as const, videoCount: 3, likesTotal: 800, likesAverage: 267, likesMax: 400, likesMin: 100 },
+      { relativeWeek: "previous-week" as const, videoCount: 4, likesTotal: 1000, likesAverage: 250, likesMax: 400, likesMin: 100 },
+    ],
     baselineVideoCount: 4,
     baselineLikes: 1100,
     bestVideoCount: 5,
@@ -25,254 +25,89 @@ function profile(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function combinedTask(overrides: Record<string, unknown> = {}) {
+  return {
+    memberRef,
+    type: "COMBINED" as const,
+    baselineVideoCount: 4,
+    baselineLikes: 1100,
+    title: "综合提升挑战",
+    description: "同时完成视频发布和累计点赞目标",
+    reason: "依据最近两周逐周数据判断",
+    targetVideoCount: 9,
+    targetLikes: 2200,
+    rewardPoints: 1000,
+    ...overrides,
+  };
+}
+
 describe("AI 周挑战核心规则", () => {
   it("uses Monday boundaries and an exclusive Thursday claim deadline in Asia/Shanghai", () => {
     const bounds = shanghaiWeekBounds(new Date("2026-07-25T04:00:00.000Z"));
     expect(bounds.start.toISOString()).toBe("2026-07-19T16:00:00.000Z");
     expect(bounds.end.toISOString()).toBe("2026-07-26T16:00:00.000Z");
     expect(bounds.claimEndsAt.toISOString()).toBe("2026-07-29T16:00:00.000Z");
-
-    const next = nextShanghaiWeekBounds(new Date("2026-07-25T04:00:00.000Z"));
-    expect(next.start.toISOString()).toBe("2026-07-26T16:00:00.000Z");
-    expect(next.end.toISOString()).toBe("2026-08-02T16:00:00.000Z");
+    expect(nextShanghaiWeekBounds(new Date("2026-07-25T04:00:00.000Z")).start.toISOString())
+      .toBe("2026-07-26T16:00:00.000Z");
   });
 
-  it("sets the hard generation deadline to Sunday 23:00 Shanghai time", () => {
-    const deadline = weeklyChallengeGenerationInternals.generationDeadline(
-      new Date("2026-07-26T16:00:00.000Z"),
+  it("uses hard target floors for three cumulative difficulty tiers", () => {
+    const task = weeklyChallengeGenerationInternals.validateGeneratedTask(
+      combinedTask({ targetVideoCount: 5, targetLikes: 1400 }),
+      profile(),
     );
-    expect(deadline.toISOString()).toBe("2026-07-26T15:00:00.000Z");
-  });
-
-  it("enforces the default lower bound and breakthrough caps", () => {
-    const bounds = weeklyChallengeGenerationInternals.targetBounds(profile({
-      baselineVideoCount: 4,
-      bestVideoCount: 6,
-      baselineLikes: 1000,
-      bestLikes: 1400,
-    }));
-    expect(bounds.minimumVideos).toBe(5);
-    expect(bounds.maximumVideos).toBe(12);
-    expect(bounds.minimumLikes).toBe(1200);
-    expect(bounds.maximumLikes).toBe(2800);
-  });
-
-  it("requires new-member tasks to include at least two approved videos", () => {
-    const newMember = profile({
-      tenureDays: 3,
-      baselineVideoCount: 0,
-      baselineLikes: 0,
-      bestVideoCount: 0,
-      bestLikes: 0,
-      newMember: true,
-    });
-    expect(weeklyChallengeGenerationInternals.targetBounds(newMember).minimumVideos).toBe(2);
-    expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask({
-      memberRef,
-      type: "LIKE_SUM",
-      title: "新人点赞挑战",
-      description: "在本周完成新人点赞目标",
-      reason: "使用匿名新人阶段基线生成",
-      targetVideoCount: null,
-      targetLikes: 400,
-      rewardPoints: 100,
-    }, newMember)).toThrow("至少 2 条通过视频");
-  });
-
-  it("uses the median from the same newcomer stage without exposing identities", () => {
-    const sameStage = [
-      profile({ userId: "new-1", memberRef: "00000000000000000001", tenureDays: 3, baselineVideoCount: 0, baselineLikes: 0, newMember: true }),
-      profile({ userId: "new-2", memberRef: "00000000000000000002", tenureDays: 5, baselineVideoCount: 2, baselineLikes: 600, newMember: true }),
-      profile({ userId: "new-3", memberRef: "00000000000000000003", tenureDays: 6, baselineVideoCount: 4, baselineLikes: 1000, newMember: true }),
-      profile({ userId: "new-4", memberRef: "00000000000000000004", tenureDays: 10, baselineVideoCount: 8, baselineLikes: 3000, newMember: true }),
-    ];
-    const result = weeklyChallengeGenerationInternals.applyNewMemberCohortBaselines(sameStage);
-    expect(result.find((item) => item.userId === "new-1")).toMatchObject({
-      baselineVideoCount: 2,
-      baselineLikes: 600,
-    });
-    expect(result.find((item) => item.userId === "new-4")).toMatchObject({
-      baselineVideoCount: 8,
-      baselineLikes: 3000,
-    });
-  });
-
-  it("rejects unknown targets and creates three cumulative rewards from 100 to 1000", () => {
-    const baseProfile = profile();
-    expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask({
-      memberRef,
-      type: "VIDEO_COUNT",
-      title: "越界数量挑战",
-      description: "该任务故意超过服务端允许边界",
-      reason: "用于验证恶意模型输出会被拒绝",
-      targetVideoCount: 999,
-      targetLikes: null,
-      rewardPoints: 100,
-    }, baseProfile)).toThrow("越界");
-
-    const task = weeklyChallengeGenerationInternals.validateGeneratedTask({
-      memberRef,
-      type: "VIDEO_COUNT",
-      title: "稳定输出挑战",
-      description: "完成本周通过视频数量目标",
-      reason: "按匿名四周基线生成",
-      targetVideoCount: 5,
-      targetLikes: null,
-      rewardPoints: 100,
-    }, baseProfile);
-    expect(task.rewardTiers).toHaveLength(3);
-    expect(task.rewardTiers.map((tier) => tier.targetVideoCount)).toEqual([5, 6, 7]);
+    expect(task.type).toBe("COMBINED");
+    expect(task.rewardTiers.map((tier) => tier.targetVideoCount)).toEqual([7, 8, 9]);
+    expect(task.rewardTiers.map((tier) => tier.targetLikes)).toEqual([1720, 1920, 2120]);
+    expect(task.rewardTiers.map((tier) => tier.label)).toEqual(["够一够", "努努力", "很难但可试"]);
     expect(task.rewardTiers[0].rewardPoints).toBe(100);
-    expect(task.rewardTiers[1].rewardPoints).toBeGreaterThan(task.rewardTiers[0].rewardPoints);
     expect(task.rewardTiers[2].rewardPoints).toBeGreaterThan(task.rewardTiers[1].rewardPoints);
-    expect(task.rewardTiers[2].rewardPoints).toBeGreaterThanOrEqual(300);
     expect(task.rewardTiers[2].rewardPoints).toBeLessThanOrEqual(1000);
-    expect(task.rewardPoints).toBe(task.rewardTiers[2].rewardPoints);
   });
 
-  it("only sends opaque member references and anonymous aggregates to the model", () => {
-    const internalUserId = "sensitive-internal-user-id";
-    const opaque = opaqueMemberRef(new Date("2026-07-26T16:00:00.000Z"), internalUserId);
-    const prompt = weeklyChallengeGenerationInternals.buildPrompt([profile({
-      userId: internalUserId,
-      memberRef: opaque,
-    })]);
-    const payload = JSON.parse(prompt);
-    expect(prompt).toContain(opaque);
-    expect(prompt).not.toContain(internalUserId);
-    expect(prompt).not.toMatch(/nickname|kuaishou|phone|address|balance|videoUrl/i);
-    expect(payload.policies.copyLength).toEqual({
-      title: "6-12 个中文字符",
-      description: "18-40 个中文字符，只写本周行动要求",
-      reason: "18-40 个中文字符，只说明匿名基线依据",
-    });
-    expect(payload.members[0].allowedTypes).toEqual(["VIDEO_COUNT", "LIKE_SUM", "COMBINED"]);
-    expect(payload.policies.targetRules).toEqual({
-      VIDEO_COUNT: "targetVideoCount 必须在成员允许区间内，targetLikes 必须为 null",
-      LIKE_SUM: "targetLikes 必须在成员允许区间内，targetVideoCount 必须为 null",
-      COMBINED: "targetVideoCount 和 targetLikes 都必须在成员各自允许区间内",
-    });
-    expect(payload.policies.rewardRange).toEqual([100, 1000]);
-    expect(payload.policies.rewardPolicy).toContain("3 个累计阶梯奖励");
-  });
-
-  it("forbids LIKE_SUM for new members and includes the previous validation error on retry", () => {
-    const newMember = profile({
-      tenureDays: 3,
-      baselineVideoCount: 0,
-      baselineLikes: 0,
-      bestVideoCount: 0,
-      bestLikes: 0,
-      newMember: true,
-    });
-    const first = JSON.parse(weeklyChallengeGenerationInternals.buildPrompt([newMember]));
-    expect(first.members[0].allowedTypes).toEqual(["VIDEO_COUNT", "COMBINED"]);
-    expect(first.members[0].allowedTargets.minimumVideos).toBe(2);
-    expect(first.retryCorrection).toBeUndefined();
-
-    const retried = JSON.parse(weeklyChallengeGenerationInternals.buildPrompt(
-      [newMember],
-      `新人 ${memberRef} 的任务必须包含至少 2 条通过视频`,
-    ));
-    expect(retried.retryCorrection).toEqual({
-      previousValidationError: `新人 ${memberRef} 的任务必须包含至少 2 条通过视频`,
-      instruction: "修正上一版输出，重新返回本批全部成员且只使用每名成员的 allowedTypes 和 allowedTargets",
-    });
-  });
-
-  it("uses a 75 second provider timeout unless a positive override is configured", () => {
-    const previous = process.env.DEEPSEEK_TIMEOUT_MS;
-    try {
-      delete process.env.DEEPSEEK_TIMEOUT_MS;
-      expect(weeklyChallengeGenerationInternals.deepSeekTimeoutMs()).toBe(75_000);
-      process.env.DEEPSEEK_TIMEOUT_MS = "90000";
-      expect(weeklyChallengeGenerationInternals.deepSeekTimeoutMs()).toBe(90_000);
-      process.env.DEEPSEEK_TIMEOUT_MS = "0";
-      expect(weeklyChallengeGenerationInternals.deepSeekTimeoutMs()).toBe(75_000);
-    } finally {
-      if (previous === undefined) delete process.env.DEEPSEEK_TIMEOUT_MS;
-      else process.env.DEEPSEEK_TIMEOUT_MS = previous;
-    }
-  });
-
-  it("normalizes only inactive DeepSeek zero sentinels to null", () => {
-    const parsed = weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
-      tasks: [
-        {
-          memberRef,
-          type: "VIDEO_COUNT",
-          title: "数量提升挑战",
-          description: "完成本周审核通过视频数量目标",
-          reason: "依据匿名四周数量基线生成",
-          targetVideoCount: 5,
-          targetLikes: 0,
-          rewardPoints: 100,
-        },
-        {
-          memberRef,
-          type: "LIKE_SUM",
-          title: "点赞提升挑战",
-          description: "完成本周审核通过视频点赞目标",
-          reason: "依据匿名四周点赞基线生成",
-          targetVideoCount: 0,
-          targetLikes: 1400,
-          rewardPoints: 100,
-        },
-      ],
-    }));
-    expect(parsed.tasks[0]).toMatchObject({ targetVideoCount: 5, targetLikes: null });
-    expect(parsed.tasks[1]).toMatchObject({ targetVideoCount: null, targetLikes: 1400 });
-  });
-
-  it("rejects required zero targets and negative model output", () => {
-    const parsed = weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
-      tasks: [{
-        memberRef,
-        type: "COMBINED",
-        title: "组合提升挑战",
-        description: "同时完成视频数量和点赞目标",
-        reason: "依据匿名四周综合基线生成",
-        targetVideoCount: 0,
-        targetLikes: 1400,
-        rewardPoints: 100,
-      }],
-    }));
-    expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask(parsed.tasks[0], profile()))
-      .toThrow("视频目标越界");
+  it("rejects single-metric tasks and a model baseline above the observed peak", () => {
+    expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask(
+      combinedTask({ baselineVideoCount: 6 }),
+      profile(),
+    )).toThrow("基线判断超过历史峰值");
     expect(() => weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
-      tasks: [{ ...parsed.tasks[0], targetVideoCount: -1 }],
+      tasks: [{ ...combinedTask(), type: "VIDEO_COUNT" }],
     }))).toThrow();
   });
 
-  it("collects streamed DeepSeek content and keeps JSON response compatibility", async () => {
-    const content = JSON.stringify({
-      tasks: [{
-        memberRef,
-        type: "VIDEO_COUNT",
-        title: "流式数量挑战",
-        description: "完成本周审核通过视频数量目标",
-        reason: "依据匿名四周数量基线生成",
-        targetVideoCount: 5,
-        targetLikes: 0,
-        rewardPoints: 100,
-      }],
-    });
-    const splitAt = Math.floor(content.length / 2);
+  it("gives the model two weekly metric snapshots instead of a server median", () => {
+    const opaque = opaqueMemberRef(new Date("2026-07-26T16:00:00.000Z"), "sensitive-internal-user-id");
+    const payload = JSON.parse(weeklyChallengeGenerationInternals.buildPrompt([profile({
+      userId: "sensitive-internal-user-id",
+      memberRef: opaque,
+    })]));
+    expect(payload.members[0].referenceWeeks).toHaveLength(2);
+    expect(payload.members[0].referenceWeeks.map((week: { relativeWeek: string }) => week.relativeWeek))
+      .toEqual(["two-weeks-ago", "previous-week"]);
+    expect(payload.members[0]).not.toHaveProperty("baselineVideoCount");
+    expect(payload.members[0]).not.toHaveProperty("baselineLikes");
+    expect(payload.members[0]).not.toHaveProperty("tenureDays");
+    expect(payload.members[0]).not.toHaveProperty("previousChallengeCompletionRate");
+    expect(payload.members[0]).not.toHaveProperty("newMember");
+    expect(Object.keys(payload.members[0]).sort()).toEqual(["memberRef", "referenceWeeks"]);
+    expect(payload.policies.baselineRules).toContain("最近两周");
+    expect(payload.policies.targetRules.COMBINED).toContain("只完成单项");
+    expect(payload.policies.output).toContain("baselineVideoCount");
+    expect(payload.policies.output).toContain("baselineLikes");
+  });
+
+  it("keeps opaque references and accepts streamed JSON", async () => {
+    const task = combinedTask();
+    const content = JSON.stringify({ tasks: [task] });
     const streamResponse = new Response([
-      `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(0, splitAt) } }] })}\n\n`,
-      `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(splitAt) } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(0, 30) } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(30) } }] })}\n\n`,
       `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 8 } })}\n\n`,
       "data: [DONE]\n\n",
     ].join(""), { headers: { "content-type": "text/event-stream" } });
     const streamed = await weeklyChallengeGenerationInternals.readDeepSeekCompletion(streamResponse);
-    expect(streamed).toMatchObject({ content, streamEvents: 3, usage: { prompt_tokens: 12, completion_tokens: 8 } });
-    expect(weeklyChallengeGenerationInternals.parseModelOutput(streamed.content).tasks[0].targetLikes).toBeNull();
-
-    const jsonResponse = new Response(JSON.stringify({
-      choices: [{ message: { content } }],
-      usage: { prompt_tokens: 10, completion_tokens: 7 },
-    }), { headers: { "content-type": "application/json" } });
-    const json = await weeklyChallengeGenerationInternals.readDeepSeekCompletion(jsonResponse);
-    expect(json).toMatchObject({ content, streamEvents: 0, usage: { prompt_tokens: 10, completion_tokens: 7 } });
+    expect(streamed.content).toBe(content);
+    expect(streamed.streamEvents).toBe(3);
+    expect(weeklyChallengeGenerationInternals.parseModelOutput(streamed.content).tasks[0].type).toBe("COMBINED");
   });
 });

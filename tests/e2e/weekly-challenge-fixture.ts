@@ -73,7 +73,7 @@ export async function seedWeeklyChallengeE2E() {
           difficultyScore: 135,
           title: "完成 2 条稳定输出",
           description: "本周完成 2 条审核通过的视频",
-          aiReason: "近四周输出趋于稳定，本周小幅提高数量目标。",
+          aiReason: "依据最近两周逐周数据，本周提高综合目标。",
         },
       },
     },

@@ -4,7 +4,7 @@ import { z } from "zod";
 export const MIN_PERSONAL_REWARD = 100;
 export const MIN_FINAL_REWARD = 300;
 export const MAX_PERSONAL_REWARD = 1_000;
-export const REWARD_POLICY_VERSION = "tiered-v1";
+export const REWARD_POLICY_VERSION = "tiered-v2-hard-combined";
 
 export type RewardProfile = {
   baselineVideoCount: number;
@@ -35,11 +35,9 @@ export function targetBounds(profile: RewardProfile) {
     Math.ceil(profile.baselineVideoCount * 1.2),
   );
   const maximumVideos = Math.max(
-    minimumVideos + 2,
-    Math.min(
-      Math.max(minimumVideos + 2, profile.baselineVideoCount * 3),
-      Math.max(minimumVideos + 2, Math.ceil(profile.bestVideoCount * 2)),
-    ),
+    minimumVideos + 4,
+    Math.ceil(profile.baselineVideoCount * 3.5),
+    Math.ceil(profile.bestVideoCount * 2.5),
   );
   const minimumLikes = Math.max(
     profile.newMember ? 400 : 200,
@@ -47,11 +45,9 @@ export function targetBounds(profile: RewardProfile) {
     Math.ceil(profile.baselineLikes * 1.2),
   );
   const maximumLikes = Math.max(
-    minimumLikes + 400,
-    Math.min(
-      Math.max(minimumLikes + 400, profile.baselineLikes * 4),
-      Math.max(minimumLikes + 400, Math.ceil(profile.bestLikes * 2)),
-    ),
+    minimumLikes + 800,
+    Math.ceil(profile.baselineLikes * 4),
+    Math.ceil(profile.bestLikes * 2.5),
   );
   return { minimumVideos, maximumVideos, minimumLikes, maximumLikes };
 }
@@ -89,12 +85,22 @@ export function buildRewardTiers(
   },
 ): RewardTier[] {
   const bounds = targetBounds(profile);
-  const finalVideoTarget = task.targetVideoCount === null
-    ? null
-    : Math.min(bounds.maximumVideos, Math.max(bounds.minimumVideos + 2, task.targetVideoCount));
-  const finalLikesTarget = task.targetLikes === null
-    ? null
-    : Math.min(bounds.maximumLikes, Math.max(bounds.minimumLikes + 400, task.targetLikes));
+  const hardVideoFloor = Math.max(
+    bounds.minimumVideos + 4,
+    profile.bestVideoCount + (profile.bestVideoCount > 0 ? 2 : 4),
+  );
+  const hardLikesFloor = Math.max(
+    bounds.minimumLikes + 800,
+    profile.bestLikes + (profile.bestLikes > 0 ? Math.max(400, Math.ceil(profile.bestLikes * 0.25)) : 800),
+  );
+  const finalVideoTarget = Math.min(
+    bounds.maximumVideos,
+    Math.max(hardVideoFloor, task.targetVideoCount ?? 0),
+  );
+  const finalLikesTarget = Math.min(
+    bounds.maximumLikes,
+    Math.max(hardLikesFloor, task.targetLikes ?? 0),
+  );
   const finalDifficulty = difficultyForTargets(
     profile,
     finalVideoTarget,
@@ -104,22 +110,14 @@ export function buildRewardTiers(
   const finalReward = rewardForDifficulty(finalDifficulty);
   const tierTwoReward = Math.min(
     finalReward - 10,
-    Math.max(200, Math.floor(finalReward / 2 / 10) * 10),
+    Math.max(300, Math.floor(finalReward * 0.55 / 10) * 10),
   );
-  const videoTargets: Array<number | null> = finalVideoTarget === null
-    ? [null, null, null]
-    : [finalVideoTarget - 2, finalVideoTarget - 1, finalVideoTarget];
-  const likesTargets: Array<number | null> = finalLikesTarget === null
-    ? [null, null, null]
-    : [
-        bounds.minimumLikes,
-        Math.min(finalLikesTarget - 200, Math.max(bounds.minimumLikes + 200, Math.floor(finalLikesTarget * 2 / 3))),
-        finalLikesTarget,
-      ];
+  const videoTargets = [finalVideoTarget - 2, finalVideoTarget - 1, finalVideoTarget];
+  const likesTargets = [finalLikesTarget - 400, finalLikesTarget - 200, finalLikesTarget];
   return [
-    { label: "起步奖励", targetVideoCount: videoTargets[0], targetLikes: likesTargets[0], rewardPoints: MIN_PERSONAL_REWARD },
-    { label: "进阶奖励", targetVideoCount: videoTargets[1], targetLikes: likesTargets[1], rewardPoints: tierTwoReward },
-    { label: "冲刺奖励", targetVideoCount: videoTargets[2], targetLikes: likesTargets[2], rewardPoints: finalReward },
+    { label: "够一够", targetVideoCount: videoTargets[0], targetLikes: likesTargets[0], rewardPoints: MIN_PERSONAL_REWARD },
+    { label: "努努力", targetVideoCount: videoTargets[1], targetLikes: likesTargets[1], rewardPoints: tierTwoReward },
+    { label: "很难但可试", targetVideoCount: videoTargets[2], targetLikes: likesTargets[2], rewardPoints: finalReward },
   ];
 }
 

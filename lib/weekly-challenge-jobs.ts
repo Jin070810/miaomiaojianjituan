@@ -7,8 +7,8 @@ function getQueue() {
   return (queue ??= new Queue("weekly-challenges", { connection: connection() }));
 }
 
-export async function enqueueWeeklyChallengeGeneration(periodStart: Date, retryFailed = false) {
-  const jobId = `weekly-challenge-${periodStart.toISOString().slice(0, 10)}-${retryFailed ? "retry" : "generate"}`;
+export async function enqueueWeeklyChallengeGeneration(periodStart: Date, retryFailed = false, allowLateGeneration = false) {
+  const jobId = `weekly-challenge-${periodStart.toISOString().slice(0, 10)}-${retryFailed ? "retry" : "generate"}${allowLateGeneration ? "-late" : ""}`;
   const challengeQueue = getQueue();
   const existing = await challengeQueue.getJob(jobId);
   if (existing) {
@@ -19,6 +19,7 @@ export async function enqueueWeeklyChallengeGeneration(periodStart: Date, retryF
   return challengeQueue.add("generate", {
     periodStart: periodStart.toISOString(),
     retryFailed,
+    allowLateGeneration,
   }, {
     jobId,
     attempts: 1,

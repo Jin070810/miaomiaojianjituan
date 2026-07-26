@@ -493,7 +493,11 @@ async function frozenAudience(periodStart: Date) {
   });
 }
 
-export async function generateWeeklyChallengePeriod(input: { periodStart?: Date; retryFailed?: boolean } = {}) {
+export async function generateWeeklyChallengePeriod(input: {
+  periodStart?: Date;
+  retryFailed?: boolean;
+  allowLateGeneration?: boolean;
+} = {}) {
   const bounds = input.periodStart
     ? { ...nextShanghaiWeekBounds(new Date(input.periodStart.getTime() - 7 * DAY_MS)), start: input.periodStart }
     : nextShanghaiWeekBounds();
@@ -550,7 +554,9 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
   }
   if (period.generationRunId !== runId) return period;
   try {
-    const deadline = generationDeadline(period.periodStart);
+    const deadline = input.allowLateGeneration
+      ? new Date(period.periodStart.getTime() - 10 * 60 * 1000)
+      : generationDeadline(period.periodStart);
     assertBeforeGenerationDeadline(deadline);
     const audience = z.array(z.string()).parse(period.audienceSnapshot);
     if (audience.length === 0) {

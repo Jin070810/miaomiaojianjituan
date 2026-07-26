@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./member/member-theme.css";
 
 export const metadata: Metadata = {
   title: "妙妙剪辑团积分中心",
@@ -9,7 +10,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#ff5a3d",
+  themeColor: "#6848d9",
 };
 
 export default function RootLayout({

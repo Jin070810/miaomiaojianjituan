@@ -2,7 +2,6 @@
 
 import {
   ArrowDownLeft,
-  ArrowLeft,
   ArrowUpRight,
   BadgeCheck,
   ChevronDown,
@@ -36,6 +35,9 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import NotificationCenter, { clearNotificationPromptSession } from "./components/NotificationCenter";
+import { BrandMark, PageScene, StateMessage } from "./member/brand";
+import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
+import { miaoAssets } from "./member/visual-assets";
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "ledger" | "transfers" | "orders";
 
@@ -181,9 +183,9 @@ function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; load
 function ledgerLabel(type: string, note: string | null) {
   if (note) return note;
   const labels: Record<string, string> = {
-    VIDEO_REWARD: "视频奖励",
-    TRANSFER_IN: "转账收入",
-    TRANSFER_OUT: "积分转出",
+    VIDEO_REWARD: "切片奖励",
+    TRANSFER_IN: "团友送来的积分",
+    TRANSFER_OUT: "送给团友的积分",
     REDEMPTION: "礼品兑换",
     ADMIN_ADJUSTMENT: "管理员调整",
     REVERSAL: "积分冲正",
@@ -238,18 +240,6 @@ const gifts: DisplayGift[] = [
   },
 ];
 
-function BrandMark({ compact = false }: { compact?: boolean }) {
-  return (
-    <div className={`brand-lockup ${compact ? "compact" : ""}`}>
-      <span className="brand-mark">妙</span>
-      <span className="brand-name">
-        <strong>妙妙剪辑团</strong>
-        {!compact && <small>积分中心</small>}
-      </span>
-    </div>
-  );
-}
-
 function Avatar({ text = "妙", tone = "coral", imageUrl }: { text?: string; tone?: string; imageUrl?: string | null }) {
   return <span className={`avatar avatar-${tone}`}><img src={imageUrl || "/avatars/default.webp"} alt={`${text}的头像`} /></span>;
 }
@@ -298,9 +288,9 @@ function BottomNav({
 }) {
   const items = [
     { id: "home" as const, label: "首页", icon: Home },
-    { id: "videos" as const, label: "视频", icon: ClipboardCheck },
-    { id: "mall" as const, label: "商城", icon: Gift },
-    { id: "rank" as const, label: "排行", icon: Trophy },
+    { id: "videos" as const, label: "切片", icon: ClipboardCheck },
+    { id: "mall" as const, label: "礼物", icon: Gift },
+    { id: "rank" as const, label: "榜单", icon: Trophy },
     { id: "profile" as const, label: "我的", icon: UserRound },
   ];
   return (
@@ -353,17 +343,20 @@ function HomeView({
   return (
     <div className="member-content">
       <section className="welcome-row">
-        <div>
-          <span className="eyebrow">{formatTodayLabel()}</span>
-          <h1>你好，{data.user.nickname}</h1>
-          <p>今天也来攒一点创作能量吧。</p>
+        <div className="welcome-copy">
+          <span className="eyebrow">{formatTodayLabel()} · 妙妙直播高光站</span>
+          <h1>嗨，{data.user.nickname}</h1>
+          <p>把今天的直播高光，剪成你的积分吧。</p>
+          <button className="welcome-primary" onClick={() => onOpen("submit")}>
+            <Plus size={18} /> 提交切片
+          </button>
         </div>
-        <span className="notification-heading-spacer" aria-hidden="true" />
+        <PageScene {...miaoAssets.scenes.home} eager />
       </section>
 
       <section className="balance-card">
         <div className="balance-topline">
-          <span>当前可用积分</span>
+          <span>我的积分</span>
           <button className="balance-more" aria-label="更多积分信息">
             <MoreHorizontal size={20} />
           </button>
@@ -373,8 +366,8 @@ function HomeView({
           <span>分</span>
         </div>
         <div className="balance-foot">
-          <span>本月已获得 <b>{data.summary.monthlyIncome.toLocaleString()}</b> 分</span>
-          <span className="balance-trend"><ArrowUpRight size={14} /> 实时</span>
+          <span>这个月获得 <b>{data.summary.monthlyIncome.toLocaleString()}</b> 分</span>
+          <span className="balance-trend"><ArrowUpRight size={14} /> 刚刚更新</span>
         </div>
       </section>
 
@@ -383,7 +376,7 @@ function HomeView({
           <div className="weekly-challenge-head">
             <span className="weekly-challenge-icon"><Sparkles size={19} /></span>
             <div>
-              <span className="eyebrow">本周 AI 挑战</span>
+              <span className="eyebrow">妙妙的本周挑战</span>
               <h2 id="weekly-challenge-title">{challenge.title}</h2>
             </div>
             <span className={`status-chip ${challenge.status === "CLAIMED" ? "success" : challenge.status === "REVERSED" || challenge.status === "EXPIRED" ? "danger" : "warning"}`}>
@@ -394,7 +387,7 @@ function HomeView({
           <div className="weekly-challenge-progress">
             {challenge.targetVideoCount !== null && (
               <div>
-                <span><b>通过视频</b><strong>{challenge.progress.videoCount} / {challenge.targetVideoCount}</strong></span>
+                <span><b>通过的切片</b><strong>{challenge.progress.videoCount} / {challenge.targetVideoCount}</strong></span>
                 <progress max={challenge.targetVideoCount} value={Math.min(challenge.progress.videoCount, challenge.targetVideoCount)} />
               </div>
             )}
@@ -407,14 +400,14 @@ function HomeView({
           </div>
           <div className="weekly-challenge-baseline">
             <Target size={16} />
-            <span>个人基线：每周 {challenge.baselineVideoCount} 条通过视频、{challenge.baselineLikes.toLocaleString()} 点赞</span>
+            <span>你平时每周约有 {challenge.baselineVideoCount} 条切片通过，获得 {challenge.baselineLikes.toLocaleString()} 个点赞</span>
           </div>
           <p className="weekly-challenge-reason">{challenge.aiReason}</p>
           <div className="weekly-challenge-foot">
             <div>
               <span>达标奖励</span>
               <strong>{challenge.rewardPoints.toLocaleString()} 分</strong>
-              <small>{challenge.raceEnded ? "本周竞速已结束" : `最先达标另得 ${challenge.period.raceReward.toLocaleString()} 分`}</small>
+              <small>{challenge.raceEnded ? "本周加分活动结束啦" : `最先完成还可多得 ${challenge.period.raceReward.toLocaleString()} 分`}</small>
             </div>
             {challenge.progress.qualified && ["ACTIVE", "COMPLETED"].includes(challenge.status) && (
               <button className="primary-button compact-button" disabled={!challenge.rewardsEnabled || claimingChallenge} onClick={() => void claimChallenge()}>
@@ -431,25 +424,25 @@ function HomeView({
           <span className="quick-icon coral">
             <Plus size={19} />
           </span>
-          <span>提交视频</span>
+          <span>提交切片</span>
         </button>
         <button onClick={() => onOpen("transfer")}>
           <span className="quick-icon teal">
             <Send size={18} />
           </span>
-          <span>积分转账</span>
+          <span>送积分</span>
         </button>
         <button onClick={() => onNavigate("mall")}>
           <span className="quick-icon yellow">
             <Gift size={18} />
           </span>
-          <span>兑换礼品</span>
+          <span>换礼物</span>
         </button>
         <button onClick={() => onNavigate("ledger")}>
           <span className="quick-icon purple">
             <WalletCards size={18} />
           </span>
-          <span>积分明细</span>
+          <span>积分记录</span>
         </button>
       </section>
 
@@ -459,10 +452,10 @@ function HomeView({
         </div>
         <div className="guild-copy">
           <div className="guild-title">
-            <strong>公会邀请</strong>
+            <strong>剪辑团状态</strong>
             <span className="status-chip teal">{data.user.guildStatus ?? "未设置"}</span>
           </div>
-          <p>{data.user.invited ? "妙妙剪辑团 · 邀请已发送" : "妙妙剪辑团 · 当前公会状态已同步"}</p>
+          <p>{data.user.invited ? "邀请已经发给你啦" : "这里会显示你的入团状态"}</p>
         </div>
         <ChevronRight size={18} className="muted-icon" />
       </section>
@@ -492,15 +485,15 @@ function HomeView({
               </div>
             );
           })}
-          {recentLedger.length === 0 && <p className="empty-copy">暂时没有积分动态</p>}
+          {recentLedger.length === 0 && <StateMessage {...miaoAssets.states.first}>还没有积分记录，提交第一条切片吧</StateMessage>}
         </div>
       </section>
 
       <section className="mini-rank-card">
         <div>
           <span className="eyebrow">总积分榜</span>
-          <h2>{data.summary.rank ? `你当前第 ${data.summary.rank} 名` : "榜单正在统计"}</h2>
-          <p>按当前可用积分实时更新排名</p>
+          <h2>{data.summary.rank ? `你现在是第 ${data.summary.rank} 名` : "正在整理榜单"}</h2>
+          <p>积分变化后，名次也会跟着更新</p>
         </div>
         <div className="mini-rank-medal">
           <Medal size={28} />
@@ -562,28 +555,30 @@ function VideosView({
     title: video.sourceUrl,
     date: formatDate(video.submittedAt),
     likesLabel: video.likes === null ? "抓取中" : `${video.likes.toLocaleString()} 赞`,
-    pointsLabel: video.points > 0 ? `+${video.points.toLocaleString()}` : video.status === "PROCESSING" ? "处理中" : "0",
+    pointsLabel: video.points > 0 ? `+${video.points.toLocaleString()}` : video.status === "PROCESSING" ? "检查中" : "0",
   }));
   return (
     <>
       <div className="member-content">
-      <section className="page-header-row">
+      <section className="page-header-row with-scene">
         <div>
-          <span className="eyebrow">CONTENT CONTRIBUTION</span>
-          <h1 className="page-title">我的视频</h1>
+          <span className="eyebrow">把直播高光存下来</span>
+          <h1 className="page-title">我的切片</h1>
+          <p>提交后，我们会自动检查链接和点赞数。</p>
         </div>
+        <PageScene {...miaoAssets.scenes.videos} />
         <button className="primary-button compact-button" onClick={() => onOpen("submit")}>
-          <Plus size={17} /> 提交
+          <Plus size={17} /> 提交切片
         </button>
       </section>
 
       <section className="video-summary">
         <div>
-          <span>本月有效视频</span>
+          <span>本月通过</span>
           <strong>{data.summary.monthlyApprovedVideos}</strong>
         </div>
         <div>
-          <span>视频贡献积分</span>
+          <span>切片积分</span>
           <strong>{data.summary.videoPoints.toLocaleString()}</strong>
         </div>
         <div>
@@ -595,8 +590,8 @@ function VideosView({
       <div className="filter-row">
         <button className={`filter-pill ${filter === "ALL" ? "active" : ""}`} onClick={() => setFilter("ALL")}>全部 <span>{data.summary.videoCounts.all}</span></button>
         <button className={`filter-pill ${filter === "APPROVED" ? "active" : ""}`} onClick={() => setFilter("APPROVED")}>已到账 <span>{data.summary.videoCounts.approved}</span></button>
-        <button className={`filter-pill ${filter === "PROCESSING" ? "active" : ""}`} onClick={() => setFilter("PROCESSING")}>处理中 <span>{data.summary.videoCounts.processing}</span></button>
-        <button className={`filter-pill ${filter === "EXCEPTION" ? "active" : ""}`} onClick={() => setFilter("EXCEPTION")}>异常 <span>{data.summary.videoCounts.exception}</span></button>
+        <button className={`filter-pill ${filter === "PROCESSING" ? "active" : ""}`} onClick={() => setFilter("PROCESSING")}>正在检查 <span>{data.summary.videoCounts.processing}</span></button>
+        <button className={`filter-pill ${filter === "EXCEPTION" ? "active" : ""}`} onClick={() => setFilter("EXCEPTION")}>需要看看 <span>{data.summary.videoCounts.exception}</span></button>
       </div>
 
       <section className="video-list">
@@ -613,22 +608,22 @@ function VideosView({
                   <span className="status-chip success">已到账</span>
                 )}
                 {video.status === "PROCESSING" && (
-                  <span className="status-chip warning">处理中</span>
+                  <span className="status-chip warning">正在检查</span>
                 )}
                 {video.status === "REJECTED" && (
-                  <span className="status-chip danger">已驳回</span>
+                  <span className="status-chip danger">未通过</span>
                 )}
               </div>
               <span className="video-date">{video.date}</span>
               <div className="video-foot">
                 <span className="video-note">
                   {submittedAppeals[video.id] || video.appeals[0]?.status === "PENDING"
-                    ? "申诉待复查"
+                    ? "已经提交说明，等管理员查看"
                     : video.appeals[0]?.status === "APPROVED"
-                      ? `申诉已通过${video.appeals[0].reviewedPoints !== null ? `，核定 ${video.appeals[0].reviewedPoints} 积分` : ""}`
+                      ? `说明已通过${video.appeals[0].reviewedPoints !== null ? `，获得 ${video.appeals[0].reviewedPoints} 积分` : ""}`
                       : video.appeals[0]?.status === "REJECTED"
-                        ? `申诉未通过：${video.appeals[0].reviewReason ?? "请查看处理结果"}`
-                        : video.reviewReason ?? (video.status === "APPROVED" ? "作者匹配，积分已到账" : "系统正在处理")}
+                        ? `这次没有通过：${video.appeals[0].reviewReason ?? "可以看看处理结果"}`
+                        : video.reviewReason ?? (video.status === "APPROVED" ? "已经确认，积分到账啦" : "正在检查视频，请稍等")}
                 </span>
                 <b className={video.points > 0 ? "positive-text" : "muted-text"}>
                   {video.pointsLabel}
@@ -636,26 +631,30 @@ function VideosView({
               </div>
               {video.status === "REJECTED" && !video.appeals.some((appeal) => appeal.status === "PENDING") && !submittedAppeals[video.id] && (
                 <button className="secondary-button compact-button appeal-button" onClick={() => { setAppealingVideo(video); setAppealError(""); }}>
-                  <CircleHelp size={16} /> 申诉
+                  <CircleHelp size={16} /> 补充说明
                 </button>
               )}
             </div>
           </article>
         ))}
-        {rows.length === 0 && <p className="empty-copy">{filter === "ALL" ? "还没有提交视频，先完成第一次创作吧" : "没有符合条件的视频"}</p>}
+        {rows.length === 0 && (
+          <StateMessage {...(filter === "PROCESSING" ? miaoAssets.states.checking : miaoAssets.states.first)}>
+            {filter === "ALL" ? "还没有切片，试着提交第一条吧" : "这里暂时没有切片"}
+          </StateMessage>
+        )}
         </section>
         <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
       </div>
       {appealingVideo && (
-        <ModalShell title="提交视频申诉" eyebrow="VIDEO APPEAL" onClose={() => setAppealingVideo(null)}>
-          <p className="modal-lead">请说明为何该视频应当重新复查。管理员只处理已自动驳回视频的申诉。</p>
+        <ModalShell title="补充说明" eyebrow="告诉我们这条切片哪里需要再看看" onClose={() => setAppealingVideo(null)}>
+          <p className="modal-lead">简单说说这条切片为什么应该通过，管理员会再看一次。</p>
           <div className="field">
-            <label htmlFor="appeal-reason">申诉理由</label>
-            <textarea id="appeal-reason" value={appealReason} onChange={(event) => setAppealReason(event.target.value)} maxLength={1000} rows={5} placeholder="例如：作者名仅使用了不同装饰字符，实际为本人账号" />
+            <label htmlFor="appeal-reason">你的说明</label>
+            <textarea id="appeal-reason" value={appealReason} onChange={(event) => setAppealReason(event.target.value)} maxLength={1000} rows={5} placeholder="例如：昵称里只是多了装饰符号，确实是妙妙的直播切片" />
           </div>
           {appealError && <p className="form-error" role="alert">{appealError}</p>}
           <button className="primary-button full-button modal-submit" disabled={appealSaving || appealReason.trim().length < 2} onClick={submitAppeal}>
-            <Send size={17} /> {appealSaving ? "提交中..." : "提交申诉"}
+            <Send size={17} /> {appealSaving ? "正在提交..." : "提交说明"}
           </button>
         </ModalShell>
       )}
@@ -669,11 +668,13 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
   const categories = ["全部", "实用好物", "会员权益", "团品周边"];
   return (
     <div className="member-content">
-      <section className="page-header-row">
+      <section className="page-header-row with-scene">
         <div>
-          <span className="eyebrow">POINTS MARKET</span>
-          <h1 className="page-title">积分商城</h1>
+          <span className="eyebrow">用努力换一份小惊喜</span>
+          <h1 className="page-title">积分礼物屋</h1>
+          <p>积分够了就能换，兑换前记得检查信息。</p>
         </div>
+        <PageScene {...miaoAssets.scenes.mall} />
         <button className="icon-button" aria-label="兑换记录" onClick={() => onNavigate("orders")}>
           <PackageCheck size={20} />
         </button>
@@ -682,7 +683,7 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
         <Coins size={18} />
         <span>可用积分</span>
         <strong>{balance.toLocaleString()}</strong>
-        <button onClick={() => onOpen("transfer")}>去转账 <ChevronRight size={15} /></button>
+        <button onClick={() => onOpen("transfer")}>送积分 <ChevronRight size={15} /></button>
       </div>
       <div className="category-tabs">
         {categories.map((category) => (
@@ -711,17 +712,18 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
               </div>
               <button
                 className="secondary-button full-button gift-button"
+                disabled={gift.stock <= 0 || balance < gift.points}
                 onClick={() => {
                   setSelectedGift(gift);
                   onOpen("redeem", gift);
                 }}
               >
-                立即兑换
+                {gift.stock > 0 ? (balance >= gift.points ? "换这个礼物" : `还差 ${(gift.points - balance).toLocaleString()} 分`) : "暂时换不了"}
               </button>
             </div>
           </article>
         ))}
-        {items.length === 0 && <p className="empty-copy">商城暂时没有可兑换礼品</p>}
+        {items.length === 0 && <StateMessage {...miaoAssets.actions.gift}>礼物屋正在补货，晚点再来看看吧</StateMessage>}
       </section>
       {selectedGift && (
         <div className="sr-only" aria-live="polite">
@@ -768,12 +770,12 @@ function AwardClaimDialog({ award, onClose, onClaimed }: { award: MemberAward; o
     }
   }
   return (
-    <ModalShell title="填写领奖信息" eyebrow="RANKING REWARD" onClose={onClose}>
+    <ModalShell title="填写领奖信息" eyebrow="把礼物送到正确的地方" onClose={onClose}>
       <div className="redeem-preview">
         <span className="success-symbol yellow-symbol"><Trophy size={28} /></span>
         <div><strong>榜单奖励</strong><span>第 {award.rank} 名 · {award.period.type === "WEEK" ? "周更新排行榜" : "月点赞量排行榜"}</span></div>
       </div>
-      <p className="modal-lead">请填写收货信息，榜单奖励由管理员统一发放。</p>
+      <p className="modal-lead">填好收货信息后，管理员会统一寄出榜单礼物。</p>
       <div className="field"><label htmlFor="award-name">收货姓名</label><input id="award-name" value={recipientName} onChange={(event) => setRecipientName(event.target.value)} /></div>
       <div className="field"><label htmlFor="award-phone">手机号</label><input id="award-phone" value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" /></div>
       <div className="field"><label htmlFor="award-address">详细地址</label><textarea id="award-address" value={address} onChange={(event) => setAddress(event.target.value)} rows={3} /></div>
@@ -824,11 +826,13 @@ function RankView({ data }: { data: DashboardData }) {
   }
   return (
     <div className="member-content">
-      <section className="page-header-row">
+      <section className="page-header-row with-scene">
         <div>
-          <span className="eyebrow">CREATOR LEADERBOARD</span>
-          <h1 className="page-title">创作榜单</h1>
+          <span className="eyebrow">每一条高光都算数</span>
+          <h1 className="page-title">剪辑团榜单</h1>
+          <p>看看这周谁剪出了最多精彩片段。</p>
         </div>
+        <PageScene {...miaoAssets.scenes.rank} />
         <button className="icon-button" aria-label="榜单说明">
           <CircleHelp size={20} />
         </button>
@@ -843,13 +847,13 @@ function RankView({ data }: { data: DashboardData }) {
       <section className="rank-hero">
         <div className="rank-hero-copy">
           <span className="eyebrow">{period === "本周" ? "周更新排行榜" : period === "本月" ? "月点赞量排行榜" : "总积分排行榜"}</span>
-          <h2>保持你的创作节奏</h2>
-          <p>{period === "本周" ? "按本周提交且通过的视频数量排名" : period === "本月" ? "按本月提交视频的总点赞量排名" : "按当前积分余额排名"}</p>
+          <h2>一起把高光剪出来</h2>
+          <p>{period === "本周" ? "按这周通过的切片数量排名" : period === "本月" ? "按这个月切片收到的点赞数排名" : "按现在拥有的积分排名"}</p>
         </div>
         <Trophy size={58} strokeWidth={1.3} />
       </section>
       <section className="rank-list">
-        {loading && <p className="empty-copy">正在加载榜单...</p>}
+        {loading && <p className="empty-copy">正在整理榜单...</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         {!loading && !error && ranking.map((user) => (
           <div className={`rank-row ${user.current ? "current" : ""}`} key={user.userId}>
@@ -859,10 +863,10 @@ function RankView({ data }: { data: DashboardData }) {
               <strong>{user.nickname}</strong>
               {user.current && <span>这是你</span>}
             </div>
-            <b>{(user.value ?? user.points).toLocaleString()}<small>{period === "本周" ? " 个视频" : period === "本月" ? " 赞" : " 分"}</small></b>
+            <b>{(user.value ?? user.points).toLocaleString()}<small>{period === "本周" ? " 条切片" : period === "本月" ? " 赞" : " 分"}</small></b>
           </div>
         ))}
-        {!loading && !error && ranking.length === 0 && <p className="empty-copy">暂时没有榜单数据</p>}
+        {!loading && !error && ranking.length === 0 && <StateMessage {...miaoAssets.actions.award}>榜单还没有人，提交第一条切片吧</StateMessage>}
       </section>
       {awards.length > 0 && (
         <section className="profile-section">
@@ -882,132 +886,11 @@ function RankView({ data }: { data: DashboardData }) {
   );
 }
 
-function LedgerView({ onBack, data, hasMore, loadingMore, onLoadMore }: { onBack: () => void; data: DashboardData; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
-  const income = data.ledger.filter((item) => item.amount > 0).reduce((total, item) => total + item.amount, 0);
-  const expense = Math.abs(data.ledger.filter((item) => item.amount < 0).reduce((total, item) => total + item.amount, 0));
-  return (
-    <div className="member-content">
-      <section className="page-header-row">
-        <div className="back-title">
-          <button className="icon-button" aria-label="返回" onClick={onBack}>
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <span className="eyebrow">POINTS LEDGER</span>
-            <h1 className="page-title">积分明细</h1>
-          </div>
-        </div>
-        <button className="icon-button" aria-label="筛选">
-          <Search size={20} />
-        </button>
-      </section>
-      <section className="ledger-total">
-        <span>当前积分</span>
-        <strong>{data.user.balance.toLocaleString()}</strong>
-        <div><span>收入 {income.toLocaleString()}</span><span>支出 {expense.toLocaleString()}</span></div>
-      </section>
-      <div className="ledger-filter">
-        <button className="active">全部</button>
-        <button>收入</button>
-        <button>支出</button>
-        <button>近三个月</button>
-      </div>
-      <section className="ledger-list">
-        {data.ledger.map((item) => {
-          const Icon = item.amount >= 0 ? ArrowDownLeft : Gift;
-          return (
-            <div className="ledger-row" key={item.id}>
-              <span className={`ledger-icon ${item.amount >= 0 ? "positive" : "negative"}`}>
-                <Icon size={18} />
-              </span>
-              <div>
-                <strong>{ledgerLabel(item.type, item.note)}</strong>
-                <span>{formatDate(item.createdAt)}</span>
-              </div>
-              <b className={item.amount >= 0 ? "positive-text" : "negative-text"}>{item.amount >= 0 ? "+" : ""}{item.amount.toLocaleString()}</b>
-            </div>
-          );
-        })}
-        {data.ledger.length === 0 && <p className="empty-copy">暂时没有积分流水</p>}
-      </section>
-      <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
-    </div>
-  );
-}
-
-function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }: { onBack: () => void; data: DashboardData; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
-  return (
-    <div className="member-content">
-      <section className="page-header-row">
-        <div className="back-title">
-          <button className="icon-button" aria-label="返回" onClick={onBack}><ArrowLeft size={20} /></button>
-          <div><span className="eyebrow">TRANSFER HISTORY</span><h1 className="page-title">转账记录</h1></div>
-        </div>
-      </section>
-      <section className="ledger-list">
-        {data.transfers.map((transfer) => {
-          const outgoing = transfer.senderId === data.user.id;
-          const counterparty = outgoing ? transfer.receiver : transfer.sender;
-          return (
-            <div className="ledger-row" key={transfer.id}>
-              <span className={`ledger-icon ${outgoing ? "negative" : "positive"}`}>{outgoing ? <ArrowUpRight size={18} /> : <ArrowDownLeft size={18} />}</span>
-              <div>
-                <strong>{outgoing ? "转给" : "收到"} {counterparty.nickname}</strong>
-                <span>{counterparty.kuaishouId} · {formatDate(transfer.createdAt)}{transfer.note ? ` · ${transfer.note}` : ""}</span>
-              </div>
-              <b className={outgoing ? "negative-text" : "positive-text"}>{outgoing ? "-" : "+"}{transfer.amount.toLocaleString()}</b>
-            </div>
-          );
-        })}
-        {data.transfers.length === 0 && <p className="empty-copy">暂时没有转账记录</p>}
-      </section>
-      <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
-    </div>
-  );
-}
-
-function orderStatusLabel(status: string, kind: "PHYSICAL" | "CASH") {
-  const labels: Record<string, string> = {
-    PENDING: kind === "PHYSICAL" ? "待采购" : "待发放",
-    APPROVED: kind === "PHYSICAL" ? "已下单，待采购" : "待发放",
-    FULFILLED: kind === "PHYSICAL" ? "已发货" : "已发放",
-    REJECTED: "已驳回",
-    REFUNDED: "已退款",
-  };
-  return labels[status] ?? status;
-}
-
-function RedemptionRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }: { onBack: () => void; data: DashboardData; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
-  return (
-    <div className="member-content">
-      <section className="page-header-row">
-        <div className="back-title">
-          <button className="icon-button" aria-label="返回" onClick={onBack}><ArrowLeft size={20} /></button>
-          <div><span className="eyebrow">REDEMPTION HISTORY</span><h1 className="page-title">兑换记录</h1></div>
-        </div>
-      </section>
-      <section className="ledger-list">
-        {data.orders.map((order) => (
-          <div className="ledger-row" key={order.id}>
-            <span className="ledger-icon negative"><PackageCheck size={18} /></span>
-            <div>
-              <strong>{order.gift.name}</strong>
-              <span>{order.gift.kind === "CASH" ? "现金兑换" : "实物商品"} · {formatDate(order.createdAt)}</span>
-            </div>
-            <div className="record-side"><b className="negative-text">-{order.totalCost.toLocaleString()}</b><span className="status-chip">{orderStatusLabel(order.status, order.gift.kind)}</span>{order.gift.kind === "PHYSICAL" && order.trackingNumber && <small className="tracking-copy">快递单号：{order.trackingNumber}</small>}</div>
-          </div>
-        ))}
-        {data.orders.length === 0 && <p className="empty-copy">暂时没有兑换记录</p>}
-      </section>
-      <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
-    </div>
-  );
-}
-
 function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view: MemberView) => void; onOpen: (dialog: DialogType) => void; data: DashboardData; onLogout: () => void }) {
   return (
     <div className="member-content">
       <section className="profile-head">
+        <PageScene {...miaoAssets.scenes.profile} />
         <div className="profile-avatar-wrap">
           <Avatar text={data.user.nickname.slice(0, 1)} tone="coral" imageUrl={data.user.avatarUrl} />
           <span className="online-dot" />
@@ -1015,29 +898,29 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
         <div className="profile-copy">
           <h1>{data.user.nickname}</h1>
           <p>快手 ID · {data.user.kuaishouId}</p>
-          <span className="status-chip teal"><BadgeCheck size={13} /> 已认证成员</span>
+          <span className="status-chip teal"><BadgeCheck size={13} /> 剪辑团成员</span>
         </div>
         <button className="icon-button" aria-label="设置"><Settings2 size={20} /></button>
       </section>
       <section className="profile-stat-row">
         <div><strong>{data.user.balance.toLocaleString()}</strong><span>当前积分</span></div>
-        <div><strong>{data.summary.approvedVideos}</strong><span>有效视频</span></div>
-        <div><strong>{data.summary.rank ?? "–"}</strong><span>当前排名</span></div>
+        <div><strong>{data.summary.approvedVideos}</strong><span>通过的切片</span></div>
+        <div><strong>{data.summary.rank ?? "–"}</strong><span>榜单名次</span></div>
       </section>
       <section className="profile-section">
-        <div className="section-heading"><h2 className="section-title">我的资料</h2><button className="section-action" onClick={() => onOpen("profile")}>编辑资料</button></div>
+        <div className="section-heading"><h2 className="section-title">我的信息</h2><button className="section-action" onClick={() => onOpen("profile")}>修改</button></div>
         <div className="profile-info-list">
           <div><span>快手昵称</span><strong>{data.user.nickname}</strong></div>
           <div><span>快手 ID</span><strong>{data.user.kuaishouId}</strong></div>
-          <div><span>公会状态</span><span className="status-chip teal">{data.user.guildStatus ?? "未设置"}</span></div>
+          <div><span>剪辑团状态</span><span className="status-chip teal">{data.user.guildStatus ?? "未设置"}</span></div>
         </div>
       </section>
       <section className="profile-menu">
-        <button onClick={() => onNavigate("ledger")}><span><WalletCards size={19} />积分明细</span><ChevronRight size={18} /></button>
-        <button onClick={() => onNavigate("transfers")}><span><Send size={19} />转账记录</span><ChevronRight size={18} /></button>
-        <button onClick={() => onNavigate("orders")}><span><PackageCheck size={19} />兑换记录</span><ChevronRight size={18} /></button>
-        <button onClick={() => onOpen("recipient")}><span><PackageCheck size={19} />收货与收款信息</span><ChevronRight size={18} /></button>
-        <button onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
+        <button aria-label="积分记录" onClick={() => onNavigate("ledger")}><span><WalletCards size={19} />积分记录</span><ChevronRight size={18} /></button>
+        <button aria-label="送积分记录" onClick={() => onNavigate("transfers")}><span><Send size={19} />送积分记录</span><ChevronRight size={18} /></button>
+        <button aria-label="兑换记录" onClick={() => onNavigate("orders")}><span><PackageCheck size={19} />兑换记录</span><ChevronRight size={18} /></button>
+        <button aria-label="收货与收款信息" onClick={() => onOpen("recipient")}><span><PackageCheck size={19} />收货与收款信息</span><ChevronRight size={18} /></button>
+        <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
       </section>
       <button className="logout-button" onClick={onLogout}><LogOut size={18} />退出登录</button>
     </div>
@@ -1104,11 +987,11 @@ function ProfileEditDialog({ user, onClose }: { user: DashboardData["user"]; onC
     }
   }
   return (
-    <ModalShell title="编辑资料" eyebrow="MY PROFILE" onClose={onClose}>
+    <ModalShell title="修改我的信息" eyebrow="昵称和头像会显示在剪辑团里" onClose={onClose}>
       <div className="avatar-editor">
         <Avatar text={nickname.slice(0, 1)} tone="coral" imageUrl={avatarUrl} />
-        <div><strong>个人头像</strong><span>上传后自动裁剪并压缩为 WebP</span></div>
-        <label className="secondary-button mini-button avatar-upload-button">{avatarBusy ? "处理中..." : "更换头像"}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={avatarBusy} onChange={(event) => { void uploadAvatar(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+        <div><strong>我的头像</strong><span>上传后会自动裁成合适的大小</span></div>
+        <label className="secondary-button mini-button avatar-upload-button">{avatarBusy ? "正在准备..." : "更换头像"}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={avatarBusy} onChange={(event) => { void uploadAvatar(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
         {avatarUrl && <button className="text-button" type="button" disabled={avatarBusy} onClick={() => void resetAvatar()}>恢复默认</button>}
       </div>
       <div className="field"><label htmlFor="profile-nickname">快手昵称</label><input id="profile-nickname" value={nickname} onChange={(event) => setNickname(event.target.value)} /></div>
@@ -1176,8 +1059,8 @@ function RecipientProfileDialog({ onClose }: { onClose: () => void }) {
     }
   }
   return (
-    <ModalShell title="收货与收款信息" eyebrow="RECIPIENT PROFILE" onClose={onClose}>
-      <p className="modal-lead">保存后可在兑换礼品和榜单领奖时直接复用。</p>
+    <ModalShell title="收货与收款信息" eyebrow="兑换礼物时会用到" onClose={onClose}>
+      <p className="modal-lead">保存一次，以后兑换礼物和领奖时就不用重复填写。</p>
       <div className="field"><label htmlFor="profile-recipient-name">收货姓名</label><input id="profile-recipient-name" value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="实物商品需要填写" /></div>
       <div className="field"><label htmlFor="profile-recipient-phone">手机号</label><input id="profile-recipient-phone" value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" placeholder="实物商品需要填写" /></div>
       <div className="field"><label htmlFor="profile-recipient-address">详细地址</label><textarea id="profile-recipient-address" value={address} onChange={(event) => setAddress(event.target.value)} rows={3} placeholder="实物商品需要填写" /></div>
@@ -1217,7 +1100,7 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
     }
   }
   return (
-    <ModalShell title="修改密码" eyebrow="ACCOUNT SECURITY" onClose={onClose}>
+    <ModalShell title="修改密码" eyebrow="换一个只有你知道的新密码" onClose={onClose}>
       <div className="field"><label htmlFor="current-password">当前密码</label><input id="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></div>
       <div className="field"><label htmlFor="new-password">新密码</label><input id="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 8 位" /></div>
       <div className="field"><label htmlFor="confirm-password">确认新密码</label><input id="confirm-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></div>
@@ -1241,7 +1124,12 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
     }
     setPasting(true);
     try {
-      const clipboardText = await navigator.clipboard.readText();
+      const clipboardText = await Promise.race([
+        navigator.clipboard.readText(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error("clipboard-timeout")), 4000);
+        }),
+      ]);
       if (!clipboardText.trim()) {
         setError("剪贴板中没有可粘贴的内容");
         return;
@@ -1251,7 +1139,7 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
         setError("分享文案超过 2,000 字，请只保留包含快手链接的部分");
       }
     } catch {
-      setError("无法读取剪贴板，请允许剪贴板权限后重试，或在输入框内长按粘贴");
+      setError("没能读取剪贴板，请长按输入框粘贴链接");
     } finally {
       setPasting(false);
     }
@@ -1275,12 +1163,12 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
     }
   }
   return (
-    <ModalShell title="提交快手视频" eyebrow="VIDEO CONTRIBUTION" onClose={onClose}>
+    <ModalShell title="提交直播切片" eyebrow="把快手分享内容粘贴到这里" onClose={onClose}>
       {!submitted ? (
         <>
-          <p className="modal-lead">粘贴公开的快手视频链接或分享文案，系统会自动识别链接、读取点赞量并校验作者。</p>
+          <p className="modal-lead">粘贴快手链接或整段分享内容，我们会帮你找到视频并检查点赞数。</p>
           <div className="field">
-            <label htmlFor="video-link">快手视频链接</label>
+            <label htmlFor="video-link">快手链接或分享内容</label>
             <div className="input-with-icon">
               <Link2 size={18} />
               <textarea
@@ -1295,24 +1183,24 @@ function SubmitDialog({ onClose }: { onClose: () => void }) {
                 <ClipboardPaste size={14} /> {pasting ? "读取中" : "粘贴"}
               </button>
             </div>
-            <span className="field-hint">支持短链接、长链接和分享文案。仅接受发布 7 天内且不少于 200 赞的视频。</span>
+            <span className="field-hint">短链接、长链接和整段分享内容都可以。切片需要在 7 天内发布，并且至少有 200 个赞。</span>
             <span className={`field-hint ${link.length > 2000 ? "negative-text" : ""}`}>{link.length.toLocaleString()} / 2,000 字</span>
           </div>
           <div className="rule-notice">
             <ShieldCheck size={18} />
-            <span>作者名需要与账号快手昵称一致；已通过或审核中的视频不能重复提交，被驳回后可以再次提交。</span>
+            <span>视频昵称要和你填写的快手昵称一致。正在检查或已经通过的切片不能重复提交，未通过后可以再试一次。</span>
           </div>
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-button full-button modal-submit" disabled={!link || link.length > 2000 || submitting} onClick={submit}>
-            <Send size={17} /> {submitting ? "正在提交..." : "提交并开始校验"}
+            <Send size={17} /> {submitting ? "正在提交..." : "提交切片"}
           </button>
         </>
       ) : (
         <div className="success-state">
           <div className="success-symbol"><ClipboardCheck size={30} /></div>
-          <h3>已进入校验队列</h3>
-          <p>系统正在读取点赞量和作者信息，通常需要 1–2 分钟。你可以在「我的视频」中查看进度。</p>
-          <button className="primary-button full-button" onClick={onClose}>查看提交记录</button>
+          <h3>提交成功啦</h3>
+          <p>我们正在检查视频和点赞数，一般需要 1–2 分钟。可以去「我的切片」看看进度。</p>
+          <button className="primary-button full-button" onClick={onClose}>查看我的切片</button>
         </div>
       )}
     </ModalShell>
@@ -1327,6 +1215,8 @@ function TransferDialog({ onClose, balance }: { onClose: () => void; balance: nu
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const numericAmount = Number(amount);
+  const amountTooHigh = Number.isFinite(numericAmount) && numericAmount > balance;
   async function previewReceiver() {
     setSubmitting(true);
     setError("");
@@ -1361,22 +1251,26 @@ function TransferDialog({ onClose, balance }: { onClose: () => void; balance: nu
     }
   }
   return (
-    <ModalShell title="积分转账" eyebrow="POINTS TRANSFER" onClose={onClose}>
+    <ModalShell title="送积分给团友" eyebrow="先确认对方的快手 ID" onClose={onClose}>
       {!done ? (
         <>
           <div className="transfer-balance"><span>可用积分</span><strong>{balance.toLocaleString()}</strong></div>
-          <div className="field"><label htmlFor="receiver">收款人快手 ID</label><input id="receiver" value={receiverKuaishouId} onChange={(event) => { setReceiverKuaishouId(event.target.value); setReceiver(null); }} placeholder="输入对方快手 ID" disabled={Boolean(receiver)} /></div>
-          <div className="field"><label htmlFor="amount">转账积分</label><input id="amount" value={amount} onChange={(event) => setAmount(event.target.value)} type="number" placeholder="请输入积分数量" /></div>
+          <div className="field"><label htmlFor="receiver">团友的快手 ID</label><input id="receiver" value={receiverKuaishouId} onChange={(event) => { setReceiverKuaishouId(event.target.value); setReceiver(null); }} placeholder="输入对方的快手 ID" disabled={Boolean(receiver)} /></div>
+          <div className="field">
+            <label htmlFor="amount">送多少积分</label>
+            <input id="amount" value={amount} onChange={(event) => setAmount(event.target.value)} type="number" min={1} step={1} placeholder="输入整数积分" />
+            {amountTooHigh && <span className="field-hint negative-text">积分不够，请输入不超过 {balance.toLocaleString()} 的整数</span>}
+          </div>
           <div className="field"><label htmlFor="memo">备注（选填）</label><input id="memo" value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：本周协作奖励" /></div>
-          {receiver && <div className="transfer-confirm"><span>收款成员</span><strong>{receiver.nickname}</strong><small>{receiver.kuaishouId} · 将收到 {Number(amount || 0).toLocaleString()} 积分</small><button className="text-button" onClick={() => setReceiver(null)}>更换成员</button></div>}
+          {receiver && <div className="transfer-confirm"><span>请确认这位团友</span><strong>{receiver.nickname}</strong><small>{receiver.kuaishouId} · 会收到 {Number(amount || 0).toLocaleString()} 积分</small><button className="text-button" onClick={() => setReceiver(null)}>换一个人</button></div>}
           {error && <p className="form-error" role="alert">{error}</p>}
-          {!receiver ? <button className="primary-button full-button modal-submit" disabled={submitting || !receiverKuaishouId || !amount || !Number.isInteger(Number(amount)) || Number(amount) <= 0} onClick={previewReceiver}><Search size={17} /> {submitting ? "核对中..." : "核对收款成员"}</button> : <button className="primary-button full-button modal-submit" disabled={submitting} onClick={transfer}><Send size={17} /> {submitting ? "处理中..." : "确认转账"}</button>}
+          {!receiver ? <button className="primary-button full-button modal-submit" disabled={submitting || !receiverKuaishouId || !amount || !Number.isInteger(numericAmount) || numericAmount <= 0 || amountTooHigh} onClick={previewReceiver}><Search size={17} /> {amountTooHigh ? "积分不够" : submitting ? "正在查找..." : "找到这位团友"}</button> : <button className="primary-button full-button modal-submit" disabled={submitting || !Number.isInteger(numericAmount) || numericAmount <= 0 || amountTooHigh} onClick={transfer}><Send size={17} /> {amountTooHigh ? "积分不够" : submitting ? "正在送出..." : "确认送出"}</button>}
         </>
       ) : (
         <div className="success-state">
           <div className="success-symbol teal-symbol"><Send size={28} /></div>
-          <h3>转账已完成</h3>
-          <p>积分已安全转入对方账户，转账明细已记录。</p>
+          <h3>积分送到啦</h3>
+          <p>积分已经送给对方，这次记录也保存好了。</p>
           <button className="primary-button full-button" onClick={onClose}>完成</button>
         </div>
       )}
@@ -1455,7 +1349,7 @@ function RedeemDialog({
     }
   }
   return (
-    <ModalShell title="确认兑换" eyebrow="REDEEM GIFT" onClose={onClose}>
+    <ModalShell title="确认兑换" eyebrow="检查礼物和收货信息" onClose={onClose}>
       {!done && gift ? (
         <>
           <div className="redeem-preview">
@@ -1479,16 +1373,16 @@ function RedeemDialog({
               <div className="field"><label htmlFor="recipient-address">详细地址</label><textarea id="recipient-address" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="省、市、区县、街道和门牌号" rows={3} /></div>
             </>
           )}
-          <div className="rule-notice"><PackageCheck size={18} /><span>{gift.kind === "CASH" ? "收款码会加密传输并保存，后续兑换可直接复用。" : "收货信息会安全保存，后续兑换和榜单领奖可直接复用。"}</span></div>
+          <div className="rule-notice"><PackageCheck size={18} /><span>{gift.kind === "CASH" ? "收款码会安全保存，下次兑换可以直接使用。" : "收货信息会安全保存，下次兑换和领奖可以直接使用。"}</span></div>
           {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="primary-button full-button modal-submit" disabled={submitting || (gift.kind === "CASH" ? !cashQrCodeUrl : !recipientName || !phone || !address)} onClick={redeem}><Gift size={17} /> {submitting ? "处理中..." : "确认兑换"}</button>
+          <button className="primary-button full-button modal-submit" disabled={submitting || (gift.kind === "CASH" ? !cashQrCodeUrl : !recipientName || !phone || !address)} onClick={redeem}><Gift size={17} /> {submitting ? "正在兑换..." : "确认兑换"}</button>
         </>
       ) : (
         <div className="success-state">
           <div className="success-symbol yellow-symbol"><PackageCheck size={30} /></div>
-          <h3>兑换申请已提交</h3>
-          <p>{gift?.kind === "PHYSICAL" ? "订单已提交，进入待采购状态；发货后会第一时间通知你。" : "订单已提交，进入待发放状态；完成后会第一时间通知你。"}</p>
-          <button className="primary-button full-button" onClick={onClose}>查看订单</button>
+          <h3>兑换成功啦</h3>
+          <p>{gift?.kind === "PHYSICAL" ? "申请已经收好，礼物发出后会通知你。" : "申请已经收好，积分礼物准备好后会通知你。"}</p>
+          <button className="primary-button full-button" onClick={onClose}>查看兑换记录</button>
         </div>
       )}
     </ModalShell>
@@ -1614,7 +1508,12 @@ export default function MemberApp() {
         <div className="member-app member-loading">
           <BrandMark />
           {loadError ? (
-            <div className="load-error"><strong>暂时无法加载数据</strong><span>{loadError}</span><button className="primary-button" onClick={() => setRevision((value) => value + 1)}>重新加载</button></div>
+            <div className="load-error">
+              <PageScene {...miaoAssets.states.failed} />
+              <strong>页面暂时没加载出来</strong>
+              <span>{loadError}，可以再试一次。</span>
+              <button className="primary-button" onClick={() => setRevision((value) => value + 1)}>再试一次</button>
+            </div>
           ) : <div className="loading-line" aria-label="正在加载" />}
         </div>
       </main>

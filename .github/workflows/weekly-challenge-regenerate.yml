@@ -75,22 +75,27 @@ jobs:
           test "$periods_status" = "200"
           period_id="$(jq -r --arg start "$PERIOD_START" '
             .periods[]
-            | select(.periodStart == $start and .status == "READY")
+            | select(.periodStart == $start and (.status == "READY" or .status == "FAILED"))
             | .id
           ' "$work_dir/periods.json" | head -n 1)"
           test -n "$period_id"
-          policy="$(jq -r --arg id "$period_id" '.periods[] | select(.id == $id) | .rewardPolicyVersion' "$work_dir/periods.json")"
-          test "$policy" != "tiered-v2-hard-combined"
-
+          period_status="$(jq -r --arg id "$period_id" '.periods[] | select(.id == $id) | .status' "$work_dir/periods.json")"
+          if [[ "$period_status" == "READY" ]]; then
+            policy="$(jq -r --arg id "$period_id" '.periods[] | select(.id == $id) | .rewardPolicyVersion' "$work_dir/periods.json")"
+            test "$policy" != "tiered-v2-hard-combined"
+            submit_path="upgrade-tiered-rewards"
+          else
+            submit_path="retry"
+          fi
           response_status="$(curl --silent --show-error \
             --output "$work_dir/submit.json" \
             --write-out '%{http_code}' \
             --cookie "$work_dir/cookies.txt" \
             --header "origin: $origin" \
             --request POST \
-            "$origin/api/admin/weekly-challenges/$period_id/upgrade-tiered-rewards")"
+            "$origin/api/admin/weekly-challenges/$period_id/$submit_path")"
           test "$response_status" = "202"
-          jq -e --arg id "$period_id" '.queued == true and .periodId == $id' "$work_dir/submit.json" >/dev/null
+          jq -e '.queued == true and (.jobId | type == "string" and length > 0)' "$work_dir/submit.json" >/dev/null
           printf '%s\n' "$period_id" > "$work_dir/period-id"
 
       - name: Verify regenerated period is ready

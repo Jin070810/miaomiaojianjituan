@@ -75,13 +75,15 @@ jobs:
               .status == "READY"
               and .audienceCount == 300
               and .assignmentCount == 300
-              and .rewardBudget == 10000
-              and .totalRewards <= 10000
-              and .minimumReward >= 10
-              and .maximumReward <= 1500
+              and .rewardBudget == 300000
+              and .totalRewards <= 300000
+              and .minimumReward >= 300
+              and .maximumReward <= 1000
+              and .tierCountPerAssignment == 3
               and .runningAttempts == 0
               and (.finalFailedBatches | length) == 0
-              and .promptVersion == "weekly-challenge-v2"
+              and .promptVersion == "weekly-challenge-v3-tiered-rewards"
+              and .rewardPolicyVersion == "tiered-v1"
               and .model == "deepseek-v4-flash")
           ' shadow-report/report.json >/dev/null
       - name: Verify production health before change

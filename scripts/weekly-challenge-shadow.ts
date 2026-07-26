@@ -8,6 +8,7 @@ import {
 } from "../lib/weekly-challenge-diagnostics";
 import { generateWeeklyChallengePeriod } from "../lib/weekly-challenge-generation";
 import { nextShanghaiWeekBounds } from "../lib/weekly-challenges";
+import { parseRewardTiers, REWARD_POLICY_VERSION } from "../lib/weekly-challenge-rewards";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MEMBER_COUNT = 300;
@@ -130,7 +131,7 @@ async function periodReport(periodId: string) {
   const period = await db.weeklyChallengePeriod.findUniqueOrThrow({
     where: { id: periodId },
     include: {
-      assignments: { select: { type: true, rewardPoints: true } },
+      assignments: { select: { type: true, rewardPoints: true, rewardTiers: true } },
       attempts: {
         select: {
           batchNumber: true,
@@ -145,6 +146,7 @@ async function periodReport(periodId: string) {
   });
   const totalRewards = period.assignments.reduce((sum, row) => sum + row.rewardPoints, 0);
   const rewards = period.assignments.map((row) => row.rewardPoints);
+  const rewardTiers = period.assignments.map((row) => parseRewardTiers(row.rewardTiers));
   const distribution = period.assignments.reduce<Record<string, number>>((result, row) => {
     result[row.type] = (result[row.type] ?? 0) + 1;
     return result;
@@ -155,8 +157,19 @@ async function periodReport(periodId: string) {
     throw new Error(`影子周期覆盖不完整：${period.assignments.length}/${MEMBER_COUNT}`);
   }
   if (totalRewards > period.personalRewardBudget) throw new Error("影子周期个人奖励超出预算");
-  if (rewards.some((reward) => !Number.isInteger(reward) || reward < 10 || reward > 1500)) {
+  if (period.rewardPolicyVersion !== REWARD_POLICY_VERSION) {
+    throw new Error(`影子周期奖励策略错误：${period.rewardPolicyVersion}`);
+  }
+  if (rewards.some((reward) => !Number.isInteger(reward) || reward < 300 || reward > 1000)) {
     throw new Error("影子周期存在非法个人奖励");
+  }
+  if (rewardTiers.some((tiers) =>
+    !tiers
+    || tiers.length !== 3
+    || tiers[0].rewardPoints !== 100
+    || tiers[2].rewardPoints < 300
+    || tiers[2].rewardPoints > 1000)) {
+    throw new Error("影子周期存在非法阶梯奖励");
   }
   return {
     periodStart: period.periodStart.toISOString(),
@@ -168,10 +181,12 @@ async function periodReport(periodId: string) {
     totalRewards,
     minimumReward: Math.min(...rewards),
     maximumReward: Math.max(...rewards),
+    tierCountPerAssignment: 3,
     ...attemptSummary,
     tokens: attemptSummary.totalTokens,
     model: period.model,
     promptVersion: period.promptVersion,
+    rewardPolicyVersion: period.rewardPolicyVersion,
   };
 }
 
@@ -207,6 +222,7 @@ async function failureReport(error: unknown) {
       rewardBudget: period.personalRewardBudget,
       model: period.model,
       promptVersion: period.promptVersion,
+      rewardPolicyVersion: period.rewardPolicyVersion,
       ...summarizeGenerationAttempts(period.attempts),
     })),
     rewardsEnabled: switchState?.enabled ?? null,

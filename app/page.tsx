@@ -134,12 +134,27 @@ type WeeklyChallengeData = {
   targetVideoCount: number | null;
   targetLikes: number | null;
   rewardPoints: number;
+  rewardTiers: Array<{
+    label: string;
+    targetVideoCount: number | null;
+    targetLikes: number | null;
+    rewardPoints: number;
+  }>;
+  claimedRewardPoints: number;
+  claimedTier: number;
   completedAt: string | null;
   claimedAt: string | null;
   reversedAt: string | null;
-  progress: { videoCount: number; likes: number; qualified: boolean };
+  progress: {
+    videoCount: number;
+    likes: number;
+    qualified: boolean;
+    reachedTierIndex: number;
+    claimableRewardPoints: number;
+  };
   rewardsEnabled: boolean;
   claimable: boolean;
+  claimableRewardPoints: number;
   raceEnded: boolean;
   period: {
     periodStart: string;
@@ -198,8 +213,17 @@ function challengeStatusLabel(challenge: WeeklyChallengeData) {
   if (challenge.status === "CLAIMED") return "奖励已到账";
   if (challenge.status === "REVERSED") return "任务已撤销";
   if (challenge.status === "EXPIRED") return "本周已结束";
+  if (challenge.claimableRewardPoints > 0) return "阶段奖励可领取";
   if (challenge.progress.qualified) return "已经达标";
+  if (challenge.claimedRewardPoints > 0) return `已领取 ${challenge.claimedRewardPoints} 分`;
   return "正在进行";
+}
+
+function challengeTierTarget(challenge: WeeklyChallengeData, tier: WeeklyChallengeData["rewardTiers"][number]) {
+  const targets = [];
+  if (tier.targetVideoCount !== null) targets.push(`${tier.targetVideoCount} 条通过切片`);
+  if (tier.targetLikes !== null) targets.push(`${tier.targetLikes.toLocaleString()} 赞`);
+  return targets.join(" + ");
 }
 
 function challengeProgressPercent(challenge: WeeklyChallengeData) {
@@ -406,7 +430,7 @@ function HomeView({
               <span>{progressPercent}%</span>
             </div>
             <div className="challenge-entry-foot">
-              <span><Coins size={17} /> 完成可得 <b>{challenge.rewardPoints.toLocaleString()}</b> 积分</span>
+              <span><Coins size={17} /> 最高可得 <b>{challenge.rewardPoints.toLocaleString()}</b> 积分</span>
               <button onClick={() => onNavigate("challenge")}>查看任务</button>
             </div>
           </>
@@ -486,7 +510,7 @@ function ChallengeView({
           <div>
             <span className="journal-kicker">任务准备中</span>
             <h2>本周还没有任务</h2>
-            <p>可能是任务还没生成，或者活动暂时没有开放。开放后会自动出现在这里。</p>
+            <p>本周任务只发给上周提交过有效视频的成员；有新任务时会自动出现在这里。</p>
           </div>
           <button className="journal-primary" onClick={() => onNavigate("videos")}><Scissors size={20} /> 先去看看切片</button>
         </section>
@@ -527,9 +551,42 @@ function ChallengeView({
           <span className={`challenge-status status-${challenge.status.toLowerCase()}`}>{challengeStatusLabel(challenge)}</span>
           <h2>{challenge.title}</h2>
           <p>{challenge.description}</p>
-          <div className="challenge-reward"><Coins size={20} /> 完成可得 <b>{challenge.rewardPoints.toLocaleString()}</b> 积分</div>
+          <div className="challenge-reward"><Coins size={20} /> 阶梯累计最高 <b>{challenge.rewardPoints.toLocaleString()}</b> 积分</div>
         </div>
         <Image src={miaoAssets.v3.characters.award} alt="妙妙捧着奖杯为任务加油" width={640} height={960} priority />
+      </section>
+
+      <section className="challenge-tiers" aria-labelledby="challenge-tiers-title">
+        <div className="challenge-section-title ruled">
+          <div>
+            <span className="journal-kicker">阶梯奖励</span>
+            <h2 id="challenge-tiers-title">达一档，领一档</h2>
+          </div>
+          <strong>累计奖励</strong>
+        </div>
+        <div className="challenge-tier-list">
+          {challenge.rewardTiers.map((tier, index) => {
+            const tierState = index <= challenge.claimedTier
+              ? "claimed"
+              : index <= challenge.progress.reachedTierIndex
+                ? "claimable"
+                : "locked";
+            const stateLabel = tierState === "claimed" ? "已领取" : tierState === "claimable" ? "可领取" : "待解锁";
+            return (
+              <div className={`challenge-tier is-${tierState}`} key={`${tier.label}-${index}`}>
+                <span className="challenge-tier-index">{index + 1}</span>
+                <div>
+                  <strong>{tier.label}</strong>
+                  <small>{challengeTierTarget(challenge, tier)}</small>
+                </div>
+                <span className="challenge-tier-reward">
+                  <b>{tier.rewardPoints.toLocaleString()} 分</b>
+                  <small>{stateLabel}</small>
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       <section className="challenge-progress-card" aria-labelledby="challenge-progress-title">
@@ -583,7 +640,7 @@ function ChallengeView({
       {claimed ? (
         <button className="journal-primary challenge-main-action" disabled><CheckCircle size={21} weight="fill" /> 奖励已到账</button>
       ) : canClaim ? (
-        <button className="journal-primary challenge-main-action" disabled={claiming} onClick={() => void claim()}><Coins size={21} /> {claiming ? "正在领取..." : `领取 ${challenge.rewardPoints.toLocaleString()} 积分`}</button>
+        <button className="journal-primary challenge-main-action" disabled={claiming} onClick={() => void claim()}><Coins size={21} /> {claiming ? "正在领取..." : `领取 ${challenge.claimableRewardPoints.toLocaleString()} 积分`}</button>
       ) : (
         <button className="journal-primary challenge-main-action" disabled={isEnded || challenge.progress.qualified || !challenge.rewardsEnabled} onClick={() => onNavigate("videos")}>
           {isEnded ? "任务已经结束" : !challenge.rewardsEnabled ? "奖励暂时不能领取" : challenge.progress.qualified ? "等待领取开放" : <><Scissors size={21} /> 继续提交切片</>}

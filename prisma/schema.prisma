@@ -495,6 +495,7 @@ model WeeklyChallengePeriod {
   status               WeeklyChallengePeriodStatus        @default(GENERATING)
   personalRewardBudget Int                                @default(10000)
   raceReward           Int                                @default(2000)
+  rewardPolicyVersion  String                             @default("single-v1")
   model                String
   promptVersion        String                             @default("v1")
   audienceSnapshot     Json
@@ -527,6 +528,9 @@ model WeeklyChallengeAssignment {
   targetVideoCount   Int?
   targetLikes        Int?
   rewardPoints       Int
+  rewardTiers        Json?
+  claimedRewardPoints Int                            @default(0)
+  claimedTier        Int                            @default(-1)
   difficultyScore    Int
   title              String
   description        String

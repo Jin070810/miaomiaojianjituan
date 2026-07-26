@@ -15,7 +15,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const BATCH_SIZE = 25;
 const PERSONAL_REWARD_BUDGET = 10_000;
 const RACE_REWARD = 2_000;
-const PROMPT_VERSION = "weekly-challenge-v1";
+const PROMPT_VERSION = "weekly-challenge-v2";
 
 type MemberProfile = {
   userId: string;
@@ -236,7 +236,7 @@ function normalizeRewards(tasks: GeneratedTask[], budget = PERSONAL_REWARD_BUDGE
   return normalized;
 }
 
-function buildPrompt(profiles: MemberProfile[]) {
+function buildPrompt(profiles: MemberProfile[], previousValidationError?: string) {
   const members = profiles.map((profile) => ({
     memberRef: profile.memberRef,
     tenureDays: profile.tenureDays,
@@ -248,12 +248,21 @@ function buildPrompt(profiles: MemberProfile[]) {
     bestLikes: profile.bestLikes,
     previousChallengeCompletionRate: profile.previousChallengeCompletionRate,
     newMember: profile.newMember,
+    allowedTypes: profile.newMember
+      ? ["VIDEO_COUNT", "COMBINED"]
+      : ["VIDEO_COUNT", "LIKE_SUM", "COMBINED"],
     allowedTargets: targetBounds(profile),
   }));
   return JSON.stringify({
     objective: "为每位剪辑团成员生成一个有挑战性但可完成的周任务。每位成员必须且只能出现一次。",
     policies: {
-      types: ["VIDEO_COUNT", "LIKE_SUM", "COMBINED"],
+      coverage: `必须返回 ${profiles.length} 条任务，每个输入 memberRef 必须且只能出现一次`,
+      typeSelection: "每名成员的 type 必须来自该成员的 allowedTypes；新人不允许 LIKE_SUM",
+      targetRules: {
+        VIDEO_COUNT: "targetVideoCount 必须在成员允许区间内，targetLikes 必须为 null",
+        LIKE_SUM: "targetLikes 必须在成员允许区间内，targetVideoCount 必须为 null",
+        COMBINED: "targetVideoCount 和 targetLikes 都必须在成员各自允许区间内",
+      },
       integerOnly: true,
       rewardRange: [10, 1500],
       preferHighChallengeLowReward: true,
@@ -265,6 +274,14 @@ function buildPrompt(profiles: MemberProfile[]) {
       },
       output: "只返回 JSON：{tasks:[{memberRef,type,title,description,reason,targetVideoCount,targetLikes,rewardPoints}]}",
     },
+    ...(previousValidationError
+      ? {
+          retryCorrection: {
+            previousValidationError,
+            instruction: "修正上一版输出，重新返回本批全部成员且只使用每名成员的 allowedTypes 和 allowedTargets",
+          },
+        }
+      : {}),
     members,
   });
 }
@@ -372,6 +389,13 @@ function logBatchProgress(details: Record<string, string | number>) {
   console.warn(`[weekly-challenge-progress] ${JSON.stringify(details)}`);
 }
 
+function retryCorrection(error: unknown) {
+  const category = generationFailureCategory(error);
+  if (!["parse", "schema_validation", "coverage", "business_validation"].includes(category)) return undefined;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.replace(/\s+/g, " ").trim().slice(0, 500) || undefined;
+}
+
 async function refreshGenerationLease(periodId: string, generationRunId: string) {
   const heartbeatAt = new Date();
   const refreshed = await db.weeklyChallengePeriod.updateMany({
@@ -390,13 +414,14 @@ async function requestBatch(
   deadline: Date,
 ) {
   const config = deepSeekConfig();
-  const prompt = buildPrompt(profiles);
-  const promptHash = crypto.createHash("sha256").update(prompt).digest("hex");
   let lastError: unknown;
+  let previousValidationError: string | undefined;
   const previousAttempts = await db.weeklyChallengeGenerationAttempt.count({ where: { periodId, batchNumber } });
   for (let offset = 1; offset <= 3; offset += 1) {
     assertBeforeGenerationDeadline(deadline);
     await refreshGenerationLease(periodId, generationRunId);
+    const prompt = buildPrompt(profiles, previousValidationError);
+    const promptHash = crypto.createHash("sha256").update(prompt).digest("hex");
     const attemptNumber = previousAttempts + offset;
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
@@ -491,6 +516,7 @@ async function requestBatch(
       return tasks;
     } catch (error) {
       lastError = error;
+      previousValidationError = retryCorrection(error);
       await db.weeklyChallengeGenerationAttempt.update({
         where: { id: attempt.id },
         data: {
@@ -570,6 +596,8 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
         generationRunId: runId,
         generationStartedAt: new Date(),
         failureReason: null,
+        model: config.model,
+        promptVersion: PROMPT_VERSION,
       },
     });
     if (claimed.count !== 1) return db.weeklyChallengePeriod.findUniqueOrThrow({ where: { id: period.id } });
@@ -689,5 +717,6 @@ export const weeklyChallengeGenerationInternals = {
   parseModelOutput,
   readDeepSeekCompletion,
   deepSeekTimeoutMs,
+  retryCorrection,
   refreshGenerationLease,
 };

@@ -81,6 +81,7 @@ jobs:
               and .maximumReward <= 1500
               and .runningAttempts == 0
               and (.finalFailedBatches | length) == 0
+              and .promptVersion == "weekly-challenge-v2"
               and .model == "deepseek-v4-flash")
           ' shadow-report/report.json >/dev/null
       - name: Verify production health before change

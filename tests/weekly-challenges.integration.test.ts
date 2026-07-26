@@ -20,6 +20,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
   const generatedPeriodStart = new Date("2031-01-05T16:00:00.000Z");
   const failedPeriodStart = new Date("2031-01-12T16:00:00.000Z");
   const heartbeatPeriodStart = new Date("2031-02-16T16:00:00.000Z");
+  const correctedPeriodStart = new Date("2031-02-23T16:00:00.000Z");
   const providerFailureCases = [
     ["http-429", new Date("2031-01-19T16:00:00.000Z")],
     ["http-500", new Date("2031-01-26T16:00:00.000Z")],
@@ -30,7 +31,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
   const periodIds: string[] = [];
   let server: http.Server;
   let streamedRequestCount = 0;
-  let responseMode: "valid" | "missing-member" | "http-429" | "http-500" | "invalid-json" | "timeout" = "valid";
+  let responseMode: "valid" | "missing-member" | "new-member-like-sum-once" | "http-429" | "http-500" | "invalid-json" | "timeout" = "valid";
 
   beforeAll(async () => {
     server = http.createServer((request, response) => {
@@ -49,19 +50,29 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
           };
           if (body.stream) streamedRequestCount += 1;
           const prompt = JSON.parse(body.messages.find((message) => message.role === "user")?.content ?? "{}") as {
-            members: Array<{ memberRef: string; allowedTargets: { minimumVideos: number } }>;
+            members: Array<{
+              memberRef: string;
+              allowedTypes: string[];
+              allowedTargets: { minimumVideos: number; minimumLikes: number };
+            }>;
+            retryCorrection?: { previousValidationError: string };
           };
           const selected = responseMode === "missing-member" ? prompt.members.slice(1) : prompt.members;
-          const tasks = selected.map((member) => ({
-            memberRef: member.memberRef,
-            type: "VIDEO_COUNT",
-            title: "本周稳定输出",
-            description: "完成本周审核通过视频数量目标",
-            reason: "依据匿名四周数量趋势生成",
-            targetVideoCount: member.allowedTargets.minimumVideos,
-            targetLikes: 0,
-            rewardPoints: 1500,
-          }));
+          const tasks = selected.map((member) => {
+            const invalidNewMember = responseMode === "new-member-like-sum-once"
+              && !prompt.retryCorrection
+              && !member.allowedTypes.includes("LIKE_SUM");
+            return {
+              memberRef: member.memberRef,
+              type: invalidNewMember ? "LIKE_SUM" : "VIDEO_COUNT",
+              title: invalidNewMember ? "新人点赞提升" : "本周稳定输出",
+              description: invalidNewMember ? "完成本周审核通过视频点赞目标" : "完成本周审核通过视频数量目标",
+              reason: "依据匿名四周数量趋势生成",
+              targetVideoCount: invalidNewMember ? 0 : member.allowedTargets.minimumVideos,
+              targetLikes: invalidNewMember ? member.allowedTargets.minimumLikes : 0,
+              rewardPoints: 1500,
+            };
+          });
           const send = () => {
             const content = responseMode === "invalid-json" ? "{" : JSON.stringify({ tasks });
             const splitAt = Math.floor(content.length / 2);
@@ -92,6 +103,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
         generatedPeriodStart,
         failedPeriodStart,
         heartbeatPeriodStart,
+        correctedPeriodStart,
         ...providerFailureCases.map((entry) => entry[1]),
       ] } },
       select: { id: true },
@@ -199,6 +211,50 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(await db.weeklyChallengeGenerationAttempt.count({
       where: { periodId: period.id, status: "FAILED" },
     })).toBe(3);
+  }, 30_000);
+
+  it("feeds business validation back to the model and upgrades failed-period metadata on retry", async () => {
+    await db.user.update({
+      where: { id: userIds[0] },
+      data: { createdAt: new Date(correctedPeriodStart.getTime() - 3 * 24 * 60 * 60 * 1000) },
+    });
+    responseMode = "new-member-like-sum-once";
+    const period = await generateWeeklyChallengePeriod({ periodStart: correctedPeriodStart });
+    periodIds.push(period.id);
+
+    const attempts = await db.weeklyChallengeGenerationAttempt.findMany({
+      where: { periodId: period.id },
+      orderBy: [{ batchNumber: "asc" }, { attemptNumber: "asc" }],
+    });
+    const failedAttempt = attempts.find((attempt) => attempt.status === "FAILED");
+    expect(period).toMatchObject({
+      status: "READY",
+      model: "mock-weekly-challenge-model",
+      promptVersion: "weekly-challenge-v2",
+    });
+    expect(failedAttempt?.error).toContain("至少 2 条通过视频");
+    expect(attempts.filter((attempt) => attempt.status === "FAILED")).toHaveLength(1);
+    expect(attempts.find((attempt) =>
+      attempt.batchNumber === failedAttempt?.batchNumber && attempt.status === "SUCCEEDED")?.promptHash)
+      .not.toBe(failedAttempt?.promptHash);
+
+    const assignment = await db.weeklyChallengeAssignment.findFirstOrThrow({
+      where: { periodId: period.id, userId: userIds[0] },
+    });
+    expect(assignment.type).toBe("VIDEO_COUNT");
+    expect(assignment.targetVideoCount).toBeGreaterThanOrEqual(2);
+
+    await db.weeklyChallengePeriod.update({
+      where: { periodStart: failedPeriodStart },
+      data: { model: "legacy-model", promptVersion: "weekly-challenge-v1" },
+    });
+    responseMode = "valid";
+    const retried = await generateWeeklyChallengePeriod({ periodStart: failedPeriodStart, retryFailed: true });
+    expect(retried).toMatchObject({
+      status: "READY",
+      model: "mock-weekly-challenge-model",
+      promptVersion: "weekly-challenge-v2",
+    });
   }, 30_000);
 
   it("refreshes only the active generation run lease", async () => {

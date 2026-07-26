@@ -21,7 +21,7 @@ test.afterAll(async () => {
 
 test("member weekly challenge states fit 390x844", async ({ page }) => {
   await login(page, e2eIds.noTaskMember);
-  await expect(page.getByRole("heading", { name: "完成 2 条稳定输出" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "查看本周任务：完成 2 条稳定输出" })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
   let releaseDashboard: (() => void) | undefined;
   const dashboardGate = new Promise<void>((resolve) => {
@@ -41,9 +41,16 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
 
   await page.request.post("/api/auth/logout");
   await login(page, e2eIds.member);
-  await expect(page.getByRole("heading", { name: "完成 2 条稳定输出" })).toBeVisible();
-  await expect(page.getByText("1 / 2")).toBeVisible();
-  await expect(page.getByText("进行中")).toBeVisible();
+  const openChallenge = async () => {
+    const unreadPromptClose = page.getByRole("button", { name: "关闭未读通知提醒" });
+    await unreadPromptClose.waitFor({ state: "visible", timeout: 1000 }).catch(() => undefined);
+    if (await unreadPromptClose.isVisible()) await unreadPromptClose.click();
+    await page.getByRole("button", { name: "查看本周任务：完成 2 条稳定输出" }).click();
+    await expect(page.getByRole("heading", { name: "完成 2 条稳定输出" })).toBeVisible();
+  };
+  await expect(page.getByText("正在进行")).toBeVisible();
+  await openChallenge();
+  await expect(page.getByText(/1\s*\/\s*2\s*条/)).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/member-weekly-progress-390x844.png", fullPage: true });
 
@@ -62,11 +69,13 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
   });
   await db.systemSetting.update({ where: { key: "WEEKLY_CHALLENGES" }, data: { enabled: false } });
   await page.reload();
+  await openChallenge();
   await expect(page.getByText("已达标")).toBeVisible();
-  await expect(page.getByRole("button", { name: "发放暂停" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "奖励暂时不能领取" })).toBeDisabled();
 
   await db.systemSetting.update({ where: { key: "WEEKLY_CHALLENGES" }, data: { enabled: true } });
   await page.reload();
+  await openChallenge();
   let releaseClaim: (() => void) | undefined;
   const claimGate = new Promise<void>((resolve) => {
     releaseClaim = resolve;
@@ -76,10 +85,10 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
     await claimGate;
     await route.fulfill({ response });
   });
-  await page.getByRole("button", { name: "领取奖励" }).click();
-  await expect(page.getByRole("button", { name: "领取中..." })).toBeDisabled();
+  await page.getByRole("button", { name: "领取 120 积分" }).click();
+  await expect(page.getByRole("button", { name: "正在领取..." })).toBeDisabled();
   releaseClaim?.();
-  await expect(page.getByText("已领取")).toBeVisible();
+  await expect(page.getByText("奖励已到账").first()).toBeVisible();
   await page.unroute("**/api/weekly-challenges/*/claim");
 
   await db.weeklyRaceWinner.create({
@@ -92,10 +101,8 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
     },
   });
   await page.reload();
+  await openChallenge();
   await expect(page.getByText("本周竞速已结束")).toBeVisible();
-  const unreadPromptClose = page.getByRole("button", { name: "关闭未读通知提醒" });
-  await unreadPromptClose.waitFor({ state: "visible", timeout: 3000 }).catch(() => undefined);
-  if (await unreadPromptClose.isVisible()) await unreadPromptClose.click();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/member-weekly-claimed-390x844.png", fullPage: true });
 });
@@ -103,8 +110,8 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
 test("member video clipboard and submission feedback fit 390x844", async ({ page }) => {
   await login(page, e2eIds.noTaskMember);
   const openDialog = async () => {
-    await page.getByRole("button", { name: "提交视频" }).click();
-    await expect(page.getByRole("heading", { name: "提交快手视频" })).toBeVisible();
+    await page.getByRole("button", { name: "提交切片", exact: true }).first().click();
+    await expect(page.getByRole("heading", { name: "提交直播切片" })).toBeVisible();
   };
   const setClipboard = async (mode: "success" | "empty" | "denied" | "unsupported" | "long") => {
     await page.evaluate((clipboardMode) => {
@@ -119,9 +126,10 @@ test("member video clipboard and submission feedback fit 390x844", async ({ page
   };
 
   await openDialog();
+  let dialog = page.getByRole("dialog");
   await setClipboard("success");
-  await page.getByRole("button", { name: "粘贴" }).click();
-  await expect(page.getByLabel("快手视频链接")).toHaveValue(/v\.kuaishou\.com\/e2e-clipboard/);
+  await dialog.getByRole("button", { name: "粘贴" }).click();
+  await expect(dialog.getByLabel("快手链接或分享内容")).toHaveValue(/v\.kuaishou\.com\/e2e-clipboard/);
   await expect(page.getByText(/\/ 2,000 字/)).toBeVisible();
 
   let releaseSubmit: (() => void) | undefined;
@@ -131,34 +139,35 @@ test("member video clipboard and submission feedback fit 390x844", async ({ page
     await submitGate;
     await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ video: { id: "e2e-video" } }) });
   });
-  await page.getByRole("button", { name: "提交并开始校验" }).click();
-  await expect(page.getByRole("button", { name: "正在提交..." })).toBeDisabled();
+  await dialog.getByRole("button", { name: "提交切片", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "正在提交..." })).toBeDisabled();
   releaseSubmit?.();
-  await expect(page.getByRole("heading", { name: "已进入校验队列" })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "提交成功啦" })).toBeVisible();
   await page.unroute("**/api/videos");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await dialog.getByRole("button", { name: "查看我的切片" }).click();
 
   await openDialog();
+  dialog = page.getByRole("dialog");
   await setClipboard("empty");
-  await page.getByRole("button", { name: "粘贴" }).click();
+  await dialog.getByRole("button", { name: "粘贴" }).click();
   await expect(page.locator(".form-error")).toContainText("剪贴板中没有可粘贴的内容");
   await setClipboard("denied");
-  await page.getByRole("button", { name: "粘贴" }).click();
-  await expect(page.locator(".form-error")).toContainText("无法读取剪贴板");
+  await dialog.getByRole("button", { name: "粘贴" }).click();
+  await expect(page.locator(".form-error")).toContainText("没能读取剪贴板");
   await setClipboard("unsupported");
-  await page.getByRole("button", { name: "粘贴" }).click();
+  await dialog.getByRole("button", { name: "粘贴" }).click();
   await expect(page.locator(".form-error")).toContainText("当前浏览器无法直接读取剪贴板");
   await setClipboard("long");
-  await page.getByRole("button", { name: "粘贴" }).click();
+  await dialog.getByRole("button", { name: "粘贴" }).click();
   await expect(page.locator(".form-error")).toContainText("超过 2,000 字");
-  await expect(page.getByRole("button", { name: "提交并开始校验" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "提交切片", exact: true })).toBeDisabled();
 
-  await page.getByLabel("快手视频链接").fill("https://v.kuaishou.com/e2e-failure");
+  await dialog.getByLabel("快手链接或分享内容").fill("https://v.kuaishou.com/e2e-failure");
   await page.route("**/api/videos", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "处理队列暂时不可用" }) });
   });
-  await page.getByRole("button", { name: "提交并开始校验" }).click();
+  await dialog.getByRole("button", { name: "提交切片", exact: true }).click();
   await expect(page.locator(".form-error")).toContainText("处理队列暂时不可用");
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/member-video-feedback-390x844.png", fullPage: true });

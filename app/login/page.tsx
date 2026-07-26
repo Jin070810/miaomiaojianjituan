@@ -3,18 +3,19 @@
 import {
   ArrowRight,
   Eye,
-  EyeOff,
-  HelpCircle,
-  LockKeyhole,
+  EyeSlash,
+  LockKey,
   ShieldCheck,
-  UserRound,
-} from "lucide-react";
-import Link from "next/link";
+  User,
+} from "@phosphor-icons/react";
+import Image from "next/image";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { BrandIcon } from "../member/brand";
+import { miaoAssets } from "../member/visual-assets";
 
 function Mark() {
-  return <span className="auth-mark">妙</span>;
+  return <BrandIcon className="auth-mark" />;
 }
 
 export default function LoginPage() {
@@ -28,6 +29,11 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  function switchMode(nextMode: "login" | "register") {
+    setMode(nextMode);
+    setError("");
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -51,56 +57,43 @@ export default function LoginPage() {
 
   return (
     <main className="auth-shell">
-      <div className="auth-canvas">
-        <section className="auth-visual">
-          <div className="auth-brand"><Mark /><span>妙妙剪辑团<small>积分中心</small></span></div>
-          <div className="auth-visual-copy">
-            <span className="eyebrow">CREATOR REWARD SYSTEM</span>
-            <h1>让每一次<br /><em>创作都有回响。</em></h1>
-            <p>视频贡献、积分成长和创作者福利，都在这里被认真记录。</p>
+      <div className="auth-journal">
+        <section className="auth-hero">
+          <div className="auth-brand"><Mark /><span>妙妙剪辑团<small>直播高光积分站</small></span></div>
+          <div className="auth-hero-copy">
+            <h1>{mode === "login" ? "欢迎回来" : "加入剪辑团"}</h1>
+            <p>和妙妙一起，把高光剪成积分</p>
           </div>
-          <div className="auth-stat-strip">
-            <div><strong>安全</strong><span>积分账户</span></div>
-            <div><strong>实时</strong><span>审核进度</span></div>
-            <div><strong>透明</strong><span>变动记录</span></div>
+          <div className="auth-character-stage">
+            <Image className="auth-swoosh" src={miaoAssets.v3.heroSwoosh} alt="" width={1440} height={1080} priority />
+            <Image className="auth-character" src={miaoAssets.v3.characters.welcome} alt={miaoAssets.actions.welcome.alt} width={720} height={980} quality={95} priority />
           </div>
         </section>
         <section className="auth-panel">
-          <div className="auth-panel-top">
-            <Link href="/" className="auth-mobile-brand"><Mark /><strong>妙妙剪辑团</strong></Link>
-            <button className="help-button"><HelpCircle size={17} />帮助中心</button>
-          </div>
-          <div className="auth-form-wrap">
-            <div className="auth-heading">
-              <span className="eyebrow">{mode === "login" ? "WELCOME BACK" : "JOIN THE CREATOR CLUB"}</span>
-              <h2>{mode === "login" ? "欢迎回来" : "创建成员档案"}</h2>
-              <p>{mode === "login" ? "使用快手 ID 登录积分中心" : "先绑定快手身份，再开始积累积分"}</p>
-            </div>
             <div className="auth-tabs">
-              <button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button>
-              <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>注册</button>
+              <button className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>登录</button>
+              <button className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>注册</button>
             </div>
             <form className="auth-form" onSubmit={submit}>
               {mode === "register" && (
                 <>
                   <div className="field">
                     <label htmlFor="nickname">快手昵称</label>
-                    <div className="auth-input"><UserRound size={17} /><input id="nickname" autoComplete="name" value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="输入你的快手昵称" /></div>
+                    <div className="auth-input"><User size={22} /><input id="nickname" autoComplete="name" value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="输入你的快手昵称" /></div>
                   </div>
                 </>
               )}
               <div className="field">
                 <label htmlFor="ksid">快手 ID</label>
-                <div className="auth-input"><UserRound size={17} /><input id="ksid" autoComplete="username" value={kuaishouId} onChange={(event) => setKuaishouId(event.target.value)} placeholder="例如 MIAO_2025" /></div>
-                <span className="field-hint">快手 ID 是你的唯一登录标识</span>
+                <div className="auth-input"><User size={22} /><input id="ksid" autoComplete="username" value={kuaishouId} onChange={(event) => setKuaishouId(event.target.value)} placeholder="输入快手 ID" /></div>
               </div>
               <div className="field">
                 <label htmlFor="password">密码</label>
                 <div className="auth-input">
-                  <LockKeyhole size={17} />
+                  <LockKey size={22} />
                   <input id="password" autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} minLength={mode === "register" ? 8 : 6} placeholder={mode === "register" ? "至少 8 位密码" : "请输入密码"} />
-                  <button type="button" className="toggle-password" aria-label="显示密码" onClick={() => setShowPassword(!showPassword)}>
-                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  <button type="button" className="toggle-password" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword(!showPassword)}>
+                    {showPassword ? <EyeSlash size={21} /> : <Eye size={21} />}
                   </button>
                 </div>
               </div>
@@ -111,18 +104,16 @@ export default function LoginPage() {
                     <span className="check-box" />
                     <span>我已绑定公会</span>
                   </label>
-                    {!guild && <input className="phone-input" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="未绑定时填写快手绑定手机号" />}
+                    {!guild && <input className="phone-input" aria-label="快手绑定手机号" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="未绑定时填写快手绑定手机号" />}
                 </div>
               )}
               {error && <p className="form-error" role="alert">{error}</p>}
               <button className="primary-button full-button auth-submit" disabled={loading}>
-                {loading ? "处理中..." : mode === "login" ? "进入积分中心" : "创建成员档案"} <ArrowRight size={17} />
+                {loading ? "请稍等..." : mode === "login" ? "进入剪辑团" : "创建账号"} <ArrowRight size={20} />
               </button>
             </form>
             {mode === "login" && <button className="forgot-password">忘记密码？联系管理员重置</button>}
-            <div className="auth-security"><ShieldCheck size={15} /><span>你的积分、转账和兑换记录受到安全保护</span></div>
-          </div>
-          <p className="auth-footer">© {new Date().getFullYear()} 妙妙剪辑团 · 仅限成员使用</p>
+            <div className="auth-security"><ShieldCheck size={15} /><span>你的积分和兑换记录会被好好保存</span></div>
         </section>
       </div>
     </main>

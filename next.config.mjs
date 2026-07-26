@@ -2,6 +2,9 @@
 const nextConfig = {
   poweredByHeader: false,
   output: "standalone",
+  images: {
+    qualities: [75, 95],
+  },
   async headers() {
     return [
       {

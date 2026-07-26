@@ -185,7 +185,7 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setOpen(false)}>
           <section className="notification-panel" role="dialog" aria-modal="true" aria-labelledby="notification-title" onMouseDown={(event) => event.stopPropagation()}>
             <header className="notification-panel-head">
-              <div><span className="eyebrow">MESSAGE CENTER</span><h2 id="notification-title">通知中心</h2></div>
+              <div><span className="eyebrow">消息列表</span><h2 id="notification-title">通知中心</h2></div>
               <button className="icon-button" aria-label="关闭通知中心" onClick={() => setOpen(false)}><X size={19} /></button>
             </header>
             <div className="notification-toolbar">
@@ -195,7 +195,7 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
               </div>
               <button className="text-button" onClick={() => void markAllRead()} disabled={!unreadCount}><CheckCheck size={15} />全部已读</button>
             </div>
-            {loading && <div className="notification-loading">正在加载通知...</div>}
+            {loading && <div className="notification-loading">正在找新消息...</div>}
             {error && <div className="notification-error" role="alert">{error}<button className="secondary-button compact-button" onClick={() => void load()}>重试</button></div>}
             {!loading && !error && rows.length === 0 && <div className="empty-state notification-empty"><Bell size={25} /><strong>暂无通知</strong><span>{filter === "unread" ? "所有通知都已读" : "新的进度和公告会显示在这里"}</span></div>}
             {!loading && !error && rows.length > 0 && <div className="notification-list">{rows.map((row) => renderRow(row))}</div>}
@@ -213,7 +213,7 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
         <div className="modal-backdrop notification-popup-backdrop" role="presentation" onMouseDown={() => setPopupOpen(false)}>
           <section className="notification-popup" role="dialog" aria-modal="true" aria-labelledby="notification-popup-title" onMouseDown={(event) => event.stopPropagation()}>
             <header className="notification-panel-head">
-              <div><span className="eyebrow">NEW UPDATES</span><h2 id="notification-popup-title">你有新的通知</h2></div>
+              <div><span className="eyebrow">新消息</span><h2 id="notification-popup-title">你有新的通知</h2></div>
               <button className="icon-button" aria-label="关闭未读通知提醒" onClick={() => setPopupOpen(false)}><X size={19} /></button>
             </header>
             <p className="notification-popup-hint">打开通知详情后会标记为已读，关闭提醒不会影响未读状态。</p>

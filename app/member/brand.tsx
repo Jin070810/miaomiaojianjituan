@@ -9,6 +9,7 @@ export function BrandIcon({ className = "brand-mark" }: { className?: string }) 
         width={96}
         height={96}
         sizes="48px"
+        priority
       />
     </span>
   );

@@ -31,6 +31,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@fontsource-variable/noto-sans-sc": "^5.3.0",
+    "@fontsource/noto-serif-sc": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
     "@prisma/client": "^6.8.2",
     "ali-oss": "^6.23.0",
     "argon2": "^0.41.1",

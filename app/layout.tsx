@@ -1,4 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import "@fontsource-variable/noto-sans-sc/wght.css";
+import "@fontsource/noto-serif-sc/400.css";
+import "@fontsource/noto-serif-sc/600.css";
+import "@fontsource/noto-serif-sc/700.css";
 import "./globals.css";
 import "./member/member-theme.css";
 
@@ -10,7 +14,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#6848d9",
+  themeColor: "#fbf6ed",
 };
 
 export default function RootLayout({

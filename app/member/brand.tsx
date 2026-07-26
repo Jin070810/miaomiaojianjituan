@@ -3,11 +3,13 @@ import Image from "next/image";
 export function BrandIcon({ className = "brand-mark" }: { className?: string }) {
   return (
     <span className={className} aria-hidden="true">
-      <svg viewBox="0 0 40 40">
-        <path d="M8 11.5h24v15H20l-6.5 5v-5H8z" />
-        <path d="M14 18.8h4.2l2-3.4 2.2 7 2-3.6H28" />
-        <circle cx="29.5" cy="10.5" r="4.5" />
-      </svg>
+      <Image
+        src="/brand/miaomiao/v3/brand-emblem.webp"
+        alt=""
+        width={96}
+        height={96}
+        sizes="48px"
+      />
     </span>
   );
 }
@@ -18,7 +20,7 @@ export function BrandMark({ compact = false }: { compact?: boolean }) {
       <BrandIcon />
       <span className="brand-name">
         <strong>妙妙剪辑团</strong>
-        {!compact && <small>直播高光积分站</small>}
+        {!compact && <small>直播高光手帐</small>}
       </span>
     </div>
   );

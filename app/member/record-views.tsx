@@ -4,11 +4,13 @@ import {
   ArrowDownLeft,
   ArrowLeft,
   ArrowUpRight,
-  ChevronDown,
   Gift,
-  PackageCheck,
-  Search,
-} from "lucide-react";
+  Package,
+  Receipt,
+  Trophy,
+  UsersThree,
+} from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
 import { StateMessage } from "./brand";
 import { miaoAssets } from "./visual-assets";
 
@@ -56,13 +58,14 @@ function formatDate(value: string) {
 function ledgerLabel(type: string, note: string | null) {
   if (note) return note;
   const labels: Record<string, string> = {
-    VIDEO_REWARD: "切片奖励",
-    TRANSFER_IN: "团友送来的积分",
-    TRANSFER_OUT: "送给团友的积分",
-    REDEMPTION: "礼品兑换",
-    ADMIN_ADJUSTMENT: "管理员调整",
-    REVERSAL: "积分冲正",
+    VIDEO_REWARD: "切片通过",
+    TRANSFER_IN: "收到团友积分",
+    TRANSFER_OUT: "送积分给团友",
+    REDEMPTION: "兑换礼物",
+    ADMIN_ADJUSTMENT: "积分调整",
+    REVERSAL: "积分退回",
     REFUND: "兑换退款",
+    RANKING_REWARD: "榜单奖励",
   };
   return labels[type] ?? "积分变动";
 }
@@ -70,59 +73,62 @@ function ledgerLabel(type: string, note: string | null) {
 function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
   if (!hasMore) return null;
   return (
-    <button className="secondary-button full-button" onClick={onClick} disabled={loading}>
-      <ChevronDown size={16} /> {loading ? "加载中..." : "加载更多记录"}
+    <button className="journal-outline-button load-more-button" onClick={onClick} disabled={loading}>
+      {loading ? "正在加载..." : "加载更多记录"}
     </button>
   );
 }
 
-export function LedgerView({ onBack, data, hasMore, loadingMore, onLoadMore }: RecordViewProps) {
-  const income = data.ledger.filter((item) => item.amount > 0).reduce((total, item) => total + item.amount, 0);
-  const expense = Math.abs(data.ledger.filter((item) => item.amount < 0).reduce((total, item) => total + item.amount, 0));
+function RecordHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className="member-content">
-      <section className="page-header-row">
-        <div className="back-title">
-          <button className="icon-button" aria-label="返回" onClick={onBack}>
-            <ArrowLeft size={20} />
-          </button>
-          <div>
-            <span className="eyebrow">每一分都记在这里</span>
-            <h1 className="page-title">积分记录</h1>
-          </div>
-        </div>
-        <button className="icon-button" aria-label="筛选">
-          <Search size={20} />
-        </button>
-      </section>
-      <section className="ledger-total">
+    <header className="record-header">
+      <button aria-label="返回" onClick={onBack}><ArrowLeft size={28} /></button>
+      <h1>{title}</h1>
+      <span aria-hidden="true" />
+    </header>
+  );
+}
+
+function recordIcon(type: string, positive: boolean) {
+  if (type.includes("TRANSFER")) return positive ? <ArrowDownLeft size={24} /> : <ArrowUpRight size={24} />;
+  if (type.includes("RANK")) return <Trophy size={24} />;
+  if (type.includes("REDEMPTION")) return <Gift size={24} />;
+  return <Receipt size={24} />;
+}
+
+export function LedgerView({ onBack, data, hasMore, loadingMore, onLoadMore }: RecordViewProps) {
+  const [filter, setFilter] = useState<"all" | "income" | "expense">("all");
+  const rows = useMemo(
+    () => data.ledger.filter((item) => filter === "all" || (filter === "income" ? item.amount > 0 : item.amount < 0)),
+    [data.ledger, filter],
+  );
+  return (
+    <div className="member-content journal-record-page">
+      <RecordHeader title="积分记录" onBack={onBack} />
+      <section className="record-summary">
         <span>当前积分</span>
         <strong>{data.user.balance.toLocaleString()}</strong>
-        <div><span>收入 {income.toLocaleString()}</span><span>支出 {expense.toLocaleString()}</span></div>
       </section>
-      <div className="ledger-filter">
-        <button className="active">全部</button>
-        <button>收入</button>
-        <button>支出</button>
-        <button>近三个月</button>
+      <div className="journal-tabs record-tabs">
+        <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部</button>
+        <button className={filter === "income" ? "active" : ""} onClick={() => setFilter("income")}>获得</button>
+        <button className={filter === "expense" ? "active" : ""} onClick={() => setFilter("expense")}>使用</button>
       </div>
-      <section className="ledger-list">
-        {data.ledger.map((item) => {
-          const Icon = item.amount >= 0 ? ArrowDownLeft : Gift;
-          return (
-            <div className="ledger-row" key={item.id}>
-              <span className={`ledger-icon ${item.amount >= 0 ? "positive" : "negative"}`}>
-                <Icon size={18} />
-              </span>
-              <div>
+      <section className="record-group">
+        <div className="journal-section-heading ruled"><h2>最近</h2></div>
+        <div className="record-timeline">
+          {rows.map((item) => (
+            <article className="record-row" key={item.id}>
+              <span className="record-icon">{recordIcon(item.type, item.amount >= 0)}</span>
+              <div className="record-copy">
                 <strong>{ledgerLabel(item.type, item.note)}</strong>
                 <span>{formatDate(item.createdAt)}</span>
               </div>
-              <b className={item.amount >= 0 ? "positive-text" : "negative-text"}>{item.amount >= 0 ? "+" : ""}{item.amount.toLocaleString()}</b>
-            </div>
-          );
-        })}
-        {data.ledger.length === 0 && <StateMessage {...miaoAssets.states.first}>还没有积分记录</StateMessage>}
+              <b className={item.amount >= 0 ? "positive-text" : ""}>{item.amount >= 0 ? "+" : ""}{item.amount.toLocaleString()}</b>
+            </article>
+          ))}
+          {rows.length === 0 && <StateMessage {...miaoAssets.states.first}>这里暂时没有记录</StateMessage>}
+        </div>
       </section>
       <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
     </div>
@@ -130,30 +136,43 @@ export function LedgerView({ onBack, data, hasMore, loadingMore, onLoadMore }: R
 }
 
 export function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }: RecordViewProps) {
+  const [filter, setFilter] = useState<"all" | "out" | "in">("all");
+  const rows = data.transfers.filter((transfer) => filter === "all" || (filter === "out" ? transfer.senderId === data.user.id : transfer.receiverId === data.user.id));
+  const sent = data.transfers.filter((item) => item.senderId === data.user.id);
+  const sentPoints = sent.reduce((total, item) => total + item.amount, 0);
   return (
-    <div className="member-content">
-      <section className="page-header-row">
-        <div className="back-title">
-          <button className="icon-button" aria-label="返回" onClick={onBack}><ArrowLeft size={20} /></button>
-          <div><span className="eyebrow">你和团友之间的积分</span><h1 className="page-title">送积分记录</h1></div>
+    <div className="member-content journal-record-page">
+      <RecordHeader title="送积分记录" onBack={onBack} />
+      <p className="record-inline-summary">本月送出 <b>{sentPoints.toLocaleString()}</b> 积分 · <b>{sent.length}</b> 位团友</p>
+      <div className="journal-tabs record-tabs">
+        <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部</button>
+        <button className={filter === "out" ? "active" : ""} onClick={() => setFilter("out")}>我送出的</button>
+        <button className={filter === "in" ? "active" : ""} onClick={() => setFilter("in")}>我收到的</button>
+      </div>
+      <section className="record-group">
+        <div className="journal-section-heading ruled"><h2>最近</h2></div>
+        <div className="record-timeline">
+          {rows.map((transfer) => {
+            const outgoing = transfer.senderId === data.user.id;
+            const counterparty = outgoing ? transfer.receiver : transfer.sender;
+            return (
+              <article className="record-row transfer-record-row" key={transfer.id}>
+                <span className="record-icon">{outgoing ? <ArrowUpRight size={24} /> : <ArrowDownLeft size={24} />}</span>
+                <span className="record-avatar"><UsersThree size={24} /></span>
+                <div className="record-copy">
+                  <strong>{outgoing ? "送给" : "收到"} {counterparty.nickname}</strong>
+                  <span title={counterparty.kuaishouId}>ID · {counterparty.kuaishouId}</span>
+                  {transfer.note && <small>{transfer.note}</small>}
+                </div>
+                <div className="record-side">
+                  <b className={outgoing ? "" : "positive-text"}>{outgoing ? "-" : "+"}{transfer.amount.toLocaleString()}</b>
+                  <span>{formatDate(transfer.createdAt)}</span>
+                </div>
+              </article>
+            );
+          })}
+          {rows.length === 0 && <StateMessage {...miaoAssets.actions.gift}>这里暂时没有送积分记录</StateMessage>}
         </div>
-      </section>
-      <section className="ledger-list">
-        {data.transfers.map((transfer) => {
-          const outgoing = transfer.senderId === data.user.id;
-          const counterparty = outgoing ? transfer.receiver : transfer.sender;
-          return (
-            <div className="ledger-row" key={transfer.id}>
-              <span className={`ledger-icon ${outgoing ? "negative" : "positive"}`}>{outgoing ? <ArrowUpRight size={18} /> : <ArrowDownLeft size={18} />}</span>
-              <div>
-                <strong>{outgoing ? "转给" : "收到"} {counterparty.nickname}</strong>
-                <span>{counterparty.kuaishouId} · {formatDate(transfer.createdAt)}{transfer.note ? ` · ${transfer.note}` : ""}</span>
-              </div>
-              <b className={outgoing ? "negative-text" : "positive-text"}>{outgoing ? "-" : "+"}{transfer.amount.toLocaleString()}</b>
-            </div>
-          );
-        })}
-        {data.transfers.length === 0 && <StateMessage {...miaoAssets.actions.gift}>还没有送过积分</StateMessage>}
       </section>
       <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
     </div>
@@ -162,36 +181,49 @@ export function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoad
 
 function orderStatusLabel(status: string, kind: "PHYSICAL" | "CASH") {
   const labels: Record<string, string> = {
-    PENDING: "正在准备",
-    APPROVED: kind === "PHYSICAL" ? "正在准备礼物" : "正在准备",
-    FULFILLED: kind === "PHYSICAL" ? "已经发出" : "已经送到",
-    REJECTED: "这次没换成功",
-    REFUNDED: "积分已经退回",
+    PENDING: "待发放",
+    APPROVED: kind === "PHYSICAL" ? "待发放" : "正在准备",
+    FULFILLED: kind === "PHYSICAL" ? "已发货" : "已完成",
+    REJECTED: "未通过",
+    REFUNDED: "积分已退回",
   };
   return labels[status] ?? status;
 }
 
 export function RedemptionRecordsView({ onBack, data, hasMore, loadingMore, onLoadMore }: RecordViewProps) {
+  const [filter, setFilter] = useState<"all" | "pending" | "done">("all");
+  const rows = data.orders.filter((order) => {
+    if (filter === "all") return true;
+    const done = ["FULFILLED", "REFUNDED", "REJECTED"].includes(order.status);
+    return filter === "done" ? done : !done;
+  });
   return (
-    <div className="member-content">
-      <section className="page-header-row">
-        <div className="back-title">
-          <button className="icon-button" aria-label="返回" onClick={onBack}><ArrowLeft size={20} /></button>
-          <div><span className="eyebrow">你换过的礼物</span><h1 className="page-title">兑换记录</h1></div>
+    <div className="member-content journal-record-page">
+      <RecordHeader title="兑换记录" onBack={onBack} />
+      <p className="record-inline-summary">本月兑换 <b>{data.orders.length}</b> 件</p>
+      <div className="journal-tabs record-tabs">
+        <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部</button>
+        <button className={filter === "pending" ? "active" : ""} onClick={() => setFilter("pending")}>待发放</button>
+        <button className={filter === "done" ? "active" : ""} onClick={() => setFilter("done")}>已完成</button>
+      </div>
+      <section className="record-group redemption-records">
+        <div className="record-timeline">
+          {rows.map((order) => (
+            <article className="record-row" key={order.id}>
+              <span className="record-icon"><Package size={25} /></span>
+              <div className="record-copy">
+                <strong>{order.gift.name}</strong>
+                <b className="record-cost">{order.totalCost.toLocaleString()} 积分</b>
+              </div>
+              <div className="record-side">
+                <b className="plain-status">{orderStatusLabel(order.status, order.gift.kind)}</b>
+                {order.trackingNumber && <small title={order.trackingNumber}>查看物流</small>}
+                <span>{formatDate(order.createdAt)}</span>
+              </div>
+            </article>
+          ))}
+          {rows.length === 0 && <StateMessage {...miaoAssets.states.redeemed}>这里暂时没有兑换记录</StateMessage>}
         </div>
-      </section>
-      <section className="ledger-list">
-        {data.orders.map((order) => (
-          <div className="ledger-row" key={order.id}>
-            <span className="ledger-icon negative"><PackageCheck size={18} /></span>
-            <div>
-              <strong>{order.gift.name}</strong>
-              <span>{order.gift.kind === "CASH" ? "现金兑换" : "实物商品"} · {formatDate(order.createdAt)}</span>
-            </div>
-            <div className="record-side"><b className="negative-text">-{order.totalCost.toLocaleString()}</b><span className="status-chip">{orderStatusLabel(order.status, order.gift.kind)}</span>{order.gift.kind === "PHYSICAL" && order.trackingNumber && <small className="tracking-copy">快递单号：{order.trackingNumber}</small>}</div>
-          </div>
-        ))}
-        {data.orders.length === 0 && <StateMessage {...miaoAssets.states.redeemed}>还没有兑换记录</StateMessage>}
       </section>
       <LoadMoreHistory hasMore={hasMore} loading={loadingMore} onClick={onLoadMore} />
     </div>

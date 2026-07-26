@@ -2,6 +2,7 @@
 
 import {
   ArrowDownLeft,
+  ArrowLeft,
   ArrowUpRight,
   BadgeCheck,
   ChevronDown,
@@ -18,12 +19,10 @@ import {
   LogOut,
   Medal,
   Minus,
-  MoreHorizontal,
   PackageCheck,
   Plus,
   Search,
   Send,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Target,
@@ -32,6 +31,18 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
+import {
+  CheckCircle,
+  Clock,
+  Gift as PhGift,
+  House,
+  PlayCircle,
+  Scissors,
+  Trophy as PhTrophy,
+  UserCircle,
+  WarningCircle,
+} from "@phosphor-icons/react";
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import NotificationCenter, { clearNotificationPromptSession } from "./components/NotificationCenter";
@@ -39,7 +50,7 @@ import { BrandMark, PageScene, StateMessage } from "./member/brand";
 import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
 import { miaoAssets } from "./member/visual-assets";
 
-type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "ledger" | "transfers" | "orders";
+type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "ledger" | "transfers" | "orders";
 
 type DialogType = "submit" | "transfer" | "redeem" | "profile" | "recipient" | "password" | null;
 
@@ -171,6 +182,34 @@ function formatTodayLabel() {
   }).format(new Date()).replace(/\s/g, "");
 }
 
+function formatChallengeDate(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Shanghai",
+  }).format(new Date(value));
+}
+
+function challengeStatusLabel(challenge: WeeklyChallengeData) {
+  if (challenge.status === "CLAIMED") return "奖励已到账";
+  if (challenge.status === "REVERSED") return "任务已撤销";
+  if (challenge.status === "EXPIRED") return "本周已结束";
+  if (challenge.progress.qualified) return "已经达标";
+  return "正在进行";
+}
+
+function challengeProgressPercent(challenge: WeeklyChallengeData) {
+  const ratios: number[] = [];
+  if (challenge.targetVideoCount) ratios.push(challenge.progress.videoCount / challenge.targetVideoCount);
+  if (challenge.targetLikes) ratios.push(challenge.progress.likes / challenge.targetLikes);
+  if (ratios.length === 0) return 0;
+  return Math.max(0, Math.min(100, Math.round(Math.min(...ratios) * 100)));
+}
+
 function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
   if (!hasMore) return null;
   return (
@@ -287,11 +326,11 @@ function BottomNav({
   onChange: (view: MemberView) => void;
 }) {
   const items = [
-    { id: "home" as const, label: "首页", icon: Home },
-    { id: "videos" as const, label: "切片", icon: ClipboardCheck },
-    { id: "mall" as const, label: "礼物", icon: Gift },
-    { id: "rank" as const, label: "榜单", icon: Trophy },
-    { id: "profile" as const, label: "我的", icon: UserRound },
+    { id: "home" as const, label: "首页", icon: House },
+    { id: "videos" as const, label: "切片", icon: Scissors },
+    { id: "mall" as const, label: "礼物", icon: PhGift },
+    { id: "rank" as const, label: "榜单", icon: PhTrophy },
+    { id: "profile" as const, label: "我的", icon: UserCircle },
   ];
   return (
     <nav className="bottom-nav" aria-label="成员导航">
@@ -304,7 +343,7 @@ function BottomNav({
             className={selected ? "nav-item active" : "nav-item"}
             onClick={() => onChange(item.id)}
           >
-            <Icon size={20} strokeWidth={selected ? 2.5 : 1.9} />
+            <Icon size={25} weight={selected ? "fill" : "regular"} />
             <span>{item.label}</span>
           </button>
         );
@@ -317,188 +356,248 @@ function HomeView({
   onNavigate,
   onOpen,
   challenge,
-  onClaimChallenge,
   data,
 }: {
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
   challenge: WeeklyChallengeData | null;
-  onClaimChallenge: () => Promise<void>;
   data: DashboardData;
 }) {
   const recentLedger = data.ledger.slice(0, 3);
-  const [claimingChallenge, setClaimingChallenge] = useState(false);
-  const [challengeError, setChallengeError] = useState("");
-  async function claimChallenge() {
-    setClaimingChallenge(true);
-    setChallengeError("");
-    try {
-      await onClaimChallenge();
-    } catch (error) {
-      setChallengeError(error instanceof Error ? error.message : "任务奖励领取失败");
-    } finally {
-      setClaimingChallenge(false);
-    }
-  }
+  const progressPercent = challenge ? challengeProgressPercent(challenge) : 0;
   return (
-    <div className="member-content">
-      <section className="welcome-row">
-        <div className="welcome-copy">
-          <span className="eyebrow">{formatTodayLabel()} · 妙妙直播高光站</span>
-          <h1>嗨，{data.user.nickname}</h1>
-          <p>把今天的直播高光，剪成你的积分吧。</p>
-          <button className="welcome-primary" onClick={() => onOpen("submit")}>
-            <Plus size={18} /> 提交切片
+    <div className="member-content journal-page home-page">
+      <section className="journal-hero home-journal-hero">
+        <Image className="hero-swoosh" src={miaoAssets.v3.heroSwoosh} alt="" width={1440} height={1080} priority />
+        <Image className="hero-character" src={miaoAssets.v3.characters.home} alt={miaoAssets.master.alt} width={640} height={960} priority />
+        <div className="hero-copy">
+          <span className="hero-kicker">嗨，{data.user.nickname}</span>
+          <div className="hero-balance">
+            <span>我的积分</span>
+            <strong>{data.user.balance.toLocaleString()}</strong>
+          </div>
+          <button className="journal-primary" onClick={() => onOpen("submit")}>
+            <Plus size={21} /> 提交切片
           </button>
-        </div>
-        <PageScene {...miaoAssets.scenes.home} eager />
-      </section>
-
-      <section className="balance-card">
-        <div className="balance-topline">
-          <span>我的积分</span>
-          <button className="balance-more" aria-label="更多积分信息">
-            <MoreHorizontal size={20} />
-          </button>
-        </div>
-        <div className="balance-value">
-          <strong>{data.user.balance.toLocaleString()}</strong>
-          <span>分</span>
-        </div>
-        <div className="balance-foot">
-          <span>这个月获得 <b>{data.summary.monthlyIncome.toLocaleString()}</b> 分</span>
-          <span className="balance-trend"><ArrowUpRight size={14} /> 刚刚更新</span>
         </div>
       </section>
 
-      {challenge && (
-        <section className="weekly-challenge" aria-labelledby="weekly-challenge-title">
-          <div className="weekly-challenge-head">
-            <span className="weekly-challenge-icon"><Sparkles size={19} /></span>
-            <div>
-              <span className="eyebrow">妙妙的本周挑战</span>
-              <h2 id="weekly-challenge-title">{challenge.title}</h2>
+      <section className={`challenge-entry ${challenge ? "" : "is-empty"}`} aria-labelledby="weekly-challenge-title">
+        <div className="challenge-entry-head">
+          <div>
+            <span className="journal-kicker">每周一更新</span>
+            <h2 id="weekly-challenge-title">本周任务</h2>
+          </div>
+          {challenge && <span className={`challenge-status status-${challenge.status.toLowerCase()}`}>{challengeStatusLabel(challenge)}</span>}
+        </div>
+        {challenge ? (
+          <>
+            <button className="challenge-entry-main" onClick={() => onNavigate("challenge")} aria-label={`查看本周任务：${challenge.title}`}>
+              <span>
+                <strong>{challenge.title}</strong>
+                <small>{challenge.description}</small>
+              </span>
+              <ChevronRight size={22} />
+            </button>
+            <div className="challenge-entry-progress">
+              <div className="challenge-progress-track" aria-label={`任务完成度 ${progressPercent}%`}>
+                <i style={{ width: `${progressPercent}%` }} />
+              </div>
+              <span>{progressPercent}%</span>
             </div>
-            <span className={`status-chip ${challenge.status === "CLAIMED" ? "success" : challenge.status === "REVERSED" || challenge.status === "EXPIRED" ? "danger" : "warning"}`}>
-              {challenge.status === "CLAIMED" ? "已领取" : challenge.status === "REVERSED" ? "已撤销" : challenge.status === "EXPIRED" ? "已结束" : challenge.progress.qualified ? "已达标" : "进行中"}
+            <div className="challenge-entry-foot">
+              <span><Coins size={17} /> 完成可得 <b>{challenge.rewardPoints.toLocaleString()}</b> 积分</span>
+              <button onClick={() => onNavigate("challenge")}>查看任务</button>
+            </div>
+          </>
+        ) : (
+          <button className="challenge-entry-main" onClick={() => onNavigate("challenge")}>
+            <span>
+              <strong>本周任务还没出现</strong>
+              <small>任务开放后会显示在这里，不会影响已有积分。</small>
             </span>
-          </div>
-          <p className="weekly-challenge-description">{challenge.description}</p>
-          <div className="weekly-challenge-progress">
-            {challenge.targetVideoCount !== null && (
-              <div>
-                <span><b>通过的切片</b><strong>{challenge.progress.videoCount} / {challenge.targetVideoCount}</strong></span>
-                <progress max={challenge.targetVideoCount} value={Math.min(challenge.progress.videoCount, challenge.targetVideoCount)} />
-              </div>
-            )}
-            {challenge.targetLikes !== null && (
-              <div>
-                <span><b>累计点赞</b><strong>{challenge.progress.likes.toLocaleString()} / {challenge.targetLikes.toLocaleString()}</strong></span>
-                <progress max={challenge.targetLikes} value={Math.min(challenge.progress.likes, challenge.targetLikes)} />
-              </div>
-            )}
-          </div>
-          <div className="weekly-challenge-baseline">
-            <Target size={16} />
-            <span>你平时每周约有 {challenge.baselineVideoCount} 条切片通过，获得 {challenge.baselineLikes.toLocaleString()} 个点赞</span>
-          </div>
-          <p className="weekly-challenge-reason">{challenge.aiReason}</p>
-          <div className="weekly-challenge-foot">
-            <div>
-              <span>达标奖励</span>
-              <strong>{challenge.rewardPoints.toLocaleString()} 分</strong>
-              <small>{challenge.raceEnded ? "本周加分活动结束啦" : `最先完成还可多得 ${challenge.period.raceReward.toLocaleString()} 分`}</small>
-            </div>
-            {challenge.progress.qualified && ["ACTIVE", "COMPLETED"].includes(challenge.status) && (
-              <button className="primary-button compact-button" disabled={!challenge.rewardsEnabled || claimingChallenge} onClick={() => void claimChallenge()}>
-                {!challenge.rewardsEnabled ? "发放暂停" : claimingChallenge ? "领取中..." : "领取奖励"}
-              </button>
-            )}
-          </div>
-          {challengeError && <p className="form-error" role="alert">{challengeError}</p>}
-        </section>
-      )}
-
-      <section className="quick-actions">
-        <button onClick={() => onOpen("submit")}>
-          <span className="quick-icon coral">
-            <Plus size={19} />
-          </span>
-          <span>提交切片</span>
-        </button>
-        <button onClick={() => onOpen("transfer")}>
-          <span className="quick-icon teal">
-            <Send size={18} />
-          </span>
-          <span>送积分</span>
-        </button>
-        <button onClick={() => onNavigate("mall")}>
-          <span className="quick-icon yellow">
-            <Gift size={18} />
-          </span>
-          <span>换礼物</span>
-        </button>
-        <button onClick={() => onNavigate("ledger")}>
-          <span className="quick-icon purple">
-            <WalletCards size={18} />
-          </span>
-          <span>积分记录</span>
-        </button>
-      </section>
-
-      <section className="guild-status">
-        <div className="guild-icon">
-          <ShieldCheck size={22} />
-        </div>
-        <div className="guild-copy">
-          <div className="guild-title">
-            <strong>剪辑团状态</strong>
-            <span className="status-chip teal">{data.user.guildStatus ?? "未设置"}</span>
-          </div>
-          <p>{data.user.invited ? "邀请已经发给你啦" : "这里会显示你的入团状态"}</p>
-        </div>
-        <ChevronRight size={18} className="muted-icon" />
-      </section>
-
-      <section className="section-block">
-        <div className="section-heading">
-          <h2 className="section-title">最近动态</h2>
-          <button className="section-action" onClick={() => onNavigate("ledger")}>
-            查看全部
+            <ChevronRight size={22} />
           </button>
+        )}
+      </section>
+
+      <section className="journal-section">
+        <div className="journal-section-heading ruled">
+          <h2>最近动态</h2>
+          <button onClick={() => onNavigate("ledger")}>查看全部</button>
         </div>
-        <div className="activity-list">
-          {recentLedger.map((item) => {
-            const Icon = item.amount >= 0 ? ArrowDownLeft : Gift;
-            return (
-              <div className="activity-item" key={item.id}>
-                <span className={`activity-icon ${item.amount >= 0 ? "positive" : "negative"}`}>
-                  <Icon size={17} />
-                </span>
-                <div className="activity-copy">
-                  <strong>{ledgerLabel(item.type, item.note)}</strong>
-                  <span>{formatDate(item.createdAt)}</span>
-                </div>
-                <b className={item.amount >= 0 ? "positive-text" : "negative-text"}>
-                  {item.amount >= 0 ? "+" : ""}{item.amount.toLocaleString()}
-                </b>
+        <div className="journal-timeline">
+          {recentLedger.map((item) => (
+            <div className="journal-timeline-row" key={item.id}>
+              <span className="timeline-symbol">{item.amount >= 0 ? <ClipboardCheck size={21} /> : <Gift size={21} />}</span>
+              <div>
+                <strong>{ledgerLabel(item.type, item.note)}</strong>
+                <span>{formatDate(item.createdAt)}</span>
               </div>
-            );
-          })}
+              <b className={item.amount >= 0 ? "positive-text" : ""}>
+                {item.amount >= 0 ? "+" : ""}{item.amount.toLocaleString()} 积分
+              </b>
+            </div>
+          ))}
           {recentLedger.length === 0 && <StateMessage {...miaoAssets.states.first}>还没有积分记录，提交第一条切片吧</StateMessage>}
         </div>
       </section>
+    </div>
+  );
+}
 
-      <section className="mini-rank-card">
+function ChallengeView({
+  challenge,
+  onBack,
+  onNavigate,
+  onClaimChallenge,
+}: {
+  challenge: WeeklyChallengeData | null;
+  onBack: () => void;
+  onNavigate: (view: MemberView) => void;
+  onClaimChallenge: () => Promise<void>;
+}) {
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState("");
+  const progressPercent = challenge ? challengeProgressPercent(challenge) : 0;
+
+  async function claim() {
+    setClaiming(true);
+    setClaimError("");
+    try {
+      await onClaimChallenge();
+    } catch (error) {
+      setClaimError(error instanceof Error ? error.message : "奖励没领到，请稍后再试");
+    } finally {
+      setClaiming(false);
+    }
+  }
+
+  if (!challenge) {
+    return (
+      <div className="member-content challenge-page journal-record-page">
+        <header className="record-header">
+          <button aria-label="返回首页" onClick={onBack}><ArrowLeft size={28} /></button>
+          <h1>本周任务</h1>
+          <span aria-hidden="true" />
+        </header>
+        <section className="challenge-empty">
+          <Image src={miaoAssets.v3.characters.award} alt="妙妙捧着奖杯等待新任务" width={640} height={960} priority />
+          <div>
+            <span className="journal-kicker">任务准备中</span>
+            <h2>本周还没有任务</h2>
+            <p>可能是任务还没生成，或者活动暂时没有开放。开放后会自动出现在这里。</p>
+          </div>
+          <button className="journal-primary" onClick={() => onNavigate("videos")}><Scissors size={20} /> 先去看看切片</button>
+        </section>
+      </div>
+    );
+  }
+
+  const metricRows = [
+    challenge.targetVideoCount ? {
+      label: "已通过切片",
+      current: challenge.progress.videoCount,
+      target: challenge.targetVideoCount,
+      baseline: challenge.baselineVideoCount,
+      unit: "条",
+    } : null,
+    challenge.targetLikes ? {
+      label: "累计点赞",
+      current: challenge.progress.likes,
+      target: challenge.targetLikes,
+      baseline: challenge.baselineLikes,
+      unit: "赞",
+    } : null,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const isEnded = ["REVERSED", "EXPIRED"].includes(challenge.status);
+  const canClaim = challenge.claimable && challenge.rewardsEnabled && !claiming;
+  const claimed = challenge.status === "CLAIMED";
+
+  return (
+    <div className="member-content challenge-page journal-record-page">
+      <header className="record-header">
+        <button aria-label="返回首页" onClick={onBack}><ArrowLeft size={28} /></button>
+        <h1>本周任务</h1>
+        <span aria-hidden="true" />
+      </header>
+
+      <section className="challenge-hero">
+        <div className="challenge-hero-copy">
+          <span className={`challenge-status status-${challenge.status.toLowerCase()}`}>{challengeStatusLabel(challenge)}</span>
+          <h2>{challenge.title}</h2>
+          <p>{challenge.description}</p>
+          <div className="challenge-reward"><Coins size={20} /> 完成可得 <b>{challenge.rewardPoints.toLocaleString()}</b> 积分</div>
+        </div>
+        <Image src={miaoAssets.v3.characters.award} alt="妙妙捧着奖杯为任务加油" width={640} height={960} priority />
+      </section>
+
+      <section className="challenge-progress-card" aria-labelledby="challenge-progress-title">
+        <div className="challenge-section-title">
+          <div>
+            <span className="journal-kicker">任务进度</span>
+            <h2 id="challenge-progress-title">{progressPercent}% 已完成</h2>
+          </div>
+          <strong>{challenge.progress.qualified ? "已达标" : "继续加油"}</strong>
+        </div>
+        <div className="challenge-progress-track large" aria-label={`任务完成度 ${progressPercent}%`}>
+          <i style={{ width: `${progressPercent}%` }} />
+        </div>
+        <div className="challenge-metrics">
+          {metricRows.map((metric) => (
+            <div className="challenge-metric" key={metric.label}>
+              <span>{metric.label}</span>
+              <strong>{metric.current.toLocaleString()} <small>/ {metric.target.toLocaleString()} {metric.unit}</small></strong>
+              <small>开始任务时：{metric.baseline.toLocaleString()} {metric.unit}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="challenge-note">
+        <div className="challenge-section-title ruled">
+          <h2>为什么是这个目标</h2>
+        </div>
+        <p>{challenge.aiReason}</p>
+      </section>
+
+      <section className="challenge-details">
         <div>
-          <span className="eyebrow">总积分榜</span>
-          <h2>{data.summary.rank ? `你现在是第 ${data.summary.rank} 名` : "正在整理榜单"}</h2>
-          <p>积分变化后，名次也会跟着更新</p>
+          <Clock size={22} />
+          <span>任务时间</span>
+          <strong>{formatChallengeDate(challenge.period.periodStart)} 至 {formatChallengeDate(challenge.period.periodEnd)}</strong>
         </div>
-        <div className="mini-rank-medal">
-          <Medal size={28} />
-          <strong>{data.summary.rank ?? "–"}</strong>
+        <div>
+          <Trophy size={22} />
+          <span>竞速奖励</span>
+          <strong>{challenge.raceEnded ? "本周竞速已结束" : `最快达标可得 ${challenge.period.raceReward.toLocaleString()} 积分`}</strong>
         </div>
+        <div>
+          <Coins size={22} />
+          <span>领奖截止</span>
+          <strong>{formatChallengeDate(challenge.period.claimEndsAt)}</strong>
+        </div>
+      </section>
+
+      {claimError && <p className="form-error challenge-claim-error" role="alert">{claimError}</p>}
+      {claimed ? (
+        <button className="journal-primary challenge-main-action" disabled><CheckCircle size={21} weight="fill" /> 奖励已到账</button>
+      ) : canClaim ? (
+        <button className="journal-primary challenge-main-action" onClick={() => void claim()}><Coins size={21} /> {claiming ? "正在领取..." : `领取 ${challenge.rewardPoints.toLocaleString()} 积分`}</button>
+      ) : (
+        <button className="journal-primary challenge-main-action" disabled={isEnded || challenge.progress.qualified || !challenge.rewardsEnabled} onClick={() => onNavigate("videos")}>
+          {isEnded ? "任务已经结束" : !challenge.rewardsEnabled ? "奖励暂时不能领取" : challenge.progress.qualified ? "等待领取开放" : <><Scissors size={21} /> 继续提交切片</>}
+        </button>
+      )}
+      {!claimed && !isEnded && <p className="challenge-action-note">任务完成后，请在 {formatChallengeDate(challenge.period.claimEndsAt)} 前领取奖励。</p>}
+
+      <section className="challenge-flow" aria-labelledby="challenge-flow-title">
+        <div className="challenge-section-title ruled"><h2 id="challenge-flow-title">完成后会发生什么</h2></div>
+        <ol>
+          <li><span>1</span><div><strong>提交切片</strong><small>视频通过后会自动计入本周进度</small></div></li>
+          <li><span>2</span><div><strong>达到目标</strong><small>完成数量或点赞目标后就能领奖</small></div></li>
+          <li><span>3</span><div><strong>积分到账</strong><small>领取成功后可以在积分记录里查看</small></div></li>
+        </ol>
       </section>
     </div>
   );
@@ -559,20 +658,18 @@ function VideosView({
   }));
   return (
     <>
-      <div className="member-content">
-      <section className="page-header-row with-scene">
+      <div className="member-content journal-page">
+      <section className="compact-journal-hero videos-journal-hero">
         <div>
-          <span className="eyebrow">把直播高光存下来</span>
-          <h1 className="page-title">我的切片</h1>
-          <p>提交后，我们会自动检查链接和点赞数。</p>
+          <h1>我的切片</h1>
+          <button className="journal-primary" onClick={() => onOpen("submit")}>
+            <Plus size={20} /> 提交切片
+          </button>
         </div>
-        <PageScene {...miaoAssets.scenes.videos} />
-        <button className="primary-button compact-button" onClick={() => onOpen("submit")}>
-          <Plus size={17} /> 提交切片
-        </button>
+        <Image src={miaoAssets.v3.characters.videos} alt={miaoAssets.actions.highlight.alt} width={520} height={520} priority />
       </section>
 
-      <section className="video-summary">
+      <section className="journal-stats">
         <div>
           <span>本月通过</span>
           <strong>{data.summary.monthlyApprovedVideos}</strong>
@@ -587,50 +684,44 @@ function VideosView({
         </div>
       </section>
 
-      <div className="filter-row">
-        <button className={`filter-pill ${filter === "ALL" ? "active" : ""}`} onClick={() => setFilter("ALL")}>全部 <span>{data.summary.videoCounts.all}</span></button>
-        <button className={`filter-pill ${filter === "APPROVED" ? "active" : ""}`} onClick={() => setFilter("APPROVED")}>已到账 <span>{data.summary.videoCounts.approved}</span></button>
-        <button className={`filter-pill ${filter === "PROCESSING" ? "active" : ""}`} onClick={() => setFilter("PROCESSING")}>正在检查 <span>{data.summary.videoCounts.processing}</span></button>
-        <button className={`filter-pill ${filter === "EXCEPTION" ? "active" : ""}`} onClick={() => setFilter("EXCEPTION")}>需要看看 <span>{data.summary.videoCounts.exception}</span></button>
+      <div className="journal-tabs video-tabs">
+        <button className={filter === "ALL" ? "active" : ""} onClick={() => setFilter("ALL")}>全部 {data.summary.videoCounts.all}</button>
+        <button className={filter === "APPROVED" ? "active" : ""} onClick={() => setFilter("APPROVED")}>已到账 {data.summary.videoCounts.approved}</button>
+        <button className={filter === "PROCESSING" ? "active" : ""} onClick={() => setFilter("PROCESSING")}>正在检查 {data.summary.videoCounts.processing}</button>
+        <button className={filter === "EXCEPTION" ? "active" : ""} onClick={() => setFilter("EXCEPTION")}>需要看看 {data.summary.videoCounts.exception}</button>
       </div>
 
-      <section className="video-list">
+      <section className="journal-section video-journal-list">
+        <div className="journal-section-heading ruled"><h2>直播高光片段</h2></div>
         {rows.map((video) => (
-          <article className="video-item" key={video.id}>
-            <div className="video-thumb">
-              <span className="play-glyph">▶</span>
-              <small>{video.likesLabel}</small>
+          <article className="journal-video-row" key={video.id}>
+            <div className="journal-video-thumb">
+              <Image src={miaoAssets.v3.concert} alt="" width={220} height={220} />
+              <PlayCircle size={42} weight="fill" aria-hidden="true" />
             </div>
-            <div className="video-info">
-              <div className="video-title-row">
-                <h3>{video.title}</h3>
-                {video.status === "APPROVED" && (
-                  <span className="status-chip success">已到账</span>
-                )}
-                {video.status === "PROCESSING" && (
-                  <span className="status-chip warning">正在检查</span>
-                )}
-                {video.status === "REJECTED" && (
-                  <span className="status-chip danger">未通过</span>
-                )}
+            <div className="journal-video-copy">
+              <h3>直播高光片段</h3>
+              <span className="video-source" title={video.title}>{video.title}</span>
+              <div className="video-meta-line">
+                <span><Clock size={16} />{video.date}</span>
+                <span>{video.likesLabel}</span>
               </div>
-              <span className="video-date">{video.date}</span>
-              <div className="video-foot">
-                <span className="video-note">
+              <div className="video-status-line">
+                <span className={`plain-status ${video.status.toLowerCase()}`}>
+                  {video.status === "APPROVED" ? <CheckCircle size={17} /> : video.status === "PROCESSING" ? <Clock size={17} /> : <WarningCircle size={17} />}
                   {submittedAppeals[video.id] || video.appeals[0]?.status === "PENDING"
-                    ? "已经提交说明，等管理员查看"
-                    : video.appeals[0]?.status === "APPROVED"
-                      ? `说明已通过${video.appeals[0].reviewedPoints !== null ? `，获得 ${video.appeals[0].reviewedPoints} 积分` : ""}`
-                      : video.appeals[0]?.status === "REJECTED"
-                        ? `这次没有通过：${video.appeals[0].reviewReason ?? "可以看看处理结果"}`
-                        : video.reviewReason ?? (video.status === "APPROVED" ? "已经确认，积分到账啦" : "正在检查视频，请稍等")}
+                    ? "说明已提交"
+                    : video.status === "APPROVED" ? "已到账"
+                      : video.status === "PROCESSING" ? "正在检查视频"
+                        : "需要看看"}
                 </span>
                 <b className={video.points > 0 ? "positive-text" : "muted-text"}>
-                  {video.pointsLabel}
+                  {video.pointsLabel}{video.points > 0 ? " 积分" : ""}
                 </b>
               </div>
+              {video.reviewReason && video.status !== "APPROVED" && <p className="video-review-note">{video.reviewReason}</p>}
               {video.status === "REJECTED" && !video.appeals.some((appeal) => appeal.status === "PENDING") && !submittedAppeals[video.id] && (
-                <button className="secondary-button compact-button appeal-button" onClick={() => { setAppealingVideo(video); setAppealError(""); }}>
+                <button className="journal-inline-button" onClick={() => { setAppealingVideo(video); setAppealError(""); }}>
                   <CircleHelp size={16} /> 补充说明
                 </button>
               )}
@@ -667,25 +758,22 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
   const categories = ["全部", "实用好物", "会员权益", "团品周边"];
   return (
-    <div className="member-content">
-      <section className="page-header-row with-scene">
+    <div className="member-content journal-page">
+      <section className="compact-journal-hero mall-journal-hero">
         <div>
-          <span className="eyebrow">用努力换一份小惊喜</span>
-          <h1 className="page-title">积分礼物屋</h1>
-          <p>积分够了就能换，兑换前记得检查信息。</p>
+          <span className="journal-kicker">用努力换一份小惊喜</span>
+          <h1>积分礼物屋</h1>
+          <div className="mall-points">
+            <span>可用积分</span>
+            <strong>{balance.toLocaleString()}</strong>
+          </div>
         </div>
-        <PageScene {...miaoAssets.scenes.mall} />
-        <button className="icon-button" aria-label="兑换记录" onClick={() => onNavigate("orders")}>
-          <PackageCheck size={20} />
+        <Image src={miaoAssets.v3.characters.gift} alt={miaoAssets.actions.gift.alt} width={520} height={520} priority />
+        <button className="journal-record-link" onClick={() => onNavigate("orders")}>
+          兑换记录 <ChevronRight size={17} />
         </button>
       </section>
-      <div className="mall-balance">
-        <Coins size={18} />
-        <span>可用积分</span>
-        <strong>{balance.toLocaleString()}</strong>
-        <button onClick={() => onOpen("transfer")}>送积分 <ChevronRight size={15} /></button>
-      </div>
-      <div className="category-tabs">
+      <div className="journal-tabs category-tabs">
         {categories.map((category) => (
           <button
             key={category}
@@ -696,12 +784,11 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
           </button>
         ))}
       </div>
-      <section className="gift-grid">
+      <section className="journal-gift-grid">
         {items.map((gift) => (
-          <article className="gift-card" key={gift.id}>
+          <article className="journal-gift-card" key={gift.id}>
             <div className="gift-image-wrap">
               <img src={gift.image} alt={gift.name} />
-              <span className={`gift-tag ${gift.tone}`}>{gift.tag}</span>
             </div>
             <div className="gift-body">
               <h3>{gift.name}</h3>
@@ -711,14 +798,14 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
                 <small>剩 {gift.stock}</small>
               </div>
               <button
-                className="secondary-button full-button gift-button"
+                className="journal-outline-button"
                 disabled={gift.stock <= 0 || balance < gift.points}
                 onClick={() => {
                   setSelectedGift(gift);
                   onOpen("redeem", gift);
                 }}
               >
-                {gift.stock > 0 ? (balance >= gift.points ? "换这个礼物" : `还差 ${(gift.points - balance).toLocaleString()} 分`) : "暂时换不了"}
+                {gift.stock > 0 ? (balance >= gift.points ? "查看" : `差 ${(gift.points - balance).toLocaleString()} 分`) : "已售罄"}
               </button>
             </div>
           </article>
@@ -825,38 +912,27 @@ function RankView({ data }: { data: DashboardData }) {
     if (response.ok) setAwards(result.awards ?? []);
   }
   return (
-    <div className="member-content">
-      <section className="page-header-row with-scene">
+    <div className="member-content journal-page">
+      <section className="compact-journal-hero rank-journal-hero">
         <div>
-          <span className="eyebrow">每一条高光都算数</span>
-          <h1 className="page-title">剪辑团榜单</h1>
-          <p>看看这周谁剪出了最多精彩片段。</p>
+          <span className="journal-kicker">每一条高光都算数</span>
+          <h1>剪辑团榜单</h1>
+          <p>看看谁剪出了最多精彩片段</p>
         </div>
-        <PageScene {...miaoAssets.scenes.rank} />
-        <button className="icon-button" aria-label="榜单说明">
-          <CircleHelp size={20} />
-        </button>
+        <Image src={miaoAssets.v3.characters.award} alt={miaoAssets.actions.award.alt} width={520} height={520} priority />
       </section>
-      <div className="period-tabs">
+      <div className="journal-tabs period-tabs">
         {["本周", "本月", "总榜"].map((item) => (
           <button key={item} className={period === item ? "active" : ""} onClick={() => setPeriod(item)}>
             {item}
           </button>
         ))}
       </div>
-      <section className="rank-hero">
-        <div className="rank-hero-copy">
-          <span className="eyebrow">{period === "本周" ? "周更新排行榜" : period === "本月" ? "月点赞量排行榜" : "总积分排行榜"}</span>
-          <h2>一起把高光剪出来</h2>
-          <p>{period === "本周" ? "按这周通过的切片数量排名" : period === "本月" ? "按这个月切片收到的点赞数排名" : "按现在拥有的积分排名"}</p>
-        </div>
-        <Trophy size={58} strokeWidth={1.3} />
-      </section>
-      <section className="rank-list">
+      <section className="journal-rank-list">
         {loading && <p className="empty-copy">正在整理榜单...</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         {!loading && !error && ranking.map((user) => (
-          <div className={`rank-row ${user.current ? "current" : ""}`} key={user.userId}>
+          <div className={`journal-rank-row ${user.current ? "current" : ""}`} key={user.userId}>
             <span className={`rank-number rank-${user.rank}`}>{user.rank}</span>
             <Avatar text={user.nickname.slice(0, 1)} tone={user.current ? "coral" : "teal"} imageUrl={user.avatarUrl} />
             <div className="rank-name">
@@ -869,9 +945,9 @@ function RankView({ data }: { data: DashboardData }) {
         {!loading && !error && ranking.length === 0 && <StateMessage {...miaoAssets.actions.award}>榜单还没有人，提交第一条切片吧</StateMessage>}
       </section>
       {awards.length > 0 && (
-        <section className="profile-section">
-          <div className="section-heading"><h2 className="section-title">我的榜单奖励</h2><span className="status-chip warning">{awards.filter((award) => award.status === "PENDING").length} 待处理</span></div>
-          <div className="profile-menu">
+        <section className="journal-section award-section">
+          <div className="journal-section-heading ruled"><h2>我的榜单奖励</h2><span>{awards.filter((award) => award.status === "PENDING").length} 份待领取</span></div>
+          <div className="journal-menu">
             {awards.map((award) => (
               <button key={award.id} disabled={award.status !== "PENDING"} onClick={() => setSelectedAward(award)}>
                 <span><Trophy size={19} />{award.period.type === "WEEK" ? "周榜" : "月榜"}第 {award.rank} 名 · 榜单奖励</span>
@@ -888,39 +964,46 @@ function RankView({ data }: { data: DashboardData }) {
 
 function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view: MemberView) => void; onOpen: (dialog: DialogType) => void; data: DashboardData; onLogout: () => void }) {
   return (
-    <div className="member-content">
-      <section className="profile-head">
-        <PageScene {...miaoAssets.scenes.profile} />
+    <div className="member-content journal-page profile-journal-page">
+      <section className="journal-profile-head">
         <div className="profile-avatar-wrap">
           <Avatar text={data.user.nickname.slice(0, 1)} tone="coral" imageUrl={data.user.avatarUrl} />
           <span className="online-dot" />
         </div>
         <div className="profile-copy">
           <h1>{data.user.nickname}</h1>
-          <p>快手 ID · {data.user.kuaishouId}</p>
-          <span className="status-chip teal"><BadgeCheck size={13} /> 剪辑团成员</span>
+          <p title={data.user.kuaishouId}>快手 ID · {data.user.kuaishouId}</p>
+          <span className="plain-member-status"><BadgeCheck size={15} /> 剪辑团成员</span>
         </div>
-        <button className="icon-button" aria-label="设置"><Settings2 size={20} /></button>
+        <button className="journal-text-action" onClick={() => onOpen("profile")}>修改资料</button>
       </section>
-      <section className="profile-stat-row">
+      <section className="journal-profile-stats">
         <div><strong>{data.user.balance.toLocaleString()}</strong><span>当前积分</span></div>
         <div><strong>{data.summary.approvedVideos}</strong><span>通过的切片</span></div>
         <div><strong>{data.summary.rank ?? "–"}</strong><span>榜单名次</span></div>
       </section>
-      <section className="profile-section">
-        <div className="section-heading"><h2 className="section-title">我的信息</h2><button className="section-action" onClick={() => onOpen("profile")}>修改</button></div>
-        <div className="profile-info-list">
-          <div><span>快手昵称</span><strong>{data.user.nickname}</strong></div>
-          <div><span>快手 ID</span><strong>{data.user.kuaishouId}</strong></div>
-          <div><span>剪辑团状态</span><span className="status-chip teal">{data.user.guildStatus ?? "未设置"}</span></div>
+
+      <section className="journal-section profile-action-section">
+        <div className="journal-section-heading ruled"><h2>常用操作</h2></div>
+        <div className="journal-profile-actions">
+          <button onClick={() => onOpen("transfer")}><Send size={20} /><span>送积分给团友</span><ChevronRight size={18} /></button>
+          <button onClick={() => onOpen("recipient")}><PackageCheck size={20} /><span>收货与收款信息</span><ChevronRight size={18} /></button>
         </div>
       </section>
-      <section className="profile-menu">
+
+      <section className="journal-section">
+        <div className="journal-section-heading ruled"><h2>记录</h2></div>
+        <div className="journal-menu">
         <button aria-label="积分记录" onClick={() => onNavigate("ledger")}><span><WalletCards size={19} />积分记录</span><ChevronRight size={18} /></button>
         <button aria-label="送积分记录" onClick={() => onNavigate("transfers")}><span><Send size={19} />送积分记录</span><ChevronRight size={18} /></button>
         <button aria-label="兑换记录" onClick={() => onNavigate("orders")}><span><PackageCheck size={19} />兑换记录</span><ChevronRight size={18} /></button>
-        <button aria-label="收货与收款信息" onClick={() => onOpen("recipient")}><span><PackageCheck size={19} />收货与收款信息</span><ChevronRight size={18} /></button>
-        <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
+        </div>
+      </section>
+      <section className="journal-section">
+        <div className="journal-section-heading ruled"><h2>账号</h2></div>
+        <div className="journal-menu">
+          <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
+        </div>
       </section>
       <button className="logout-button" onClick={onLogout}><LogOut size={18} />退出登录</button>
     </div>
@@ -1496,10 +1579,11 @@ export default function MemberApp() {
     if (view === "mall") return <MallView items={giftRows} balance={dashboard.user.balance} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? giftRows[0]); openDialog(type); }} />;
     if (view === "rank") return <RankView data={dashboard} />;
     if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { clearNotificationPromptSession(); await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
+    if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
     if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} />;
     if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} />;
     if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} />;
-    return <HomeView data={dashboard} challenge={weeklyChallenge} onClaimChallenge={claimCurrentChallenge} onNavigate={handleNavigate} onOpen={openDialog} />;
+    return <HomeView data={dashboard} challenge={weeklyChallenge} onNavigate={handleNavigate} onOpen={openDialog} />;
   }, [dashboard, giftRows, router, view, weeklyChallenge]);
 
   if (!dashboard) {
@@ -1524,25 +1608,31 @@ export default function MemberApp() {
     setDialog(null);
     setRevision((value) => value + 1);
   };
+  const secondaryView = ["challenge", "ledger", "transfers", "orders"].includes(view);
+  const navigationView: MemberView = view === "challenge" || view === "ledger"
+    ? "home"
+    : view === "transfers" || view === "orders"
+      ? "profile"
+      : view;
 
   return (
     <main className="member-shell">
-      <div className="member-app">
+      <div className={`member-app ${secondaryView ? "secondary-page" : ""}`}>
         <header className="member-topbar">
           <BrandMark />
           <div className="topbar-actions">
-            <button className="icon-button" aria-label="搜索"><Search size={19} /></button>
             <NotificationCenter onOpenDetail={(notification) => {
               if (notification.entityType === "VideoSubmission") handleNavigate("videos");
               if (notification.entityType === "RedemptionOrder") handleNavigate("orders");
               if (notification.entityType === "Transfer") handleNavigate("transfers");
               if (notification.entityType === "PointLedger") handleNavigate("ledger");
+              if (notification.entityType === "WeeklyChallengeAssignment") handleNavigate("challenge");
             }} />
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>
         </header>
         {page}
-        <BottomNav active={["ledger", "transfers", "orders"].includes(view) ? "profile" : view} onChange={handleNavigate} />
+        <BottomNav active={navigationView} onChange={handleNavigate} />
       </div>
       {dialog === "submit" && <SubmitDialog onClose={closeDialog} />}
       {dialog === "transfer" && <TransferDialog balance={dashboard.user.balance} onClose={closeDialog} />}

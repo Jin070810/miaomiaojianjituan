@@ -1,4 +1,18 @@
 export const miaoAssets = {
+  v3: {
+    emblem: "/brand/miaomiao/v3/brand-emblem.webp",
+    paper: "/brand/miaomiao/v3/paper-texture.webp",
+    scrapbook: "/brand/miaomiao/v3/scrapbook-corner.webp",
+    heroSwoosh: "/brand/miaomiao/v3/hero-swoosh.webp",
+    concert: "/brand/miaomiao/v3/concert-highlight.webp",
+    characters: {
+      home: "/brand/miaomiao/v3/character-home.webp",
+      welcome: "/brand/miaomiao/v3/character-welcome.webp",
+      videos: "/brand/miaomiao/v3/character-videos.webp",
+      gift: "/brand/miaomiao/v3/character-gift.webp",
+      award: "/brand/miaomiao/v3/character-award.webp",
+    },
+  },
   master: {
     src: "/brand/miaomiao/characters/miao-master.webp",
     alt: "妙妙穿着莓紫色直播舞台装，开心地向剪辑团成员打招呼",

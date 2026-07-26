@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 import { db } from "./db";
 import { createNotification } from "./notifications";
+import { rewardTiersForAssignment, RewardTier } from "./weekly-challenge-rewards";
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -112,7 +113,8 @@ async function reversePoints(
 
 export async function weeklyChallengeProgress(
   tx: DatabaseClient,
-  assignment: Pick<WeeklyChallengeAssignment, "userId" | "targetVideoCount" | "targetLikes" | "type"> & {
+  assignment: Pick<WeeklyChallengeAssignment, "userId" | "targetVideoCount" | "targetLikes" | "type" | "rewardPoints"> & {
+    rewardTiers?: Prisma.JsonValue | null;
     period: Pick<WeeklyChallengePeriod, "periodStart" | "periodEnd">;
   },
 ) {
@@ -127,14 +129,40 @@ export async function weeklyChallengeProgress(
   });
   const videoCount = aggregate._count.id;
   const likes = aggregate._sum.likes ?? 0;
-  const videoTargetMet = assignment.targetVideoCount === null || videoCount >= assignment.targetVideoCount;
-  const likesTargetMet = assignment.targetLikes === null || likes >= assignment.targetLikes;
-  const qualified = assignment.type === "VIDEO_COUNT"
-    ? assignment.targetVideoCount !== null && videoTargetMet
-    : assignment.type === "LIKE_SUM"
-      ? assignment.targetLikes !== null && likesTargetMet
-      : assignment.targetVideoCount !== null && assignment.targetLikes !== null && videoTargetMet && likesTargetMet;
-  return { videoCount, likes, qualified };
+  const rewardTiers = rewardTiersForAssignment(assignment);
+  const tierMet = (tier: RewardTier) => {
+    const videoTargetMet = tier.targetVideoCount !== null && videoCount >= tier.targetVideoCount;
+    const likesTargetMet = tier.targetLikes !== null && likes >= tier.targetLikes;
+    return assignment.type === "VIDEO_COUNT"
+      ? videoTargetMet
+      : assignment.type === "LIKE_SUM"
+        ? likesTargetMet
+        : videoTargetMet && likesTargetMet;
+  };
+  let reachedTierIndex = -1;
+  for (let index = 0; index < rewardTiers.length; index += 1) {
+    if (!tierMet(rewardTiers[index])) break;
+    reachedTierIndex = index;
+  }
+  const claimedRewardPoints = "claimedRewardPoints" in assignment && typeof assignment.claimedRewardPoints === "number"
+    ? assignment.claimedRewardPoints
+    : 0;
+  const claimedTier = "claimedTier" in assignment && typeof assignment.claimedTier === "number"
+    ? assignment.claimedTier
+    : -1;
+  const reachedRewardPoints = reachedTierIndex >= 0 ? rewardTiers[reachedTierIndex].rewardPoints : 0;
+  const claimableRewardPoints = Math.max(0, reachedRewardPoints - claimedRewardPoints);
+  return {
+    videoCount,
+    likes,
+    qualified: reachedTierIndex === rewardTiers.length - 1,
+    reachedTierIndex,
+    claimedTier,
+    claimedRewardPoints,
+    claimableRewardPoints,
+    rewardTiers,
+    nextTier: rewardTiers[reachedTierIndex + 1] ?? null,
+  };
 }
 
 async function weeklyRewardsEnabled(tx: DatabaseClient) {
@@ -227,10 +255,34 @@ export async function evaluateWeeklyChallengeAfterVideoApproval(
   });
   if (!assignment) return null;
   const progress = await weeklyChallengeProgress(tx, assignment);
-  if (!progress.qualified) return { assignment, progress, completed: false };
+  if (progress.reachedTierIndex < 0) return { assignment, progress, completed: false };
+  const finalTierReached = progress.qualified;
+  if (!finalTierReached) {
+    if (assignment.reversedAt) {
+      await tx.weeklyChallengeAssignment.updateMany({
+        where: { id: assignment.id, status: "ACTIVE" },
+        data: { reversedAt: null },
+      });
+    }
+    await createNotification(tx, {
+      userId: input.userId,
+      type: "WEEKLY_CHALLENGE",
+      title: `周挑战${progress.rewardTiers[progress.reachedTierIndex].label}已解锁`,
+      body: `你已达到阶段目标，可领取 ${progress.rewardTiers[progress.reachedTierIndex].rewardPoints} 分累计奖励`,
+      entityType: "WeeklyChallengeAssignment",
+      entityId: assignment.id,
+      metadata: {
+        tierIndex: progress.reachedTierIndex,
+        rewardPoints: progress.rewardTiers[progress.reachedTierIndex].rewardPoints,
+        claimableRewardPoints: progress.claimableRewardPoints,
+      },
+      dedupeKey: `weekly-challenge:${assignment.id}:tier:${progress.reachedTierIndex}`,
+    });
+    return { assignment, progress, completed: false };
+  }
   const claimed = await tx.weeklyChallengeAssignment.updateMany({
     where: { id: assignment.id, status: "ACTIVE" },
-    data: { status: "COMPLETED", completedAt },
+    data: { status: "COMPLETED", completedAt, reversedAt: null },
   });
   if (claimed.count !== 1) return { assignment, progress, completed: false };
   const completed = await tx.weeklyChallengeAssignment.findUniqueOrThrow({
@@ -246,15 +298,15 @@ export async function evaluateWeeklyChallengeAfterVideoApproval(
     },
   });
   await createNotification(tx, {
-    userId: input.userId,
-    type: "WEEKLY_CHALLENGE",
-    title: "本周个性化挑战已达标",
-    body: `你已完成“${assignment.title}”，可领取 ${assignment.rewardPoints} 积分`,
-    entityType: "WeeklyChallengeAssignment",
-    entityId: assignment.id,
-    metadata: { rewardPoints: assignment.rewardPoints, claimable: true },
-    dedupeKey: `weekly-challenge:${assignment.id}:completed`,
-  });
+      userId: input.userId,
+      type: "WEEKLY_CHALLENGE",
+      title: "本周个性化挑战已达标",
+      body: `你已完成“${assignment.title}”，最高可领取 ${assignment.rewardPoints} 积分`,
+      entityType: "WeeklyChallengeAssignment",
+      entityId: assignment.id,
+      metadata: { rewardPoints: assignment.rewardPoints, claimable: true, tierIndex: progress.reachedTierIndex },
+      dedupeKey: `weekly-challenge:${assignment.id}:completed`,
+    });
   const raceWinner = await awardRaceWinner(tx, completed, completedAt);
   return { assignment: completed, progress, completed: true, raceWinner };
 }
@@ -269,52 +321,65 @@ export async function claimWeeklyChallenge(input: {
     try {
       return await db.$transaction(async (tx) => {
         if (!(await weeklyRewardsEnabled(tx))) throw new Error("周挑战积分发放当前暂停，请稍后再试");
-        const replay = await tx.weeklyChallengeAssignment.findUnique({
-          where: { claimIdempotencyKey: input.idempotencyKey },
-          include: { period: true },
-        });
-        if (replay) {
-          if (replay.id !== input.assignmentId || replay.userId !== input.userId) {
-            throw new Error("该幂等请求标识已用于其他周挑战");
-          }
-          const ledger = await tx.pointLedger.findFirst({
-            where: { referenceId: replay.id, type: "WEEKLY_CHALLENGE_REWARD" },
-          });
-          return { assignment: replay, ledger };
-        }
         const assignment = await tx.weeklyChallengeAssignment.findUnique({
           where: { id: input.assignmentId },
           include: { period: true },
         });
         if (!assignment || assignment.userId !== input.userId) throw new Error("周挑战任务不存在");
-        if (assignment.status === "CLAIMED") {
-          const ledger = await tx.pointLedger.findFirst({
-            where: { referenceId: assignment.id, type: "WEEKLY_CHALLENGE_REWARD" },
+        const replayAudit = await tx.auditLog.findFirst({
+          where: {
+            action: "WEEKLY_CHALLENGE_CLAIMED",
+            entity: "WeeklyChallengeAssignment",
+            entityId: assignment.id,
+            requestId: input.idempotencyKey,
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        if (replayAudit) {
+          const after = replayAudit.afterValue && typeof replayAudit.afterValue === "object" && !Array.isArray(replayAudit.afterValue)
+            ? replayAudit.afterValue as Record<string, unknown>
+            : {};
+          const tierIndex = typeof after.tierIndex === "number" ? after.tierIndex : assignment.claimedTier;
+          const ledger = await tx.pointLedger.findUnique({
+            where: { idempotencyKey: `weekly-challenge:${assignment.id}:reward:${tierIndex}` },
           });
           return { assignment, ledger };
         }
+        if (assignment.status === "CLAIMED") throw new Error("该任务的最高阶段奖励已领取");
         if (assignment.status === "REVERSED" || assignment.status === "EXPIRED") throw new Error("该任务已失效");
         if (new Date() >= assignment.period.claimEndsAt) throw new Error("该任务领奖时间已结束");
         const progress = await weeklyChallengeProgress(tx, assignment);
-        if (!progress.qualified) throw new Error("任务尚未达标");
+        if (progress.claimableRewardPoints <= 0 || progress.reachedTierIndex < 0) {
+          throw new Error("当前没有可领取的阶段奖励");
+        }
+        const tierIndex = progress.reachedTierIndex;
+        const tier = progress.rewardTiers[tierIndex];
+        const delta = progress.claimableRewardPoints;
         const claimedAt = new Date();
         const claimed = await tx.weeklyChallengeAssignment.updateMany({
-          where: { id: assignment.id, status: { in: ["ACTIVE", "COMPLETED"] } },
+          where: {
+            id: assignment.id,
+            status: { in: ["ACTIVE", "COMPLETED"] },
+            claimedRewardPoints: assignment.claimedRewardPoints,
+            claimedTier: assignment.claimedTier,
+          },
           data: {
-            status: "CLAIMED",
-            completedAt: assignment.completedAt ?? claimedAt,
-            claimedAt,
+            status: progress.qualified ? "CLAIMED" : "ACTIVE",
+            completedAt: progress.qualified ? (assignment.completedAt ?? claimedAt) : assignment.completedAt,
+            claimedAt: progress.qualified ? claimedAt : assignment.claimedAt,
             claimIdempotencyKey: input.idempotencyKey,
+            claimedRewardPoints: tier.rewardPoints,
+            claimedTier: tierIndex,
           },
         });
         if (claimed.count !== 1) throw new Error("任务状态已变化，请刷新后重试");
         const ledger = await creditPoints(tx, {
           userId: input.userId,
-          amount: assignment.rewardPoints,
+          amount: delta,
           type: "WEEKLY_CHALLENGE_REWARD",
           referenceId: assignment.id,
-          note: `每周个性化挑战：${assignment.title}`,
-          idempotencyKey: `weekly-challenge:${assignment.id}:reward`,
+          note: `每周个性化挑战：${assignment.title}（${tier.label}）`,
+          idempotencyKey: `weekly-challenge:${assignment.id}:reward:${tierIndex}`,
         });
         await tx.auditLog.create({
           data: {
@@ -322,8 +387,18 @@ export async function claimWeeklyChallenge(input: {
             action: "WEEKLY_CHALLENGE_CLAIMED",
             entity: "WeeklyChallengeAssignment",
             entityId: assignment.id,
-            beforeValue: { status: assignment.status },
-            afterValue: { status: "CLAIMED", rewardPoints: assignment.rewardPoints, balanceAfter: ledger.balanceAfter },
+            beforeValue: {
+              status: assignment.status,
+              claimedTier: assignment.claimedTier,
+              claimedRewardPoints: assignment.claimedRewardPoints,
+            },
+            afterValue: {
+              status: progress.qualified ? "CLAIMED" : "ACTIVE",
+              tierIndex,
+              tierRewardPoints: tier.rewardPoints,
+              amount: delta,
+              balanceAfter: ledger.balanceAfter,
+            },
             ip: input.ip,
             requestId: input.idempotencyKey,
           },
@@ -331,12 +406,12 @@ export async function claimWeeklyChallenge(input: {
         await createNotification(tx, {
           userId: input.userId,
           type: "WEEKLY_CHALLENGE",
-          title: "周挑战奖励已领取",
-          body: `${assignment.rewardPoints} 积分已到账，当前余额 ${ledger.balanceAfter} 分`,
+          title: `${tier.label}已领取`,
+          body: `${delta} 积分已到账，累计已领取 ${tier.rewardPoints} 分，当前余额 ${ledger.balanceAfter} 分`,
           entityType: "WeeklyChallengeAssignment",
           entityId: assignment.id,
-          metadata: { amount: assignment.rewardPoints, balanceAfter: ledger.balanceAfter },
-          dedupeKey: `weekly-challenge:${assignment.id}:claimed`,
+          metadata: { amount: delta, tierIndex, cumulativeRewardPoints: tier.rewardPoints, balanceAfter: ledger.balanceAfter },
+          dedupeKey: `weekly-challenge:${assignment.id}:claimed:${tierIndex}`,
         });
         return {
           assignment: await tx.weeklyChallengeAssignment.findUniqueOrThrow({ where: { id: assignment.id } }),
@@ -396,7 +471,7 @@ export async function reconcileWeeklyChallengesAfterVideoRevocation(
   const assignments = await tx.weeklyChallengeAssignment.findMany({
     where: {
       userId: input.userId,
-      status: { in: ["COMPLETED", "CLAIMED"] },
+      status: { in: ["ACTIVE", "COMPLETED", "CLAIMED"] },
       period: {
         periodStart: { lte: input.submittedAt },
         periodEnd: { gt: input.submittedAt },
@@ -406,42 +481,126 @@ export async function reconcileWeeklyChallengesAfterVideoRevocation(
   });
   for (const assignment of assignments) {
     const progress = await weeklyChallengeProgress(tx, assignment);
-    if (progress.qualified) continue;
-    if (assignment.status === "CLAIMED") {
+    const tiered = assignment.rewardTiers !== null;
+    if (!tiered) {
+      if (progress.qualified || !["COMPLETED", "CLAIMED"].includes(assignment.status)) continue;
+      if (assignment.status === "CLAIMED") {
+        await reversePoints(tx, {
+          userId: assignment.userId,
+          amount: assignment.rewardPoints,
+          type: "WEEKLY_CHALLENGE_REVERSAL",
+          referenceId: assignment.id,
+          note: `周挑战证据视频已撤销：${input.reason}`,
+          idempotencyKey: `weekly-challenge:${assignment.id}:reversal`,
+        });
+      }
+      await tx.weeklyChallengeAssignment.update({
+        where: { id: assignment.id },
+        data: {
+          status: "REVERSED",
+          reversedAt: new Date(),
+          claimedRewardPoints: 0,
+          claimedTier: -1,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          action: "WEEKLY_CHALLENGE_REVERSED",
+          entity: "WeeklyChallengeAssignment",
+          entityId: assignment.id,
+          beforeValue: { status: assignment.status },
+          afterValue: { status: "REVERSED", progress, videoId: input.videoId },
+          reason: input.reason,
+        },
+      });
+      await createNotification(tx, {
+        userId: assignment.userId,
+        type: "WEEKLY_CHALLENGE",
+        title: "周挑战资格已撤销",
+        body: `用于达标的视频被撤销，任务奖励${assignment.status === "CLAIMED" ? "已同步扣回" : "已失效"}`,
+        entityType: "WeeklyChallengeAssignment",
+        entityId: assignment.id,
+        metadata: { amount: assignment.status === "CLAIMED" ? -assignment.rewardPoints : 0, status: "REVERSED" },
+        dedupeKey: `weekly-challenge:${assignment.id}:reversed`,
+      });
+      await reassignRaceWinner(tx, assignment.periodId, assignment.id);
+      continue;
+    }
+
+    const eligibleReward = progress.reachedTierIndex >= 0
+      ? progress.rewardTiers[progress.reachedTierIndex].rewardPoints
+      : 0;
+    const reversalAmount = Math.max(0, assignment.claimedRewardPoints - eligibleReward);
+    const finalTierLost = !progress.qualified && ["COMPLETED", "CLAIMED"].includes(assignment.status);
+    if (reversalAmount === 0 && !finalTierLost) continue;
+    if (reversalAmount > 0) {
       await reversePoints(tx, {
         userId: assignment.userId,
-        amount: assignment.rewardPoints,
+        amount: reversalAmount,
         type: "WEEKLY_CHALLENGE_REVERSAL",
         referenceId: assignment.id,
         note: `周挑战证据视频已撤销：${input.reason}`,
-        idempotencyKey: `weekly-challenge:${assignment.id}:reversal`,
+        idempotencyKey: `weekly-challenge:${assignment.id}:reversal:${input.videoId}:to:${progress.reachedTierIndex}`,
       });
     }
+    const newClaimedRewardPoints = Math.min(assignment.claimedRewardPoints, eligibleReward);
+    const newClaimedTier = newClaimedRewardPoints === 0
+      ? -1
+      : Math.min(assignment.claimedTier, progress.reachedTierIndex);
+    const newStatus = progress.qualified
+      ? (newClaimedTier === progress.rewardTiers.length - 1 ? "CLAIMED" : "COMPLETED")
+      : "ACTIVE";
     await tx.weeklyChallengeAssignment.update({
       where: { id: assignment.id },
-      data: { status: "REVERSED", reversedAt: new Date() },
+      data: {
+        status: newStatus,
+        completedAt: progress.qualified ? assignment.completedAt : null,
+        claimedAt: newStatus === "CLAIMED" ? assignment.claimedAt : null,
+        claimIdempotencyKey: newStatus === "CLAIMED" ? assignment.claimIdempotencyKey : null,
+        claimedRewardPoints: newClaimedRewardPoints,
+        claimedTier: newClaimedTier,
+        reversedAt: reversalAmount > 0 ? new Date() : assignment.reversedAt,
+      },
     });
     await tx.auditLog.create({
       data: {
-        action: "WEEKLY_CHALLENGE_REVERSED",
+        action: "WEEKLY_CHALLENGE_TIER_DOWNGRADED",
         entity: "WeeklyChallengeAssignment",
         entityId: assignment.id,
-        beforeValue: { status: assignment.status },
-        afterValue: { status: "REVERSED", progress, videoId: input.videoId },
+        beforeValue: {
+          status: assignment.status,
+          claimedTier: assignment.claimedTier,
+          claimedRewardPoints: assignment.claimedRewardPoints,
+        },
+        afterValue: {
+          status: newStatus,
+          reachedTierIndex: progress.reachedTierIndex,
+          claimedTier: newClaimedTier,
+          claimedRewardPoints: newClaimedRewardPoints,
+          reversalAmount,
+          videoId: input.videoId,
+        },
         reason: input.reason,
       },
     });
     await createNotification(tx, {
       userId: assignment.userId,
       type: "WEEKLY_CHALLENGE",
-      title: "周挑战资格已撤销",
-      body: `用于达标的视频被撤销，任务奖励${assignment.status === "CLAIMED" ? "已同步扣回" : "已失效"}`,
+      title: "周挑战阶段已调整",
+      body: reversalAmount > 0
+        ? `用于达标的视频被撤销，已扣回不再满足的 ${reversalAmount} 积分，仍满足的阶段奖励予以保留`
+        : "用于达标的视频被撤销，冲刺阶段需要重新完成",
       entityType: "WeeklyChallengeAssignment",
       entityId: assignment.id,
-      metadata: { amount: assignment.status === "CLAIMED" ? -assignment.rewardPoints : 0, status: "REVERSED" },
-      dedupeKey: `weekly-challenge:${assignment.id}:reversed`,
+      metadata: {
+        amount: -reversalAmount,
+        status: newStatus,
+        reachedTierIndex: progress.reachedTierIndex,
+        claimedRewardPoints: newClaimedRewardPoints,
+      },
+      dedupeKey: `weekly-challenge:${assignment.id}:downgraded:${input.videoId}:${progress.reachedTierIndex}`,
     });
-    await reassignRaceWinner(tx, assignment.periodId, assignment.id);
+    if (finalTierLost) await reassignRaceWinner(tx, assignment.periodId, assignment.id);
   }
 }
 
@@ -476,7 +635,7 @@ export async function activateAndCloseWeeklyChallenges(now = new Date()) {
           userId: assignment.userId,
           type: "WEEKLY_CHALLENGE",
           title: "本周个性化挑战已发布",
-          body: `${assignment.title}，完成后可领取 ${assignment.rewardPoints} 积分`,
+          body: `${assignment.title}，分阶段累计最高可领取 ${assignment.rewardPoints} 积分`,
           entityType: "WeeklyChallengeAssignment",
           entityId: assignment.id,
           metadata: { rewardPoints: assignment.rewardPoints, targetVideoCount: assignment.targetVideoCount, targetLikes: assignment.targetLikes },
@@ -564,7 +723,10 @@ export async function getCurrentWeeklyChallenge(userId: string, now = new Date()
     ...assignment,
     progress,
     rewardsEnabled,
-    claimable: rewardsEnabled && progress.qualified && ["ACTIVE", "COMPLETED"].includes(assignment.status) && now < assignment.period.claimEndsAt,
+    claimable: rewardsEnabled
+      && progress.claimableRewardPoints > 0
+      && ["ACTIVE", "COMPLETED"].includes(assignment.status)
+      && now < assignment.period.claimEndsAt,
     raceEnded: Boolean(assignment.period.raceWinner) || now >= assignment.period.periodEnd,
   };
 }

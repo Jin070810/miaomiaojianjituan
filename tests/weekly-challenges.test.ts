@@ -52,9 +52,9 @@ describe("AI 周挑战核心规则", () => {
       bestLikes: 1400,
     }));
     expect(bounds.minimumVideos).toBe(5);
-    expect(bounds.maximumVideos).toBe(8);
+    expect(bounds.maximumVideos).toBe(12);
     expect(bounds.minimumLikes).toBe(1200);
-    expect(bounds.maximumLikes).toBe(1750);
+    expect(bounds.maximumLikes).toBe(2800);
   });
 
   it("requires new-member tasks to include at least two approved videos", () => {
@@ -97,7 +97,7 @@ describe("AI 周挑战核心规则", () => {
     });
   });
 
-  it("rejects unknown targets and scales 300 integer rewards into the weekly pool", () => {
+  it("rejects unknown targets and creates three cumulative rewards from 100 to 1000", () => {
     const baseProfile = profile();
     expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask({
       memberRef,
@@ -110,41 +110,24 @@ describe("AI 周挑战核心规则", () => {
       rewardPoints: 100,
     }, baseProfile)).toThrow("越界");
 
-    const tasks = Array.from({ length: 300 }, (_, index) => ({
-      memberRef: index.toString(16).padStart(20, "0"),
-      userId: `user-${index}`,
-      type: "VIDEO_COUNT" as const,
-      title: "稳定输出挑战",
-      description: "完成本周通过视频数量目标",
-      reason: "按匿名四周基线生成",
-      targetVideoCount: 5,
-      targetLikes: null,
-      rewardPoints: 1500,
-      difficultyScore: 125 + index % 20,
-    }));
-    const normalized = weeklyChallengeGenerationInternals.normalizeRewards(tasks);
-    expect(normalized).toHaveLength(300);
-    expect(normalized.reduce((sum, task) => sum + task.rewardPoints, 0)).toBeLessThanOrEqual(10_000);
-    expect(normalized.every((task) =>
-      Number.isInteger(task.rewardPoints) && task.rewardPoints >= 10 && task.rewardPoints <= 1500)).toBe(true);
-    expect(normalized[299].rewardPoints).toBeGreaterThanOrEqual(normalized[0].rewardPoints);
-  });
-
-  it("rejects a weekly budget below the guaranteed per-member minimum", () => {
-    const tasks = Array.from({ length: 3 }, (_, index) => ({
-      memberRef: index.toString(16).padStart(20, "0"),
-      userId: `user-${index}`,
-      type: "VIDEO_COUNT" as const,
+    const task = weeklyChallengeGenerationInternals.validateGeneratedTask({
+      memberRef,
+      type: "VIDEO_COUNT",
       title: "稳定输出挑战",
       description: "完成本周通过视频数量目标",
       reason: "按匿名四周基线生成",
       targetVideoCount: 5,
       targetLikes: null,
       rewardPoints: 100,
-      difficultyScore: 120,
-    }));
-    expect(() => weeklyChallengeGenerationInternals.normalizeRewards(tasks, 29))
-      .toThrow("个人奖励下限");
+    }, baseProfile);
+    expect(task.rewardTiers).toHaveLength(3);
+    expect(task.rewardTiers.map((tier) => tier.targetVideoCount)).toEqual([5, 6, 7]);
+    expect(task.rewardTiers[0].rewardPoints).toBe(100);
+    expect(task.rewardTiers[1].rewardPoints).toBeGreaterThan(task.rewardTiers[0].rewardPoints);
+    expect(task.rewardTiers[2].rewardPoints).toBeGreaterThan(task.rewardTiers[1].rewardPoints);
+    expect(task.rewardTiers[2].rewardPoints).toBeGreaterThanOrEqual(300);
+    expect(task.rewardTiers[2].rewardPoints).toBeLessThanOrEqual(1000);
+    expect(task.rewardPoints).toBe(task.rewardTiers[2].rewardPoints);
   });
 
   it("only sends opaque member references and anonymous aggregates to the model", () => {
@@ -169,6 +152,8 @@ describe("AI 周挑战核心规则", () => {
       LIKE_SUM: "targetLikes 必须在成员允许区间内，targetVideoCount 必须为 null",
       COMBINED: "targetVideoCount 和 targetLikes 都必须在成员各自允许区间内",
     });
+    expect(payload.policies.rewardRange).toEqual([100, 1000]);
+    expect(payload.policies.rewardPolicy).toContain("3 个累计阶梯奖励");
   });
 
   it("forbids LIKE_SUM for new members and includes the previous validation error on retry", () => {

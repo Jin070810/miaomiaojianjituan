@@ -619,6 +619,7 @@
 }
 
 .challenge-progress-card,
+.challenge-tiers,
 .challenge-note,
 .challenge-details,
 .challenge-flow {
@@ -690,6 +691,83 @@
   font-family: "Noto Sans SC Variable", sans-serif;
   font-size: 11px;
   font-weight: 500;
+}
+
+.challenge-tiers {
+  padding-top: 8px;
+}
+
+.challenge-tier-list {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.challenge-tier {
+  min-height: 82px;
+  padding: 14px 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(72px, auto);
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.challenge-tier-index {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--ink-soft);
+  font-family: "Noto Serif SC", serif;
+  font-size: 13px;
+}
+
+.challenge-tier > div,
+.challenge-tier-reward {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.challenge-tier > div strong {
+  font-size: 14px;
+}
+
+.challenge-tier > div small,
+.challenge-tier-reward small {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.challenge-tier-reward {
+  justify-items: end;
+  text-align: right;
+}
+
+.challenge-tier-reward b {
+  color: var(--gold);
+  font-family: "Noto Serif SC", serif;
+  font-size: 17px;
+}
+
+.challenge-tier.is-claimed .challenge-tier-index,
+.challenge-tier.is-claimable .challenge-tier-index {
+  border-color: var(--grape);
+  color: white;
+  background: var(--grape);
+}
+
+.challenge-tier.is-claimed {
+  opacity: 0.72;
+}
+
+.challenge-tier.is-claimable .challenge-tier-reward small {
+  color: var(--grape);
+  font-weight: 700;
 }
 
 .challenge-note p {
@@ -2641,6 +2719,7 @@
   }
 
   .challenge-progress-card,
+  .challenge-tiers,
   .challenge-note,
   .challenge-details,
   .challenge-flow {

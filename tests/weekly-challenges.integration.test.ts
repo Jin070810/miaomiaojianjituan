@@ -70,7 +70,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
               reason: "依据匿名四周数量趋势生成",
               targetVideoCount: invalidNewMember ? 0 : member.allowedTargets.minimumVideos,
               targetLikes: invalidNewMember ? member.allowedTargets.minimumLikes : 0,
-              rewardPoints: 1500,
+              rewardPoints: 1000,
             };
           });
           const send = () => {
@@ -153,7 +153,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     await db.$disconnect();
   });
 
-  it("publishes all 300 anonymous assignments and keeps integer rewards within 10,000 points", async () => {
+  it("publishes tiered assignments only for members who submitted in the previous week", async () => {
     await db.user.createMany({
       data: Array.from({ length: 300 }, (_, index) => ({
         kuaishouId: `weekly-generation-${suffix}-${index}`,
@@ -168,6 +168,35 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       select: { id: true },
     });
     userIds.push(...users.map((user) => user.id));
+    const noRecentSubmissionUser = await db.user.create({
+      data: {
+        kuaishouId: `weekly-no-recent-submission-${suffix}`,
+        nickname: "上周未投稿成员",
+        passwordHash: "test",
+        role: "MEMBER",
+        active: true,
+      },
+    });
+    userIds.push(noRecentSubmissionUser.id);
+    const generationStarts = [
+      generatedPeriodStart,
+      failedPeriodStart,
+      correctedPeriodStart,
+      ...providerFailureCases.map((entry) => entry[1]),
+    ];
+    await db.videoSubmission.createMany({
+      data: generationStarts.flatMap((periodStart, periodIndex) => users.map((user, userIndex) => ({
+        userId: user.id,
+        sourceUrl: `https://v.kuaishou.com/weekly-generation-${suffix}-${periodIndex}-${userIndex}`,
+        requestUrl: `https://v.kuaishou.com/weekly-generation-${suffix}-${periodIndex}-${userIndex}`,
+        sourceKind: "short-link",
+        status: "APPROVED" as const,
+        likes: 500,
+        submittedNickname: `生成成员${userIndex}`,
+        submittedAt: new Date(periodStart.getTime() - 24 * 60 * 60 * 1000),
+        idempotencyKey: `weekly-generation-video-${suffix}-${periodIndex}-${userIndex}`,
+      }))),
+    });
 
     responseMode = "valid";
     const period = await generateWeeklyChallengePeriod({ periodStart: generatedPeriodStart });
@@ -177,11 +206,13 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(assignments).toHaveLength(300);
     expect(assignments.every((assignment) => assignment.targetLikes === null)).toBe(true);
     expect(streamedRequestCount).toBe(12);
-    expect(assignments.reduce((sum, assignment) => sum + assignment.rewardPoints, 0)).toBeLessThanOrEqual(10_000);
+    expect(assignments.reduce((sum, assignment) => sum + assignment.rewardPoints, 0)).toBeLessThanOrEqual(300_000);
     expect(assignments.every((assignment) =>
       Number.isInteger(assignment.rewardPoints)
-      && assignment.rewardPoints >= 10
-      && assignment.rewardPoints <= 1500)).toBe(true);
+      && assignment.rewardPoints >= 300
+      && assignment.rewardPoints <= 1000
+      && Array.isArray(assignment.rewardTiers)
+      && assignment.rewardTiers.length === 3)).toBe(true);
     expect(await db.weeklyChallengeGenerationAttempt.count({
       where: { periodId: period.id, status: "SUCCEEDED" },
     })).toBe(12);
@@ -194,10 +225,11 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     });
     expect(audit.afterValue).toMatchObject({
       audienceCount: 300,
-      suggestedTotalRewards: 450_000,
-      rewardBudget: 10_000,
-      rewardBudgetAdjusted: true,
-      adjustedAssignmentCount: 300,
+      suggestedTotalRewards: 300_000,
+      rewardBudget: 300_000,
+      rewardBudgetAdjusted: false,
+      adjustedAssignmentCount: 0,
+      rewardPolicyVersion: "tiered-v1",
     });
   }, 30_000);
 
@@ -230,7 +262,8 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(period).toMatchObject({
       status: "READY",
       model: "mock-weekly-challenge-model",
-      promptVersion: "weekly-challenge-v2",
+      promptVersion: "weekly-challenge-v3-tiered-rewards",
+      rewardPolicyVersion: "tiered-v1",
     });
     expect(failedAttempt?.error).toContain("至少 2 条通过视频");
     expect(attempts.filter((attempt) => attempt.status === "FAILED")).toHaveLength(1);
@@ -253,7 +286,8 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(retried).toMatchObject({
       status: "READY",
       model: "mock-weekly-challenge-model",
-      promptVersion: "weekly-challenge-v2",
+      promptVersion: "weekly-challenge-v3-tiered-rewards",
+      rewardPolicyVersion: "tiered-v1",
     });
   }, 30_000);
 
@@ -448,7 +482,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
         idempotencyKey: `weekly-claim-${suffix}-2`,
       }),
     ]);
-    expect(claimResults.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    expect(claimResults.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(await db.pointLedger.count({
       where: { type: "WEEKLY_CHALLENGE_REWARD", referenceId: winningAssignment.id },
     })).toBe(1);

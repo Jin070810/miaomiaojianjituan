@@ -9,13 +9,20 @@ import {
   nextShanghaiWeekBounds,
   opaqueMemberRef,
 } from "./weekly-challenges";
+import {
+  buildRewardTiers,
+  difficultyForTargets,
+  MAX_PERSONAL_REWARD,
+  REWARD_POLICY_VERSION,
+  RewardTier,
+  targetBounds,
+} from "./weekly-challenge-rewards";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const BATCH_SIZE = 25;
-const PERSONAL_REWARD_BUDGET = 10_000;
 const RACE_REWARD = 2_000;
-const PROMPT_VERSION = "weekly-challenge-v2";
+const PROMPT_VERSION = "weekly-challenge-v3-tiered-rewards";
 
 type MemberProfile = {
   userId: string;
@@ -39,7 +46,7 @@ const modelTaskSchema = z.object({
   reason: z.string().trim().min(5).max(240),
   targetVideoCount: z.number().int().nonnegative().nullable(),
   targetLikes: z.number().int().nonnegative().nullable(),
-  rewardPoints: z.number().int().min(10).max(1500),
+  rewardPoints: z.number().int().min(100).max(1000),
 });
 
 function normalizeModelTask(task: z.infer<typeof modelTaskSchema>) {
@@ -63,6 +70,7 @@ const responseSchema = z.object({
 type GeneratedTask = z.infer<typeof taskSchema> & {
   userId: string;
   difficultyScore: number;
+  rewardTiers: RewardTier[];
 };
 
 type DeepSeekUsage = {
@@ -164,26 +172,6 @@ function applyNewMemberCohortBaselines(profiles: MemberProfile[]) {
   });
 }
 
-function targetBounds(profile: MemberProfile) {
-  const minimumVideos = Math.max(profile.newMember ? 2 : 1, profile.baselineVideoCount + 1, Math.ceil(profile.baselineVideoCount * 1.2));
-  const maximumVideos = Math.max(
-    minimumVideos,
-    Math.min(
-      Math.max(2, profile.baselineVideoCount * 2),
-      Math.max(2, Math.ceil(profile.bestVideoCount * 1.25)),
-    ),
-  );
-  const minimumLikes = Math.max(profile.newMember ? 400 : 200, profile.baselineLikes + 200, Math.ceil(profile.baselineLikes * 1.2));
-  const maximumLikes = Math.max(
-    minimumLikes,
-    Math.min(
-      Math.max(400, profile.baselineLikes * 2),
-      Math.max(400, Math.ceil(profile.bestLikes * 1.25)),
-    ),
-  );
-  return { minimumVideos, maximumVideos, minimumLikes, maximumLikes };
-}
-
 function validateGeneratedTask(task: z.infer<typeof taskSchema>, profile: MemberProfile): GeneratedTask {
   const bounds = targetBounds(profile);
   if (profile.newMember && task.type === "LIKE_SUM") {
@@ -205,35 +193,17 @@ function validateGeneratedTask(task: z.infer<typeof taskSchema>, profile: Member
   } else if (task.targetLikes !== null) {
     throw new Error(`成员 ${profile.memberRef} 的点赞目标不应存在`);
   }
-  const videoDifficulty = task.targetVideoCount === null
-    ? 0
-    : Math.floor(task.targetVideoCount * 100 / Math.max(1, profile.baselineVideoCount));
-  const likesDifficulty = task.targetLikes === null
-    ? 0
-    : Math.floor(task.targetLikes * 100 / Math.max(200, profile.baselineLikes));
-  const difficultyScore = task.type === "COMBINED"
-    ? Math.floor((videoDifficulty + likesDifficulty) / 2) + 15
-    : Math.max(videoDifficulty, likesDifficulty);
-  return { ...task, userId: profile.userId, difficultyScore };
-}
-
-function normalizeRewards(tasks: GeneratedTask[], budget = PERSONAL_REWARD_BUDGET) {
-  const total = tasks.reduce((sum, task) => sum + task.rewardPoints, 0);
-  if (total <= budget) return tasks;
-  const minimumTotal = tasks.length * 10;
-  if (minimumTotal > budget) throw new Error("周奖励预算不足以满足个人奖励下限");
-  const distributable = budget - minimumTotal;
-  const weights = tasks.map((task) =>
-    Math.max(0, task.rewardPoints - 10) * Math.max(1, task.difficultyScore));
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-  const normalized = tasks.map((task, index) => ({
+  const rewardTiers = buildRewardTiers(profile, task);
+  const finalTier = rewardTiers[rewardTiers.length - 1];
+  return {
     ...task,
-    rewardPoints: Math.min(
-      task.rewardPoints,
-      10 + Math.floor(distributable * weights[index] / Math.max(1, totalWeight)),
-    ),
-  }));
-  return normalized;
+    targetVideoCount: finalTier.targetVideoCount,
+    targetLikes: finalTier.targetLikes,
+    rewardPoints: finalTier.rewardPoints,
+    userId: profile.userId,
+    difficultyScore: difficultyForTargets(profile, finalTier.targetVideoCount, finalTier.targetLikes, task.type),
+    rewardTiers,
+  };
 }
 
 function buildPrompt(profiles: MemberProfile[], previousValidationError?: string) {
@@ -264,8 +234,9 @@ function buildPrompt(profiles: MemberProfile[], previousValidationError?: string
         COMBINED: "targetVideoCount 和 targetLikes 都必须在成员各自允许区间内",
       },
       integerOnly: true,
-      rewardRange: [10, 1500],
-      preferHighChallengeLowReward: true,
+      rewardRange: [100, 1000],
+      rewardPolicy: "服务端会根据最终难度生成 3 个累计阶梯奖励，第一阶段 100 分，最终累计奖励 300-1000 分；模型返回的 rewardPoints 仅作兼容字段，不决定实际发放",
+      preferHighChallengeLowReward: false,
       privacy: "不得推断或输出成员身份，不得在文案中比较或点名其他成员",
       copyLength: {
         title: "6-12 个中文字符",
@@ -543,8 +514,19 @@ async function requestBatch(
 }
 
 async function frozenAudience(periodStart: Date) {
+  const previousWeekStart = new Date(periodStart.getTime() - 7 * DAY_MS);
   return db.user.findMany({
-    where: { role: "MEMBER", active: true, createdAt: { lt: periodStart } },
+    where: {
+      role: "MEMBER",
+      active: true,
+      createdAt: { lt: periodStart },
+      videos: {
+        some: {
+          submittedAt: { gte: previousWeekStart, lt: periodStart },
+          status: { not: "FAILED" },
+        },
+      },
+    },
     orderBy: { id: "asc" },
     select: { id: true },
   });
@@ -566,7 +548,8 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
           periodEnd: bounds.end,
           claimEndsAt: bounds.claimEndsAt,
           status: "GENERATING",
-          personalRewardBudget: PERSONAL_REWARD_BUDGET,
+          personalRewardBudget: audience.length * MAX_PERSONAL_REWARD,
+          rewardPolicyVersion: REWARD_POLICY_VERSION,
           raceReward: RACE_REWARD,
           model: config.model,
           promptVersion: PROMPT_VERSION,
@@ -598,6 +581,7 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
         failureReason: null,
         model: config.model,
         promptVersion: PROMPT_VERSION,
+        rewardPolicyVersion: REWARD_POLICY_VERSION,
       },
     });
     if (claimed.count !== 1) return db.weeklyChallengePeriod.findUniqueOrThrow({ where: { id: period.id } });
@@ -608,7 +592,33 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
     const deadline = generationDeadline(period.periodStart);
     assertBeforeGenerationDeadline(deadline);
     const audience = z.array(z.string()).parse(period.audienceSnapshot);
-    if (audience.length === 0) throw new Error("周挑战没有可参与的启用成员");
+    if (audience.length === 0) {
+      await db.$transaction(async (tx) => {
+        const claimed = await tx.weeklyChallengePeriod.updateMany({
+          where: { id: period.id, status: "GENERATING", generationRunId: runId },
+          data: { status: "READY", generatedAt: new Date(), failureReason: null },
+        });
+        if (claimed.count !== 1) throw new Error("周挑战生成租约已失效");
+        await tx.auditLog.create({
+          data: {
+            action: "WEEKLY_CHALLENGE_PERIOD_GENERATED",
+            entity: "WeeklyChallengePeriod",
+            entityId: period.id,
+            afterValue: {
+              periodStart: period.periodStart,
+              audienceCount: 0,
+              totalRewards: 0,
+              rewardBudget: period.personalRewardBudget,
+              model: config.model,
+              promptVersion: PROMPT_VERSION,
+              rewardPolicyVersion: REWARD_POLICY_VERSION,
+              reason: "上周没有提交视频的成员不生成本周任务",
+            },
+          },
+        });
+      });
+      return db.weeklyChallengePeriod.findUniqueOrThrow({ where: { id: period.id } });
+    }
     const profiles = await buildProfiles(period.periodStart, audience);
     if (profiles.length !== audience.length) throw new Error("冻结成员中存在已停用或缺失账号");
     const tasks: GeneratedTask[] = [];
@@ -623,9 +633,8 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
     }
     assertBeforeGenerationDeadline(deadline);
     const suggestedTotalRewards = tasks.reduce((sum, task) => sum + task.rewardPoints, 0);
-    const normalized = normalizeRewards(tasks, period.personalRewardBudget);
-    const totalRewards = normalized.reduce((sum, task) => sum + task.rewardPoints, 0);
-    if (normalized.length !== period.audienceCount || totalRewards > period.personalRewardBudget) {
+    const totalRewards = suggestedTotalRewards;
+    if (tasks.length !== period.audienceCount || totalRewards > period.personalRewardBudget) {
       throw new Error("周挑战覆盖人数或奖励预算校验失败");
     }
     const profileByRef = new Map(profiles.map((profile) => [profile.memberRef, profile]));
@@ -637,7 +646,7 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
       if (claimed.count !== 1) throw new Error("周挑战生成租约已失效");
       await tx.weeklyChallengeAssignment.deleteMany({ where: { periodId: period!.id } });
       await tx.weeklyChallengeAssignment.createMany({
-        data: normalized.map((task) => {
+        data: tasks.map((task) => {
           const profile = profileByRef.get(task.memberRef)!;
           return {
             periodId: period!.id,
@@ -650,6 +659,9 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
             targetVideoCount: task.targetVideoCount,
             targetLikes: task.targetLikes,
             rewardPoints: task.rewardPoints,
+            rewardTiers: task.rewardTiers as Prisma.InputJsonValue,
+            claimedRewardPoints: 0,
+            claimedTier: -1,
             difficultyScore: task.difficultyScore,
             title: task.title,
             description: task.description,
@@ -664,15 +676,15 @@ export async function generateWeeklyChallengePeriod(input: { periodStart?: Date;
           entityId: period!.id,
           afterValue: {
             periodStart: period!.periodStart,
-            audienceCount: normalized.length,
+            audienceCount: tasks.length,
             suggestedTotalRewards,
             totalRewards,
             rewardBudget: period!.personalRewardBudget,
             rewardBudgetAdjusted: suggestedTotalRewards !== totalRewards,
-            adjustedAssignmentCount: normalized.filter((task, index) =>
-              task.rewardPoints !== tasks[index].rewardPoints).length,
+            adjustedAssignmentCount: 0,
             model: config.model,
             promptVersion: PROMPT_VERSION,
+            rewardPolicyVersion: REWARD_POLICY_VERSION,
           },
         },
       });
@@ -709,8 +721,9 @@ export const weeklyChallengeGenerationInternals = {
   median,
   applyNewMemberCohortBaselines,
   targetBounds,
+  buildRewardTiers,
+  difficultyForTargets,
   validateGeneratedTask,
-  normalizeRewards,
   buildPrompt,
   generationDeadline,
   normalizeModelTask,

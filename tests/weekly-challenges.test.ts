@@ -154,13 +154,44 @@ describe("AI 周挑战核心规则", () => {
       userId: internalUserId,
       memberRef: opaque,
     })]);
+    const payload = JSON.parse(prompt);
     expect(prompt).toContain(opaque);
     expect(prompt).not.toContain(internalUserId);
     expect(prompt).not.toMatch(/nickname|kuaishou|phone|address|balance|videoUrl/i);
-    expect(JSON.parse(prompt).policies.copyLength).toEqual({
+    expect(payload.policies.copyLength).toEqual({
       title: "6-12 个中文字符",
       description: "18-40 个中文字符，只写本周行动要求",
       reason: "18-40 个中文字符，只说明匿名基线依据",
+    });
+    expect(payload.members[0].allowedTypes).toEqual(["VIDEO_COUNT", "LIKE_SUM", "COMBINED"]);
+    expect(payload.policies.targetRules).toEqual({
+      VIDEO_COUNT: "targetVideoCount 必须在成员允许区间内，targetLikes 必须为 null",
+      LIKE_SUM: "targetLikes 必须在成员允许区间内，targetVideoCount 必须为 null",
+      COMBINED: "targetVideoCount 和 targetLikes 都必须在成员各自允许区间内",
+    });
+  });
+
+  it("forbids LIKE_SUM for new members and includes the previous validation error on retry", () => {
+    const newMember = profile({
+      tenureDays: 3,
+      baselineVideoCount: 0,
+      baselineLikes: 0,
+      bestVideoCount: 0,
+      bestLikes: 0,
+      newMember: true,
+    });
+    const first = JSON.parse(weeklyChallengeGenerationInternals.buildPrompt([newMember]));
+    expect(first.members[0].allowedTypes).toEqual(["VIDEO_COUNT", "COMBINED"]);
+    expect(first.members[0].allowedTargets.minimumVideos).toBe(2);
+    expect(first.retryCorrection).toBeUndefined();
+
+    const retried = JSON.parse(weeklyChallengeGenerationInternals.buildPrompt(
+      [newMember],
+      `新人 ${memberRef} 的任务必须包含至少 2 条通过视频`,
+    ));
+    expect(retried.retryCorrection).toEqual({
+      previousValidationError: `新人 ${memberRef} 的任务必须包含至少 2 条通过视频`,
+      instruction: "修正上一版输出，重新返回本批全部成员且只使用每名成员的 allowedTypes 和 allowedTargets",
     });
   });
 

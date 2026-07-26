@@ -42,6 +42,9 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
   await page.request.post("/api/auth/logout");
   await login(page, e2eIds.member);
   const openChallenge = async () => {
+    const unreadPromptClose = page.getByRole("button", { name: "关闭未读通知提醒" });
+    await unreadPromptClose.waitFor({ state: "visible", timeout: 1000 }).catch(() => undefined);
+    if (await unreadPromptClose.isVisible()) await unreadPromptClose.click();
     await page.getByRole("button", { name: "查看本周任务：完成 2 条稳定输出" }).click();
     await expect(page.getByRole("heading", { name: "完成 2 条稳定输出" })).toBeVisible();
   };
@@ -100,9 +103,6 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
   await page.reload();
   await openChallenge();
   await expect(page.getByText("本周竞速已结束")).toBeVisible();
-  const unreadPromptClose = page.getByRole("button", { name: "关闭未读通知提醒" });
-  await unreadPromptClose.waitFor({ state: "visible", timeout: 3000 }).catch(() => undefined);
-  if (await unreadPromptClose.isVisible()) await unreadPromptClose.click();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/member-weekly-claimed-390x844.png", fullPage: true });
 });

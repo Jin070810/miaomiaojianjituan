@@ -1457,7 +1457,7 @@ export default function MemberApp() {
 
   const handleNavigate = (nextView: MemberView) => {
     setView(nextView);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "auto" });
   };
 
   async function loadMoreHistory(kind: "ledger" | "videos" | "transfers" | "orders") {

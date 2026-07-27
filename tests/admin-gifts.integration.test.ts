@@ -52,6 +52,17 @@ describe.skipIf(!enabled)("礼品目录事务", () => {
     expect(await db.auditLog.count({ where: { actorId: adminId, action: "GIFT_REORDERED" } })).toBe(1);
   });
 
+  it("supports pinning a gift without changing redemption history", async () => {
+    await db.gift.update({ where: { id: giftIds[1] }, data: { pinned: true } });
+    const visible = await db.gift.findMany({
+      where: { deletedAt: null },
+      orderBy: [{ pinned: "desc" }, { displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+      take: 1,
+    });
+    expect(visible[0]?.id).toBe(giftIds[1]);
+    expect(await db.redemptionOrder.findUnique({ where: { id: orderId } })).not.toBeNull();
+  });
+
   it("soft deletes a referenced gift without removing order history", async () => {
     await softDeleteAdminGift({ actorId: adminId, giftId: giftIds[0] });
     const gift = await db.gift.findUniqueOrThrow({ where: { id: giftIds[0] } });

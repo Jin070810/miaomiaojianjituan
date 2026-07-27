@@ -107,6 +107,8 @@ type DashboardData = {
     stock: number;
     imageUrl: string | null;
     description: string | null;
+    pinned: boolean;
+    salesCount: number;
   }>;
   orders: Array<{ id: string; status: string; totalCost: number; createdAt: string; fulfilledAt: string | null; trackingNumber: string | null; gift: { name: string; kind: "PHYSICAL" | "CASH"; imageUrl: string | null } }>;
   transfers: Array<{
@@ -173,6 +175,8 @@ type DisplayGift = {
   tag: string;
   tone: string;
   kind: "PHYSICAL" | "CASH";
+  salesCount: number;
+  pinned: boolean;
 };
 
 type MemberAward = {
@@ -267,6 +271,8 @@ const gifts: DisplayGift[] = [
     tag: "人气礼品",
     tone: "orange",
     kind: "PHYSICAL" as const,
+    salesCount: 0,
+    pinned: false,
   },
   {
     id: "g2",
@@ -278,6 +284,8 @@ const gifts: DisplayGift[] = [
     tag: "限量",
     tone: "teal",
     kind: "PHYSICAL" as const,
+    salesCount: 0,
+    pinned: false,
   },
   {
     id: "g3",
@@ -289,6 +297,8 @@ const gifts: DisplayGift[] = [
     tag: "实用兑换",
     tone: "purple",
     kind: "PHYSICAL" as const,
+    salesCount: 0,
+    pinned: false,
   },
   {
     id: "g4",
@@ -300,6 +310,8 @@ const gifts: DisplayGift[] = [
     tag: "新品",
     tone: "green",
     kind: "PHYSICAL" as const,
+    salesCount: 0,
+    pinned: false,
   },
 ];
 
@@ -812,8 +824,15 @@ function VideosView({
 
 function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: DialogType, gift?: DisplayGift) => void; onNavigate: (view: MemberView) => void; items: DisplayGift[]; balance: number }) {
   const [activeCategory, setActiveCategory] = useState("全部");
+  const [sortMode, setSortMode] = useState<"featured" | "sales" | "priceAsc" | "priceDesc">("featured");
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
   const categories = ["全部", "实用好物", "会员权益", "团品周边"];
+  const sortedItems = [...items].sort((left, right) => {
+    if (sortMode === "sales") return right.salesCount - left.salesCount || Number(right.pinned) - Number(left.pinned);
+    if (sortMode === "priceAsc") return left.points - right.points || Number(right.pinned) - Number(left.pinned);
+    if (sortMode === "priceDesc") return right.points - left.points || Number(right.pinned) - Number(left.pinned);
+    return Number(right.pinned) - Number(left.pinned);
+  });
   return (
     <div className="member-content journal-page">
       <section className="compact-journal-hero mall-journal-hero">
@@ -841,8 +860,17 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
           </button>
         ))}
       </div>
+      <div className="gift-sort-toolbar" aria-label="礼品排序">
+        <span>排序</span>
+        {([
+          ["featured", "综合"],
+          ["sales", "销量"],
+          ["priceAsc", "价格升序"],
+          ["priceDesc", "价格降序"],
+        ] as const).map(([value, label]) => <button key={value} className={sortMode === value ? "active" : ""} onClick={() => setSortMode(value)}>{label}</button>)}
+      </div>
       <section className="journal-gift-grid">
-        {items.map((gift) => (
+        {sortedItems.map((gift) => (
           <article className="journal-gift-card" key={gift.id}>
             <div className="gift-image-wrap">
               <img src={gift.image} alt={gift.name} />
@@ -852,7 +880,7 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
               <div className="gift-meta">
                 <strong>{gift.points.toLocaleString()}</strong>
                 <span>积分</span>
-                <small>剩 {gift.stock}</small>
+                <small>剩 {gift.stock} · 已兑 {gift.salesCount}</small>
               </div>
               <button
                 className="journal-outline-button"
@@ -867,7 +895,7 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
             </div>
           </article>
         ))}
-        {items.length === 0 && <StateMessage {...miaoAssets.actions.gift}>礼物屋正在补货，晚点再来看看吧</StateMessage>}
+        {sortedItems.length === 0 && <StateMessage {...miaoAssets.actions.gift}>礼物屋正在补货，晚点再来看看吧</StateMessage>}
       </section>
       {selectedGift && (
         <div className="sr-only" aria-live="polite">
@@ -1590,6 +1618,8 @@ export default function MemberApp() {
       image: gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl) ? gift.imageUrl : gifts[index % gifts.length].image,
       tag: gift.stock > 0 ? "可兑换" : "已售罄",
       tone: gifts[index % gifts.length].tone,
+      salesCount: gift.salesCount ?? 0,
+      pinned: gift.pinned ?? false,
     }));
   }, [dashboard]);
 

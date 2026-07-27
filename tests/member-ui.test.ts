@@ -63,4 +63,22 @@ describe("成员端品牌视觉库", () => {
     expect(source).toContain('onComplete={() => { closeDialog(); handleNavigate("videos"); }}');
     expect(source).toContain('onComplete={() => { closeDialog(); handleNavigate("orders"); }}');
   });
+
+  it("商城提供综合、销量和价格排序入口", () => {
+    const source = readFileSync(path.resolve(__dirname, "..", "app", "page.tsx"), "utf8");
+
+    expect(source).toContain('["featured", "综合"]');
+    expect(source).toContain('["sales", "销量"]');
+    expect(source).toContain('["priceAsc", "价格升序"]');
+    expect(source).toContain('["priceDesc", "价格降序"]');
+  });
+
+  it("通知中心在移动端由视口遮罩居中定位", () => {
+    const styles = readFileSync(path.resolve(__dirname, "..", "app", "member", "member-theme.css"), "utf8").replace(/\r/g, "");
+    const panelRule = styles.slice(styles.lastIndexOf(".notification-panel {"));
+
+    expect(panelRule).toContain("position: relative");
+    expect(panelRule).toContain("align-self: center");
+    expect(panelRule).toContain("margin: 0");
+  });
 });

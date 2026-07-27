@@ -25,6 +25,7 @@ import {
   Megaphone,
   MoreHorizontal,
   PackageCheck,
+  Pin,
   Pencil,
   Search,
   Settings2,
@@ -83,7 +84,7 @@ type AdminUserRow = {
   _count: { videos: number; redemptions: number };
 };
 
-type AdminGiftRow = { id: string; name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl: string | null; description: string | null; active: boolean; displayOrder: number };
+type AdminGiftRow = { id: string; name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl: string | null; description: string | null; active: boolean; pinned: boolean; displayOrder: number; salesCount: number };
 type AdminPointLedgerRow = {
   id: string;
   type: string;
@@ -691,7 +692,7 @@ function UsersAdmin({ rows, pagination, onToggle, onUpdate, onResetPassword, onL
   );
 }
 
-function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null; onClose: () => void; onSave: (input: { name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl?: string | null; description?: string | null; active: boolean }) => Promise<void> }) {
+function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null; onClose: () => void; onSave: (input: { name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl?: string | null; description?: string | null; active: boolean; pinned: boolean }) => Promise<void> }) {
   const [name, setName] = useState(gift?.name ?? "");
   const [kind, setKind] = useState<"PHYSICAL" | "CASH">(gift?.kind ?? "PHYSICAL");
   const [pointsCost, setPointsCost] = useState(String(gift?.pointsCost ?? ""));
@@ -699,6 +700,7 @@ function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null
   const [imageUrl, setImageUrl] = useState(gift?.imageUrl ?? "");
   const [description, setDescription] = useState(gift?.description ?? "");
   const [active, setActive] = useState(gift?.active ?? true);
+  const [pinned, setPinned] = useState(gift?.pinned ?? false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -723,7 +725,7 @@ function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null
     setSaving(true);
     setError("");
     try {
-      await onSave({ name, kind, pointsCost: Number(pointsCost), stock: Number(stock), imageUrl: imageUrl || null, description: description || null, active });
+      await onSave({ name, kind, pointsCost: Number(pointsCost), stock: Number(stock), imageUrl: imageUrl || null, description: description || null, active, pinned });
       onClose();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "保存失败");
@@ -740,6 +742,7 @@ function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null
         <div className="admin-form-grid"><div className="field"><label htmlFor="gift-points">积分价格</label><input id="gift-points" type="number" min="1" value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} /></div><div className="field"><label htmlFor="gift-stock">库存</label><input id="gift-stock" type="number" min="0" value={stock} onChange={(event) => setStock(event.target.value)} /></div></div>
         <div className="field"><label>礼品图片</label><div className="gift-image-upload"><img src={imageUrl || gifts[0].image} alt="礼品图片预览" /><div><label className="secondary-button gift-image-upload-button"><ImagePlus size={16} />{uploading ? "处理中..." : imageUrl ? "更换图片" : "选择图片"}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={saving || uploading} onChange={(event) => { void uploadImage(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>{imageUrl && <button className="text-button" type="button" disabled={saving || uploading} onClick={() => setImageUrl("")}>移除图片</button>}</div></div></div>
         <div className="field"><label htmlFor="gift-description">说明</label><textarea id="gift-description" value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></div>
+        <label className="checkbox-field"><input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} /> 置顶商品</label>
         <label className="checkbox-field"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /> 上架到成员商城</label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="primary-button full-button" disabled={saving || uploading || !name || !pointsCost} onClick={save}>{saving ? "保存中..." : uploading ? "图片处理中..." : "保存礼品"}</button>
@@ -748,34 +751,34 @@ function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null
   );
 }
 
-function GiftsAdmin({ rows, orders, busyGiftId, onCreate, onEdit, onMove, onDelete }: { rows: AdminGiftRow[]; orders: AdminOrderRow[]; busyGiftId: string | null; onCreate: () => void; onEdit: (gift: AdminGiftRow) => void; onMove: (gift: AdminGiftRow, direction: -1 | 1) => void; onDelete: (gift: AdminGiftRow) => void }) {
+function GiftsAdmin({ rows, orders, busyGiftId, onCreate, onEdit, onMove, onTogglePin, onDelete }: { rows: AdminGiftRow[]; orders: AdminOrderRow[]; busyGiftId: string | null; onCreate: () => void; onEdit: (gift: AdminGiftRow) => void; onMove: (gift: AdminGiftRow, direction: -1 | 1) => void; onTogglePin: (gift: AdminGiftRow) => void; onDelete: (gift: AdminGiftRow) => void }) {
   const stock = rows.reduce((total, gift) => total + gift.stock, 0);
   return (
     <>
       <div className="admin-page-title"><div><span className="eyebrow">REWARD CATALOG</span><h1>积分与礼品</h1><p>维护兑换规则、礼品库存和积分流水。</p></div><button className="primary-button" onClick={onCreate}><Gift size={16} />新增礼品</button></div>
       <div className="admin-stat-grid compact-stats"><StatCard label="上架礼品" value={rows.filter((gift) => gift.active).length.toString()} trend="+ 实时" icon={Gift} tone="coral" /><StatCard label="库存总量" value={stock.toLocaleString()} trend="+ 实时" icon={PackageCheck} tone="teal" /><StatCard label="累计兑换" value={orders.length.toString()} trend="+ 实时" icon={CircleDollarSign} tone="yellow" /></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>礼品目录</h2><p>目录顺序将实时同步到成员商城</p></div></div><div className="gift-admin-grid">{rows.map((gift, i) => { const busy = busyGiftId === gift.id; return <div className="gift-admin-card" key={gift.id}><img src={gift.imageUrl && (/^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl)) ? gift.imageUrl : gifts[i % gifts.length].image} alt={gift.name} /><div><strong>{gift.name}</strong><span>{gift.kind === "CASH" ? "现金兑换" : "实物商品"} · {gift.pointsCost.toLocaleString()} 积分 · 库存 {gift.stock}</span><small className={`gift-catalog-state ${gift.active ? "active" : "inactive"}`}>{gift.active ? "已上架" : "已下架"}</small></div><div className="gift-admin-actions"><button className="table-more" disabled={busy || i === 0} title="向前移动" aria-label={`向前移动${gift.name}`} onClick={() => onMove(gift, -1)}><ArrowUp size={15} /></button><button className="table-more" disabled={busy || i === rows.length - 1} title="向后移动" aria-label={`向后移动${gift.name}`} onClick={() => onMove(gift, 1)}><ArrowDown size={15} /></button><button className="table-more" disabled={busy} title="编辑礼品" aria-label={`编辑${gift.name}`} onClick={() => onEdit(gift)}><Pencil size={15} /></button><button className="table-more danger-action" disabled={busy} title="删除礼品" aria-label={`删除${gift.name}`} onClick={() => onDelete(gift)}><Trash2 size={15} /></button></div></div>; })}{rows.length === 0 && <p className="empty-copy">还没有礼品，点击“新增礼品”创建。</p>}</div></section>
+      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>礼品目录</h2><p>置顶商品优先显示，目录顺序将实时同步到成员商城</p></div></div><div className="gift-admin-grid">{rows.map((gift, i) => { const busy = busyGiftId === gift.id; const canMoveUp = i > 0 && rows[i - 1].pinned === gift.pinned; const canMoveDown = i < rows.length - 1 && rows[i + 1].pinned === gift.pinned; return <div className="gift-admin-card" key={gift.id}><img src={gift.imageUrl && (/^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl)) ? gift.imageUrl : gifts[i % gifts.length].image} alt={gift.name} /><div><strong>{gift.name}</strong><span>{gift.kind === "CASH" ? "现金兑换" : "实物商品"} · {gift.pointsCost.toLocaleString()} 积分 · 库存 {gift.stock} · 已兑 {gift.salesCount}</span><small className={`gift-catalog-state ${gift.active ? "active" : "inactive"}`}>{gift.pinned ? "已置顶 · " : ""}{gift.active ? "已上架" : "已下架"}</small></div><div className="gift-admin-actions"><button className={`table-more ${gift.pinned ? "is-pinned" : ""}`} disabled={busy} title={gift.pinned ? "取消置顶" : "置顶商品"} aria-label={gift.pinned ? `取消置顶${gift.name}` : `置顶${gift.name}`} onClick={() => onTogglePin(gift)}><Pin size={15} /></button><button className="table-more" disabled={busy || !canMoveUp} title="向前移动" aria-label={`向前移动${gift.name}`} onClick={() => onMove(gift, -1)}><ArrowUp size={15} /></button><button className="table-more" disabled={busy || !canMoveDown} title="向后移动" aria-label={`向后移动${gift.name}`} onClick={() => onMove(gift, 1)}><ArrowDown size={15} /></button><button className="table-more" disabled={busy} title="编辑礼品" aria-label={`编辑${gift.name}`} onClick={() => onEdit(gift)}><Pencil size={15} /></button><button className="table-more danger-action" disabled={busy} title="删除礼品" aria-label={`删除${gift.name}`} onClick={() => onDelete(gift)}><Trash2 size={15} /></button></div></div>; })}{rows.length === 0 && <p className="empty-copy">还没有礼品，点击“新增礼品”创建。</p>}</div></section>
     </>
   );
 }
 
-function OrderRecipientDetails({ order, onLoad }: { order: AdminOrderRow; onLoad: () => void }) {
+function OrderRecipientDetails({ order, loading, onLoad, onViewQr }: { order: AdminOrderRow; loading: boolean; onLoad: () => void; onViewQr: (url: string) => void }) {
   if (order.gift.kind === "CASH") {
-    const safeQrCodeUrl = order.cashQrCodeUrl && /^(https?:\/\/|data:image\/)/i.test(order.cashQrCodeUrl)
+    const safeQrCodeUrl = order.cashQrCodeUrl && /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(order.cashQrCodeUrl)
       ? order.cashQrCodeUrl
       : null;
     return (
       <span className="order-recipient">
         收款信息：
         {safeQrCodeUrl
-          ? <a href={safeQrCodeUrl} target="_blank" rel="noreferrer">查看收款码</a>
-          : order.hasCashQrCode ? <button className="text-button" onClick={onLoad}>查看收款码</button> : "未填写收款码"}
+          ? <button className="text-button" onClick={() => onViewQr(safeQrCodeUrl)}>查看收款码</button>
+          : order.hasCashQrCode ? <button className="text-button" disabled={loading} onClick={onLoad}>{loading ? "加载中..." : "查看收款码"}</button> : "未填写收款码"}
       </span>
     );
   }
 
   if (!order.recipientName || !order.recipientPhone || !order.recipientAddress) {
-    return <span className="order-recipient">收货信息：{order.hasRecipientPhone || order.hasRecipientAddress ? <button className="text-button" onClick={onLoad}>查看详情</button> : "尚未填写完整"}</span>;
+    return <span className="order-recipient">收货信息：{order.hasRecipientPhone || order.hasRecipientAddress ? <button className="text-button" disabled={loading} onClick={onLoad}>{loading ? "加载中..." : "查看详情"}</button> : "尚未填写完整"}</span>;
   }
 
   return (
@@ -854,14 +857,28 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl">>>({});
+  const [detailsLoadingId, setDetailsLoadingId] = useState<string | null>(null);
+  const [qrPreview, setQrPreview] = useState<{ url: string; giftName: string; memberName: string } | null>(null);
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const { ask, dialog } = useAdminPrompt();
   const loadDetails = async (order: AdminOrderRow) => {
-    const response = await fetch(`/api/admin/orders/${order.id}`, { cache: "no-store" });
-    if (!response.ok) return;
-    const result = await response.json();
-    setDetails((current) => ({ ...current, [order.id]: result.details }));
+    setDetailsLoadingId(order.id);
+    try {
+      const response = await fetch(`/api/admin/orders/${order.id}`, { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "订单资料加载失败");
+      setDetails((current) => ({ ...current, [order.id]: result.details }));
+      if (order.gift.kind === "CASH") {
+        const url = result.details?.cashQrCodeUrl;
+        if (!url || !/^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(url)) throw new Error("收款码格式无效，无法预览");
+        setQrPreview({ url, giftName: order.gift.name, memberName: order.user.nickname });
+      }
+    } catch (detailsError) {
+      setFeedback({ type: "error", message: detailsError instanceof Error ? detailsError.message : "订单资料加载失败" });
+    } finally {
+      setDetailsLoadingId(null);
+    }
   };
   async function submitSearch() {
     await onSearch(query.trim());
@@ -928,8 +945,9 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
           : Boolean(merged.recipientName && (merged.recipientPhone || merged.hasRecipientPhone) && (merged.recipientAddress || merged.hasRecipientAddress));
         const pendingShipment = ["PENDING", "APPROVED"].includes(order.status);
         const processing = processingOrderId === order.id;
-        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(order.gift.imageUrl) ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} onLoad={() => void loadDetails(order)} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
+        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(order.gift.imageUrl) ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} loading={detailsLoadingId === order.id} onLoad={() => void loadDetails(order)} onViewQr={(url) => setQrPreview({ url, giftName: order.gift.name, memberName: order.user.nickname })} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
       })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多订单 <ChevronDown size={15} /></button></div>}</section>
+      {qrPreview && <div className="modal-backdrop" role="presentation" onMouseDown={() => setQrPreview(null)}><section className="modal-sheet qr-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-preview-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">PAYMENT QR CODE</span><h2 id="qr-preview-title">收款码</h2><p>{qrPreview.memberName} · {qrPreview.giftName}</p></div><button className="icon-button" aria-label="关闭收款码预览" onClick={() => setQrPreview(null)}><X size={20} /></button></div><div className="qr-preview-image"><img src={qrPreview.url} alt={`${qrPreview.memberName}的收款码`} /></div></section></div>}
       {dialog}
     </>
   );
@@ -1962,7 +1980,7 @@ export default function AdminPage() {
       pointPagination: result.pagination,
     } : current);
   }
-  async function handleGiftSave(input: { name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl?: string | null; description?: string | null; active: boolean }) {
+  async function handleGiftSave(input: { name: string; kind: "PHYSICAL" | "CASH"; pointsCost: number; stock: number; imageUrl?: string | null; description?: string | null; active: boolean; pinned: boolean }) {
     const gift = giftEditor?.gift;
     const response = await fetch(gift ? `/api/admin/gifts/${gift.id}` : "/api/admin/gifts", {
       method: gift ? "PATCH" : "POST",
@@ -1973,16 +1991,41 @@ export default function AdminPage() {
     if (!response.ok) throw new Error(result.error ?? "礼品保存失败");
     setData((current) => current ? {
       ...current,
-      gifts: (gift ? current.gifts.map((item) => item.id === gift.id ? result.gift : item) : [...current.gifts, result.gift]).sort((left, right) => left.displayOrder - right.displayOrder),
+       gifts: (gift ? current.gifts.map((item) => item.id === gift.id ? { ...item, ...result.gift } : item) : [...current.gifts, { ...result.gift, salesCount: 0 }]).sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.displayOrder - right.displayOrder),
     } : current);
     setAdminFeedback({ type: "success", message: gift ? "礼品修改已保存" : "礼品已创建" });
     invalidateOverview();
+  }
+  async function handleGiftTogglePin(gift: AdminGiftRow) {
+    if (!data || giftActionId) return;
+    setGiftActionId(gift.id);
+    try {
+      const response = await fetch(`/api/admin/gifts/${gift.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pinned: !gift.pinned }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "置顶状态更新失败");
+      setData((current) => current ? {
+        ...current,
+        gifts: current.gifts
+          .map((item) => item.id === gift.id ? { ...item, ...result.gift } : item)
+          .sort((left, right) => Number(right.pinned) - Number(left.pinned) || left.displayOrder - right.displayOrder),
+      } : current);
+      setAdminFeedback({ type: "success", message: result.gift.pinned ? "商品已置顶" : "商品已取消置顶" });
+    } catch (pinError) {
+      setAdminFeedback({ type: "error", message: pinError instanceof Error ? pinError.message : "置顶状态更新失败" });
+    } finally {
+      setGiftActionId(null);
+    }
   }
   async function handleGiftMove(gift: AdminGiftRow, direction: -1 | 1) {
     if (!data || giftActionId) return;
     const index = data.gifts.findIndex((item) => item.id === gift.id);
     const target = index + direction;
     if (index < 0 || target < 0 || target >= data.gifts.length) return;
+    if (data.gifts[target].pinned !== gift.pinned) return;
     const ordered = [...data.gifts];
     [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
     setGiftActionId(gift.id);
@@ -1994,7 +2037,13 @@ export default function AdminPage() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "礼品排序失败");
-      setData((current) => current ? { ...current, gifts: result.gifts } : current);
+      setData((current) => current ? {
+        ...current,
+        gifts: result.gifts.map((item: AdminGiftRow) => ({
+          ...item,
+          salesCount: current.gifts.find((giftRow) => giftRow.id === item.id)?.salesCount ?? 0,
+        })),
+      } : current);
       setAdminFeedback({ type: "success", message: "成员商城商品顺序已更新" });
     } catch (moveError) {
       setAdminFeedback({ type: "error", message: moveError instanceof Error ? moveError.message : "礼品排序失败" });
@@ -2027,7 +2076,7 @@ export default function AdminPage() {
     if (active === "videos") return <VideoManagement videos={data.videos} appeals={data.appeals} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} />;
     if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} />;
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
-    if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onDelete={(gift) => void handleGiftDelete(gift)} />;
+    if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
     if (active === "challenges") return <WeeklyChallengesAdmin periods={data.weeklyChallengePeriods} onRetry={handleWeeklyChallengeRetry} onUpgrade={handleWeeklyChallengeUpgrade} />;

@@ -9,7 +9,7 @@ export async function GET() {
 
   const startOfMonth = periodBounds("month").start;
 
-  const [ledger, videos, gifts, orders, transfers, totalRank, monthlyIncome, videoStats, monthlyVideoStats, videoStatusGroups, higherBalanceCount] = await Promise.all([
+  const [ledger, videos, gifts, giftSales, orders, transfers, totalRank, monthlyIncome, videoStats, monthlyVideoStats, videoStatusGroups, higherBalanceCount] = await Promise.all([
     user.account
       ? db.pointLedger.findMany({
           where: { accountId: user.account.id },
@@ -25,8 +25,13 @@ export async function GET() {
     }),
     db.gift.findMany({
       where: { active: true, deletedAt: null },
-      orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+      orderBy: [{ pinned: "desc" }, { displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
       take: 100,
+    }),
+    db.redemptionOrder.groupBy({
+      by: ["giftId"],
+      where: { status: { notIn: ["REJECTED", "REFUNDED"] } },
+      _sum: { quantity: true },
     }),
     db.redemptionOrder.findMany({
       where: { userId: user.id },
@@ -105,7 +110,10 @@ export async function GET() {
     },
     ledger,
     videos,
-    gifts,
+    gifts: gifts.map((gift) => ({
+      ...gift,
+      salesCount: giftSales.find((row) => row.giftId === gift.id)?._sum.quantity ?? 0,
+    })),
     orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
       ...order,
       fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),

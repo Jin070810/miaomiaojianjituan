@@ -593,7 +593,22 @@ a {
 .points-member-list .checkbox-field {
   min-height: 38px;
   border-bottom: 1px solid #f0f1f2;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
   font-weight: 500;
+}
+
+.points-member-list .checkbox-field input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.points-member-list .checkbox-field span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .points-member-list .checkbox-field:last-child {
@@ -601,7 +616,7 @@ a {
 }
 
 .points-member-list .checkbox-field b {
-  margin-left: auto;
+  min-width: max-content;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -3699,6 +3714,15 @@ a {
   color: var(--muted);
 }
 
+.gift-admin-card .gift-admin-actions {
+  min-width: 0;
+}
+
+.gift-admin-card .table-more.is-pinned {
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+}
+
 .gift-admin-actions {
   padding-right: 5px;
   display: grid;
@@ -3789,6 +3813,26 @@ a {
 
 .order-recipient a:hover {
   text-decoration: underline;
+}
+
+.qr-preview-dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.qr-preview-image {
+  min-height: 260px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: #f7f8f8;
+}
+
+.qr-preview-image img {
+  width: min(100%, 360px);
+  max-height: 58vh;
+  object-fit: contain;
 }
 
 .order-row > b {

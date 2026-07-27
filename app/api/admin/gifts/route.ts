@@ -13,17 +13,25 @@ const schema = z.object({
   imageUrl: giftImageValueSchema,
   description: z.string().trim().max(500).nullable().optional(),
   active: z.boolean().default(true),
+  pinned: z.boolean().default(false),
 });
 
 export async function GET() {
   try {
     await requireAdmin();
-    return NextResponse.json({
-      gifts: await db.gift.findMany({
+    const [gifts, sales] = await Promise.all([
+      db.gift.findMany({
         where: { deletedAt: null },
-        orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+        orderBy: [{ pinned: "desc" }, { displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
       }),
-    });
+      db.redemptionOrder.groupBy({
+        by: ["giftId"],
+        where: { status: { notIn: ["REJECTED", "REFUNDED"] } },
+        _sum: { quantity: true },
+      }),
+    ]);
+    const salesByGiftId = new Map(sales.map((row) => [row.giftId, row._sum.quantity ?? 0]));
+    return NextResponse.json({ gifts: gifts.map((gift) => ({ ...gift, salesCount: salesByGiftId.get(gift.id) ?? 0 })) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }

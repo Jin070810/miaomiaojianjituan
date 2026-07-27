@@ -14,6 +14,7 @@ const schema = z.object({
   imageUrl: giftImageValueSchema,
   description: z.string().trim().max(500).nullable().optional(),
   active: z.boolean().optional(),
+  pinned: z.boolean().optional(),
 });
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -42,7 +43,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           action: "GIFT_UPDATED",
           entity: "Gift",
           entityId: id,
-          beforeValue: { name: before.name, kind: before.kind, pointsCost: before.pointsCost, stock: before.stock, active: before.active },
+          beforeValue: { name: before.name, kind: before.kind, pointsCost: before.pointsCost, stock: before.stock, active: before.active, pinned: before.pinned },
           afterValue: {
             ...auditInput,
             ...(auditImageUrl === undefined ? {} : { imageConfigured: Boolean(auditImageUrl) }),

@@ -1,6 +1,6 @@
 # 礼品目录管理修复验收
 
-关联工作项：GitHub Issue #36。
+关联工作项：GitHub Issue #45。
 
 状态：`Ready for review`。本记录完成代码自审和本地 staging 等效验收；PR 未经人工确认、未合并到 `main`、未生成正式发布记录前，不得标记为已上线。
 
@@ -10,17 +10,20 @@
 - 管理员可上传 JPG、PNG 或 WebP 文件；服务端限制 5 MB 和输入像素，将图片统一压缩为最大 800 px、120 KB 的 WebP。
 - 上传结果以 WebP data URL 保存在现有 PostgreSQL，不新增 OSS、磁盘挂载或其他付费云资源；审计日志只记录图片是否配置，不保存图片正文。
 - 管理员可上移、下移礼品；服务端在事务中校验完整目录并原子更新 `displayOrder`。
+- 管理员可一键置顶/取消置顶礼品；置顶状态写入审计日志，并在成员端综合排序中优先显示。
+- 成员商城支持综合、销量、价格升序和价格降序；销量只统计未驳回、未退款订单的兑换数量。
 - 管理员可删除礼品；删除为审计化软删除，同时下架并从后台目录和成员商城隐藏，历史兑换、榜单和积分记录继续保留。
-- 新增 migration `20260726030000_gift_catalog_management`，只增加 `displayOrder`、`deletedAt` 和查询索引，不修改既有 migration。
+- 订单后台可在弹窗中直接预览现金订单收款码；收款码仍只通过管理员详情接口按需读取，不出现在订单列表响应。
+- 新增 migration `20260727100000_gift_pinned`，只增加 `pinned` 和查询索引，不修改既有 migration。
 
 ## 自动门禁
 
-2026-07-26 在独立分支 `fix/gift-admin-management-20260726` 执行：
+2026-07-27 在独立分支 `fix/admin-gift-order-points-20260727` 执行：
 
 ```text
 npm run lint                                      通过
-npm test                                          65 项通过
-RUN_DB_TESTS=1 npm test                           93 项通过，1 项外部连接测试按设计跳过
+npm test                                          65 项通过，31 项数据库测试按设计跳过
+RUN_DB_TESTS=1 npm test                           96 项通过
 npm run build                                     通过
 npm audit --omit=dev                              0 vulnerabilities
 docker compose config                             通过
@@ -28,7 +31,7 @@ docker compose build app                          通过
 docker build --target worker ...                  通过
 ```
 
-数据库门禁使用全空隔离 schema `gift_admin_gate_20260726`，从 0 顺序应用全部 17 个 migration 后执行测试；Prisma 确认 schema 已是最新状态。
+本地 PostgreSQL 已通过 `npm run db:deploy` 应用新增 migration，Prisma 确认 schema 已是最新状态。
 
 ## UI 验收
 
@@ -38,6 +41,8 @@ docker build --target worker ...                  通过
 - 上传真实图片、服务端压缩、预览和保存成功，POST/PATCH 均返回 200。
 - 上传非图片文件返回 400，弹窗显示“礼品图片仅支持 JPG、PNG 或 WebP”，原图片保持不变。
 - 上移后目录即时更新，排序接口返回 200；删除确认文案明确保留历史记录，DELETE 返回 200。
+- 置顶/取消置顶后礼品卡即时移动到对应位置，成员端综合排序优先展示置顶商品；销量和价格排序结果符合订单数据。
+- 现金订单点击“查看收款码”后在后台弹窗内显示图片，关闭后可继续操作订单。
 - 删除、排序和保存均有成功反馈，操作期间对应控件禁用；无布局遮挡。
 
 `390x844` 成员商城：
@@ -45,6 +50,7 @@ docker build --target worker ...                  通过
 - 管理后台调整后的顺序同步生效。
 - 已删除礼品不再显示，上传图片正常显示。
 - 礼品卡片、积分、库存、兑换按钮和底部导航无溢出或遮挡。
+- 通知中心弹窗在 `390x844` 内水平居中，左右不裁切，关闭按钮可见且遮罩覆盖完整视口。
 
 本地截图位于忽略目录 `output/playwright/`，不提交测试账号、浏览器状态或运行产物。
 

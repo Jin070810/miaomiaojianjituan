@@ -299,6 +299,7 @@ model Gift {
   imageUrl      String?
   description   String?
   active        Boolean           @default(true)
+  pinned        Boolean           @default(false)
   displayOrder  Int               @default(0)
   deletedAt     DateTime?
   createdAt     DateTime          @default(now())
@@ -306,7 +307,7 @@ model Gift {
   orders        RedemptionOrder[]
   rankingAwards RankingAward[]
 
-  @@index([deletedAt, active, displayOrder])
+  @@index([deletedAt, active, pinned, displayOrder])
 }
 
 model RedemptionOrder {

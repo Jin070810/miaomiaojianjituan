@@ -5,7 +5,7 @@ export async function reorderAdminGifts(input: { actorId: string; orderedIds: st
     const current = await tx.gift.findMany({
       where: { deletedAt: null },
       select: { id: true },
-      orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+      orderBy: [{ pinned: "desc" }, { displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
     });
     const currentIds = current.map((gift) => gift.id);
     if (currentIds.length !== input.orderedIds.length || currentIds.some((id) => !input.orderedIds.includes(id))) {
@@ -24,7 +24,7 @@ export async function reorderAdminGifts(input: { actorId: string; orderedIds: st
     });
     return tx.gift.findMany({
       where: { deletedAt: null },
-      orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+      orderBy: [{ pinned: "desc" }, { displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
     });
   });
 }

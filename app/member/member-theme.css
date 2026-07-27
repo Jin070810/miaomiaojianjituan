@@ -1283,6 +1283,40 @@
   gap: 2px;
 }
 
+.gift-sort-toolbar {
+  min-height: 42px;
+  padding: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.gift-sort-toolbar > span {
+  margin-right: 3px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gift-sort-toolbar button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.gift-sort-toolbar button.active {
+  border-color: var(--grape);
+  color: var(--grape);
+  background: rgba(124, 91, 156, 0.08);
+  font-weight: 750;
+}
+
 .mall-points strong {
   font-size: 50px;
 }
@@ -2210,10 +2244,11 @@
 }
 
 .notification-panel {
-  position: fixed;
+  position: relative;
   z-index: 110;
-  top: 72px;
-  right: max(14px, calc((100vw - 430px) / 2 + 14px));
+  inset: auto;
+  margin: 0;
+  align-self: center;
   padding: 0;
   border-radius: 18px;
 }

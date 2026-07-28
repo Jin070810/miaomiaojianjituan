@@ -49,6 +49,7 @@ import NotificationCenter, { clearNotificationPromptSession } from "./components
 import { BrandMark, PageScene, StateMessage } from "./member/brand";
 import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
 import { miaoAssets } from "./member/visual-assets";
+import type { MembershipFieldDefinition } from "@/lib/gifts";
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "ledger" | "transfers" | "orders";
 
@@ -102,7 +103,10 @@ type DashboardData = {
   gifts: Array<{
     id: string;
     name: string;
-    kind: "PHYSICAL" | "CASH";
+    kind: "PHYSICAL" | "CASH" | "MEMBERSHIP";
+    category: string;
+    tags: string[];
+    fulfillmentFields: MembershipFieldDefinition[] | null;
     pointsCost: number;
     stock: number;
     imageUrl: string | null;
@@ -110,7 +114,7 @@ type DashboardData = {
     pinned: boolean;
     salesCount: number;
   }>;
-  orders: Array<{ id: string; status: string; totalCost: number; createdAt: string; fulfilledAt: string | null; trackingNumber: string | null; gift: { name: string; kind: "PHYSICAL" | "CASH"; imageUrl: string | null } }>;
+  orders: Array<{ id: string; status: string; totalCost: number; createdAt: string; fulfilledAt: string | null; trackingNumber: string | null; gift: { name: string; kind: "PHYSICAL" | "CASH" | "MEMBERSHIP"; imageUrl: string | null } }>;
   transfers: Array<{
     id: string;
     amount: number;
@@ -174,7 +178,10 @@ type DisplayGift = {
   image: string;
   tag: string;
   tone: string;
-  kind: "PHYSICAL" | "CASH";
+  kind: "PHYSICAL" | "CASH" | "MEMBERSHIP";
+  category: string;
+  tags: string[];
+  fulfillmentFields: MembershipFieldDefinition[];
   salesCount: number;
   pinned: boolean;
 };
@@ -184,7 +191,7 @@ type MemberAward = {
   rank: number;
   value: number;
   status: "PENDING" | "CLAIMED" | "FULFILLED" | "EXPIRED";
-  gift: { id: string; name: string; kind: "PHYSICAL" | "CASH"; imageUrl: string | null } | null;
+  gift: { id: string; name: string; kind: "PHYSICAL" | "CASH" | "MEMBERSHIP"; imageUrl: string | null } | null;
   period: { type: "WEEK" | "MONTH"; periodStart: string; periodEnd: string };
 };
 
@@ -271,6 +278,9 @@ const gifts: DisplayGift[] = [
     tag: "人气礼品",
     tone: "orange",
     kind: "PHYSICAL" as const,
+    category: "实用好物",
+    tags: ["实用好物", "实物商品"],
+    fulfillmentFields: [],
     salesCount: 0,
     pinned: false,
   },
@@ -284,6 +294,9 @@ const gifts: DisplayGift[] = [
     tag: "限量",
     tone: "teal",
     kind: "PHYSICAL" as const,
+    category: "实用好物",
+    tags: ["实用好物", "实物商品"],
+    fulfillmentFields: [],
     salesCount: 0,
     pinned: false,
   },
@@ -296,7 +309,10 @@ const gifts: DisplayGift[] = [
       "https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=900&q=85",
     tag: "实用兑换",
     tone: "purple",
-    kind: "PHYSICAL" as const,
+    kind: "MEMBERSHIP" as const,
+    category: "会员权益",
+    tags: ["会员权益", "权益兑换"],
+    fulfillmentFields: [{ key: "membership_account", label: "会员账号", type: "TEXT", required: true }],
     salesCount: 0,
     pinned: false,
   },
@@ -310,6 +326,9 @@ const gifts: DisplayGift[] = [
     tag: "新品",
     tone: "green",
     kind: "PHYSICAL" as const,
+    category: "实用好物",
+    tags: ["实用好物", "实物商品"],
+    fulfillmentFields: [],
     salesCount: 0,
     pinned: false,
   },
@@ -826,8 +845,16 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
   const [activeCategory, setActiveCategory] = useState("全部");
   const [sortMode, setSortMode] = useState<"featured" | "sales" | "priceAsc" | "priceDesc">("featured");
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
-  const categories = ["全部", "实用好物", "会员权益", "团品周边"];
-  const sortedItems = [...items].sort((left, right) => {
+  const preferredOrder = ["实用好物", "零食饮品", "潮玩周边", "数码设备", "特别体验", "重磅大奖", "会员权益", "现金福利"];
+  const categories = ["全部", ...Array.from(new Set(items.map((item) => item.category))).sort((left, right) => {
+    const leftIndex = preferredOrder.indexOf(left);
+    const rightIndex = preferredOrder.indexOf(right);
+    if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right, "zh-CN");
+    if (leftIndex === -1) return 1;
+    if (rightIndex === -1) return -1;
+    return leftIndex - rightIndex;
+  })];
+  const sortedItems = items.filter((item) => activeCategory === "全部" || item.category === activeCategory).sort((left, right) => {
     if (sortMode === "sales") return right.salesCount - left.salesCount || Number(right.pinned) - Number(left.pinned);
     if (sortMode === "priceAsc") return left.points - right.points || Number(right.pinned) - Number(left.pinned);
     if (sortMode === "priceDesc") return right.points - left.points || Number(right.pinned) - Number(left.pinned);
@@ -877,6 +904,9 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
             </div>
             <div className="gift-body">
               <h3>{gift.name}</h3>
+              <div className="gift-tag-list" aria-label="商品标签">
+                {gift.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
+              </div>
               <div className="gift-meta">
                 <strong>{gift.points.toLocaleString()}</strong>
                 <span>积分</span>
@@ -1464,7 +1494,9 @@ function RedeemDialog({
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [cashQrCodeUrl, setCashQrCodeUrl] = useState("");
+  const [membershipAnswers, setMembershipAnswers] = useState<Record<string, string>>({});
   useEffect(() => {
+    if (gift?.kind === "MEMBERSHIP") return;
     let active = true;
     fetch("/api/profile/recipient", { cache: "no-store" })
       .then(async (response) => {
@@ -1481,7 +1513,7 @@ function RedeemDialog({
     return () => {
       active = false;
     };
-  }, []);
+  }, [gift?.kind]);
   function readQrCode(file?: File) {
     if (!file) return;
     if (file.size > 2_000_000) {
@@ -1504,9 +1536,10 @@ function RedeemDialog({
         body: JSON.stringify({
           giftId: gift.id,
           quantity: 1,
+          ...(gift.kind === "MEMBERSHIP" ? { membershipAnswers } : {}),
           recipient: gift.kind === "CASH"
             ? { cashQrCodeUrl }
-            : { recipientName, phone, address },
+            : gift.kind === "PHYSICAL" ? { recipientName, phone, address } : undefined,
         }),
       });
       const result = await response.json();
@@ -1536,22 +1569,49 @@ function RedeemDialog({
               <input id="cash-qr" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => readQrCode(event.target.files?.[0])} />
               <span className="field-hint">{cashQrCodeUrl ? "已选择收款码，可直接复用或重新上传。" : "请上传微信或支付宝收款码，图片不超过 2MB。"}</span>
             </div>
-          ) : (
+          ) : gift.kind === "PHYSICAL" ? (
             <>
               <div className="field"><label htmlFor="recipient-name">收货姓名</label><input id="recipient-name" value={recipientName} onChange={(event) => setRecipientName(event.target.value)} placeholder="请输入收货人姓名" /></div>
               <div className="field"><label htmlFor="recipient-phone">手机号</label><input id="recipient-phone" value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" placeholder="请输入 11 位手机号" /></div>
               <div className="field"><label htmlFor="recipient-address">详细地址</label><textarea id="recipient-address" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="省、市、区县、街道和门牌号" rows={3} /></div>
             </>
+          ) : (
+            <div className="membership-fields">
+              {gift.fulfillmentFields.length === 0 && <p className="field-hint">这个权益不需要额外资料，兑换后等待管理员开通即可。</p>}
+              {gift.fulfillmentFields.map((field) => (
+                <div className="field" key={field.key}>
+                  <label htmlFor={`membership-${field.key}`}>{field.label}{field.required ? " *" : "（选填）"}</label>
+                  {field.type === "TEXTAREA" ? (
+                    <textarea id={`membership-${field.key}`} rows={3} maxLength={500} value={membershipAnswers[field.key] ?? ""} onChange={(event) => setMembershipAnswers((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} />
+                  ) : field.type === "SELECT" ? (
+                    <select id={`membership-${field.key}`} value={membershipAnswers[field.key] ?? ""} onChange={(event) => setMembershipAnswers((current) => ({ ...current, [field.key]: event.target.value }))}>
+                      <option value="">请选择</option>
+                      {field.options?.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      id={`membership-${field.key}`}
+                      type={field.type === "EMAIL" ? "email" : field.type === "NUMBER" ? "number" : "text"}
+                      inputMode={field.type === "PHONE" ? "tel" : field.type === "NUMBER" ? "decimal" : undefined}
+                      maxLength={200}
+                      value={membershipAnswers[field.key] ?? ""}
+                      onChange={(event) => setMembershipAnswers((current) => ({ ...current, [field.key]: event.target.value }))}
+                      placeholder={field.placeholder}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           )}
-          <div className="rule-notice"><PackageCheck size={18} /><span>{gift.kind === "CASH" ? "收款码会安全保存，下次兑换可以直接使用。" : "收货信息会安全保存，下次兑换和领奖可以直接使用。"}</span></div>
+          <div className="rule-notice"><PackageCheck size={18} /><span>{gift.kind === "CASH" ? "收款码会安全保存，下次兑换可以直接使用。" : gift.kind === "MEMBERSHIP" ? "开通资料会加密保存，仅管理员处理订单时可查看。" : "收货信息会安全保存，下次兑换和领奖可以直接使用。"}</span></div>
           {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="primary-button full-button modal-submit" disabled={submitting || (gift.kind === "CASH" ? !cashQrCodeUrl : !recipientName || !phone || !address)} onClick={redeem}><Gift size={17} /> {submitting ? "正在兑换..." : "确认兑换"}</button>
+          <button className="primary-button full-button modal-submit" disabled={submitting || (gift.kind === "CASH" ? !cashQrCodeUrl : gift.kind === "PHYSICAL" ? !recipientName || !phone || !address : gift.fulfillmentFields.some((field) => field.required && !(membershipAnswers[field.key] ?? "").trim()))} onClick={redeem}><Gift size={17} /> {submitting ? "正在兑换..." : "确认兑换"}</button>
         </>
       ) : (
         <div className="success-state">
           <div className="success-symbol yellow-symbol"><PackageCheck size={30} /></div>
           <h3>兑换成功啦</h3>
-          <p>{gift?.kind === "PHYSICAL" ? "申请已经收好，礼物发出后会通知你。" : "申请已经收好，积分礼物准备好后会通知你。"}</p>
+          <p>{gift?.kind === "PHYSICAL" ? "申请已经收好，礼物发出后会通知你。" : gift?.kind === "MEMBERSHIP" ? "会员开通申请已提交，开通后会通知你。" : "申请已经收好，积分礼物准备好后会通知你。"}</p>
           <button className="primary-button full-button" onClick={onComplete}>查看兑换记录</button>
         </div>
       )}
@@ -1620,6 +1680,9 @@ export default function MemberApp() {
       tone: gifts[index % gifts.length].tone,
       salesCount: gift.salesCount ?? 0,
       pinned: gift.pinned ?? false,
+      category: gift.category || "实用好物",
+      tags: gift.tags?.length ? gift.tags : [gift.category || "实用好物"],
+      fulfillmentFields: Array.isArray(gift.fulfillmentFields) ? gift.fulfillmentFields : [],
     }));
   }, [dashboard]);
 

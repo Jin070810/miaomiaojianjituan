@@ -220,8 +220,50 @@ a {
 }
 
 .admin-gift-dialog {
+  max-height: min(90vh, 900px);
+  overflow-y: auto;
   display: grid;
   gap: 14px;
+}
+
+.gift-auto-classify {
+  width: fit-content;
+}
+
+.membership-field-editor {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  background: #fafbfb;
+}
+
+.membership-field-editor-head,
+.membership-field-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.membership-field-editor-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.membership-field-editor-head span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.membership-field-row {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  background: white;
 }
 
 .gift-image-upload {
@@ -3706,6 +3748,18 @@ a {
   font-weight: 700;
 }
 
+.gift-admin-card .admin-gift-tags {
+  display: flex;
+}
+
+.gift-admin-card .admin-gift-tags small {
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: #5b378d;
+  background: #f1ebf8;
+  font-size: 9px;
+}
+
 .gift-catalog-state.active {
   color: #0f7a64;
 }
@@ -3813,6 +3867,22 @@ a {
 
 .order-recipient a:hover {
   text-decoration: underline;
+}
+
+.membership-order-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+}
+
+.membership-order-fields > span {
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .membership-field-editor .admin-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .qr-preview-dialog {

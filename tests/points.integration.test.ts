@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { adminAdjustPoints, adminAdjustPointsBatch, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
 import { claimRankingAward, periodBounds, settleRanking, settleRankingPeriod } from "@/lib/rankings";
 import { prepareVideoReprocess } from "@/lib/video-jobs";
+import { decryptSensitive } from "@/lib/security";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 
@@ -273,6 +274,57 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     expect(order.cashQrCodeUrl).toBe("https://example.com/qr.png");
     expect(order.status).toBe("APPROVED");
     expect(await db.recipientProfile.findUnique({ where: { userId: senderId } }).then((profile) => profile?.cashQrCodeUrl)).toBe("https://example.com/qr.png");
+  });
+
+  it("validates, encrypts, and fulfills software membership redemption data", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 100 } });
+    const gift = await db.gift.create({
+      data: {
+        name: "测试剪映会员月卡",
+        kind: "MEMBERSHIP",
+        category: "会员权益",
+        tags: ["会员权益", "权益兑换", "剪辑软件"],
+        pointsCost: 20,
+        stock: 2,
+        fulfillmentFields: [
+          { key: "account_email", label: "会员邮箱", type: "EMAIL", required: true },
+          { key: "platform", label: "开通平台", type: "SELECT", required: true, options: ["剪映", "CapCut"] },
+        ],
+      },
+    });
+    await expect(redeemGift({
+      userId: senderId,
+      giftId: gift.id,
+      quantity: 1,
+      idempotencyKey: `integration-membership-missing-${Date.now()}`,
+      membershipAnswers: { platform: "剪映" },
+    })).rejects.toThrow("会员邮箱");
+    expect(await db.gift.findUniqueOrThrow({ where: { id: gift.id } }).then((row) => row.stock)).toBe(2);
+
+    const email = "membership-test@example.com";
+    const order = await redeemGift({
+      userId: senderId,
+      giftId: gift.id,
+      quantity: 1,
+      idempotencyKey: `integration-membership-${Date.now()}`,
+      membershipAnswers: { account_email: email, platform: "剪映" },
+    });
+    expect(order.fulfillmentDataEnc).toBeTruthy();
+    expect(order.fulfillmentDataEnc).not.toContain(email);
+    expect(JSON.parse(decryptSensitive(order.fulfillmentDataEnc!)).fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "account_email", label: "会员邮箱", value: email }),
+    ]));
+    const audit = await db.auditLog.findFirstOrThrow({ where: { action: "REDEMPTION_CREATED", entityId: order.id } });
+    expect(JSON.stringify(audit.afterValue)).not.toContain(email);
+    expect(audit.afterValue).toMatchObject({ giftKind: "MEMBERSHIP", membershipFieldCount: 2 });
+    const fulfilled = await updateRedemptionOrder({ orderId: order.id, action: "fulfill", actorId: receiverId });
+    expect(fulfilled.status).toBe("FULFILLED");
+    expect(fulfilled.trackingNumber).toBeNull();
+    await db.notification.deleteMany({ where: { entityType: "RedemptionOrder", entityId: order.id } });
+    await db.auditLog.deleteMany({ where: { entity: "RedemptionOrder", entityId: order.id } });
+    await db.pointLedger.deleteMany({ where: { referenceId: order.id } });
+    await db.redemptionOrder.delete({ where: { id: order.id } });
+    await db.gift.delete({ where: { id: gift.id } });
   });
 
   it("rejects an automatically approved order and restores points and stock", async () => {

@@ -13,6 +13,7 @@ const schema = z.object({
   quantity: z.number().int().min(1).max(20),
   shippingInfo: z.string().trim().max(500).optional(),
   note: z.string().trim().max(200).optional(),
+  membershipAnswers: z.record(z.string().max(1000)).optional(),
   recipient: z.object({
     recipientName: z.string().trim().min(1).max(80).optional(),
     phone: z.string().trim().regex(/^1\d{10}$/).optional(),
@@ -50,12 +51,13 @@ export async function GET(request: Request) {
     db.redemptionOrder.count({ where }),
   ]);
   return NextResponse.json({
-    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
+    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, fulfillmentDataEnc, ...order }) => ({
       ...order,
       fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
       hasCashQrCode: Boolean(cashQrCodeUrl),
+      hasFulfillmentData: Boolean(fulfillmentDataEnc),
     })),
     pagination: paginationResult(page, take, total),
   });

@@ -19,12 +19,14 @@ test.afterAll(async () => {
 
 test("admin sees period health and failure details at 1440x900", async ({ page }) => {
   await login(page, e2eIds.admin);
+  await expect(page.getByRole("heading", { name: "本周成员参与" })).toBeVisible();
+  await expect(page.getByText("本周挑战", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "AI 周挑战" }).click();
   await expect(page.getByRole("heading", { name: "AI 周挑战" })).toBeVisible();
   await expect(page.getByText("生成失败")).toBeVisible();
   await expect(page.getByText("模拟批次缺失成员，整周未发布")).toBeVisible();
   await expect(page.getByText("e2e-mock-model").first()).toBeVisible();
-  await expect(page.getByText("数量 1")).toBeVisible();
+  await expect(page.getByText("数量 1").first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/admin-weekly-periods-1440x900.png", fullPage: true });
 

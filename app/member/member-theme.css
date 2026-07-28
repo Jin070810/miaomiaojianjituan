@@ -1747,12 +1747,19 @@
 }
 
 .category-tabs {
-  justify-content: space-between;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .category-tabs button {
+  flex: 0 0 auto;
   padding-inline: 8px;
   font-size: 13px;
+}
+
+.category-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .journal-gift-grid {
@@ -1798,6 +1805,30 @@
   line-height: 1.5;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.gift-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.gift-tag-list span {
+  max-width: 100%;
+  padding: 3px 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: var(--grape);
+  background: rgba(91, 55, 141, 0.09);
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.membership-fields {
+  display: grid;
+  gap: 12px;
 }
 
 .gift-meta {

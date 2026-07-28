@@ -1,4 +1,4 @@
-import { Prisma, RedemptionStatus } from "@prisma/client";
+import { GiftKind, Prisma, RedemptionStatus } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { db } from "./db";
 import { createNotification } from "./notifications";
@@ -17,7 +17,7 @@ type ReconciliationOrder = {
   totalCost: number;
   status: RedemptionStatus;
   createdAt: Date;
-  gift: { name: string; kind: "PHYSICAL" | "CASH" };
+  gift: { name: string; kind: GiftKind };
 };
 
 export type RedemptionReconciliationScope = {
@@ -208,8 +208,8 @@ export async function reconcileRedemptionOrders(input: {
       await createNotification(tx, {
         userId: order.userId,
         type: "REDEMPTION",
-        title: order.gift.kind === "CASH" ? "兑换已完成" : "礼品已发货",
-        body: `${order.gift.name} 已完成发放`,
+        title: order.gift.kind === "PHYSICAL" ? "礼品已发货" : order.gift.kind === "MEMBERSHIP" ? "会员权益已开通" : "兑换已完成",
+        body: `${order.gift.name} 已完成${order.gift.kind === "PHYSICAL" ? "发货" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发放"}`,
         entityType: "RedemptionOrder",
         entityId: order.id,
         metadata: { status: "FULFILLED", maintenance: true },

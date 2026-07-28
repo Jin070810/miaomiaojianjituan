@@ -9,6 +9,7 @@ import {
   evaluateWeeklyChallengeAfterVideoApproval,
   reconcileWeeklyChallengesAfterVideoRevocation,
 } from "./weekly-challenges";
+import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -373,6 +374,7 @@ export async function redeemGift(input: {
   quantity: number;
   shippingInfo?: string;
   note?: string;
+  membershipAnswers?: Record<string, string>;
   recipient?: {
     recipientName?: string;
     phone?: string;
@@ -391,7 +393,9 @@ export async function redeemGift(input: {
     }
     const gift = await tx.gift.findUnique({ where: { id: input.giftId } });
     if (!gift || !gift.active) throw new Error("礼品不存在或已下架");
-    const profile = await tx.recipientProfile.findUnique({ where: { userId: input.userId } });
+    const profile = gift.kind === "MEMBERSHIP"
+      ? null
+      : await tx.recipientProfile.findUnique({ where: { userId: input.userId } });
     const recipientName = input.recipient?.recipientName?.trim() || profile?.recipientName || null;
     const recipientPhone = input.recipient?.phone?.trim() || (profile?.phoneEnc ? decryptSensitive(profile.phoneEnc) : null);
     const recipientAddress = input.recipient?.address?.trim() || (profile?.addressEnc ? decryptSensitive(profile.addressEnc) : null);
@@ -400,6 +404,10 @@ export async function redeemGift(input: {
     if (gift.kind === "PHYSICAL" && (!recipientName || !recipientPhone || !recipientAddress)) {
       throw new Error("兑换实物商品需要完整的收货姓名、手机号和详细地址");
     }
+    const membershipFields = gift.kind === "MEMBERSHIP" ? parseMembershipFields(gift.fulfillmentFields) : [];
+    const fulfillmentSnapshot = gift.kind === "MEMBERSHIP"
+      ? validateMembershipAnswers(membershipFields, input.membershipAnswers)
+      : null;
     const reserved = await tx.gift.updateMany({
       where: { id: gift.id, stock: { gte: input.quantity }, active: true },
       data: { stock: { decrement: input.quantity } },
@@ -418,13 +426,14 @@ export async function redeemGift(input: {
         recipientPhoneEnc: recipientPhone ? encryptSensitive(recipientPhone) : null,
         recipientAddressEnc: recipientAddress ? encryptSensitive(recipientAddress) : null,
         cashQrCodeUrl,
+        fulfillmentDataEnc: fulfillmentSnapshot ? encryptSensitive(JSON.stringify(fulfillmentSnapshot)) : null,
         note: input.note,
         idempotencyKey: input.idempotencyKey,
         // 积分和库存已在同一事务内校验并扣除，兑换创建后直接进入待发货。
         status: "APPROVED",
       },
     });
-    if (input.recipient) {
+    if (input.recipient && gift.kind !== "MEMBERSHIP") {
       await tx.recipientProfile.upsert({
         where: { userId: input.userId },
         create: {
@@ -449,7 +458,13 @@ export async function redeemGift(input: {
         action: "REDEMPTION_CREATED",
         entity: "RedemptionOrder",
         entityId: order.id,
-        afterValue: { giftId: gift.id, quantity: input.quantity, totalCost },
+        afterValue: {
+          giftId: gift.id,
+          giftKind: gift.kind,
+          quantity: input.quantity,
+          totalCost,
+          membershipFieldCount: fulfillmentSnapshot?.fields.length ?? 0,
+        },
         ip: input.ip,
       },
     });
@@ -457,7 +472,7 @@ export async function redeemGift(input: {
       userId: input.userId,
       type: "REDEMPTION",
       title: "兑换申请已提交",
-      body: `已使用 ${totalCost} 积分兑换 ${gift.name}，订单进入${gift.kind === "PHYSICAL" ? "待采购" : "待发放"}状态`,
+      body: `已使用 ${totalCost} 积分兑换 ${gift.name}，订单进入${gift.kind === "PHYSICAL" ? "待采购" : gift.kind === "MEMBERSHIP" ? "待开通" : "待发放"}状态`,
       entityType: "RedemptionOrder",
       entityId: order.id,
       metadata: { amount: -totalCost, status: order.status },
@@ -827,6 +842,12 @@ export async function updateRedemptionOrder(input: {
       if (order.gift.kind === "PHYSICAL" && (!order.recipientName || !order.recipientPhoneEnc || !order.recipientAddressEnc)) {
         throw new Error("实物订单缺少完整收货资料，补齐后才能发货");
       }
+      const requiredMembershipFields = order.gift.kind === "MEMBERSHIP"
+        ? parseMembershipFields(order.gift.fulfillmentFields).some((field) => field.required)
+        : false;
+      if (requiredMembershipFields && !order.fulfillmentDataEnc) {
+        throw new Error("会员权益订单缺少开通资料，补齐后才能完成");
+      }
       const fulfilledAt = new Date();
       const trackingNumber = order.gift.kind === "PHYSICAL" ? input.trackingNumber?.trim() || null : null;
       if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
@@ -853,8 +874,8 @@ export async function updateRedemptionOrder(input: {
       await createNotification(tx, {
         userId: order.userId,
         type: "REDEMPTION",
-        title: order.gift.kind === "CASH" ? "兑换已完成" : "礼品已发货",
-        body: `${order.gift.name} 已完成${order.gift.kind === "CASH" ? "发放" : "发货"}${trackingNumber ? `，快递单号：${trackingNumber}` : ""}`,
+        title: order.gift.kind === "PHYSICAL" ? "礼品已发货" : order.gift.kind === "MEMBERSHIP" ? "会员权益已开通" : "兑换已完成",
+        body: `${order.gift.name} 已完成${order.gift.kind === "PHYSICAL" ? "发货" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发放"}${trackingNumber ? `，快递单号：${trackingNumber}` : ""}`,
         entityType: "RedemptionOrder",
         entityId: order.id,
         metadata: { status: "FULFILLED", trackingNumber },

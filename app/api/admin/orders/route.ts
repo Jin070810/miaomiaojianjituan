@@ -38,13 +38,14 @@ export async function GET(request: Request) {
       db.redemptionOrder.count({ where }),
     ]);
     return NextResponse.json({
-      orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
+      orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, fulfillmentDataEnc, ...order }) => ({
         ...order,
         fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
         hasRecipientName: Boolean(order.recipientName),
         hasRecipientPhone: Boolean(recipientPhoneEnc),
         hasRecipientAddress: Boolean(recipientAddressEnc),
         hasCashQrCode: Boolean(cashQrCodeUrl),
+        hasFulfillmentData: Boolean(fulfillmentDataEnc),
       })),
       pagination: paginationResult(page, take, total),
     });

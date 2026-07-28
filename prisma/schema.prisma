@@ -57,6 +57,7 @@ enum RedemptionStatus {
 enum GiftKind {
   PHYSICAL
   CASH
+  MEMBERSHIP
 }
 
 enum RankingPeriodType {
@@ -298,6 +299,9 @@ model Gift {
   stock         Int               @default(0)
   imageUrl      String?
   description   String?
+  category      String            @default("实用好物")
+  tags          String[]          @default([])
+  fulfillmentFields Json?
   active        Boolean           @default(true)
   pinned        Boolean           @default(false)
   displayOrder  Int               @default(0)
@@ -308,6 +312,7 @@ model Gift {
   rankingAwards RankingAward[]
 
   @@index([deletedAt, active, pinned, displayOrder])
+  @@index([deletedAt, active, category])
 }
 
 model RedemptionOrder {
@@ -323,6 +328,7 @@ model RedemptionOrder {
   recipientPhoneEnc   String?
   recipientAddressEnc String?
   cashQrCodeUrl       String?
+  fulfillmentDataEnc  String?
   note                String?
   idempotencyKey      String           @unique
   createdAt           DateTime         @default(now())

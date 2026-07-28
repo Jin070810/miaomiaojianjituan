@@ -1,13 +1,27 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { giftImageValueSchema, giftValidationErrorMessage } from "@/lib/gifts";
+import {
+  giftCategorySchema,
+  giftImageValueSchema,
+  giftKindSchema,
+  giftTagsSchema,
+  giftValidationErrorMessage,
+  inferGiftCategory,
+  inferGiftTags,
+  membershipFieldsSchema,
+  normalizeGiftTags,
+} from "@/lib/gifts";
 import { assertSameOrigin, getClientIp } from "@/lib/security";
 
 const schema = z.object({
   name: z.string().trim().min(1).max(120),
-  kind: z.enum(["PHYSICAL", "CASH"]).default("PHYSICAL"),
+  kind: giftKindSchema.default("PHYSICAL"),
+  category: giftCategorySchema.optional(),
+  tags: giftTagsSchema.optional(),
+  fulfillmentFields: membershipFieldsSchema.optional(),
   pointsCost: z.number().int().positive().max(10_000_000),
   stock: z.number().int().min(0).max(1_000_000),
   imageUrl: giftImageValueSchema,
@@ -42,10 +56,21 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const admin = await requireAdmin();
     const input = schema.parse(await request.json());
-    const { imageUrl: auditImageUrl, ...auditInput } = input;
+    const category = input.category ?? inferGiftCategory(input.name, input.kind);
+    const tags = input.tags?.length ? normalizeGiftTags(category, input.kind, input.tags) : inferGiftTags(input.name, input.kind, category);
+    const fulfillmentFields = input.kind === "MEMBERSHIP" ? (input.fulfillmentFields ?? []) : [];
+    const { imageUrl: auditImageUrl, fulfillmentFields: _ignoredFields, ...auditInput } = input;
     const gift = await db.$transaction(async (tx) => {
       const last = await tx.gift.aggregate({ where: { deletedAt: null }, _max: { displayOrder: true } });
-      const created = await tx.gift.create({ data: { ...input, displayOrder: (last._max.displayOrder ?? -1) + 1 } });
+      const created = await tx.gift.create({
+        data: {
+          ...input,
+          category,
+          tags,
+          fulfillmentFields: input.kind === "MEMBERSHIP" ? fulfillmentFields : Prisma.JsonNull,
+          displayOrder: (last._max.displayOrder ?? -1) + 1,
+        },
+      });
       await tx.auditLog.create({
         data: {
           actorId: admin.id,
@@ -54,6 +79,9 @@ export async function POST(request: Request) {
           entityId: created.id,
           afterValue: {
             ...auditInput,
+            category,
+            tags,
+            fulfillmentFieldCount: fulfillmentFields.length,
             imageConfigured: Boolean(auditImageUrl),
             displayOrder: created.displayOrder,
           },

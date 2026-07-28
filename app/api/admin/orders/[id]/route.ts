@@ -23,6 +23,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         recipientPhoneEnc: true,
         recipientAddressEnc: true,
         cashQrCodeUrl: true,
+        fulfillmentDataEnc: true,
         trackingNumber: true,
         fulfilledAt: true,
         reviewedAt: true,
@@ -31,17 +32,27 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       },
     });
     if (!order) return NextResponse.json({ error: "订单不存在" }, { status: 404 });
+    let membershipFields: Array<{ key: string; label: string; type: string; value: string }> = [];
+    if (order.fulfillmentDataEnc) {
+      try {
+        const snapshot = JSON.parse(decryptSensitive(order.fulfillmentDataEnc)) as { fields?: typeof membershipFields };
+        membershipFields = Array.isArray(snapshot.fields) ? snapshot.fields : [];
+      } catch {
+        throw new Error("会员权益资料无法解密，请检查加密密钥");
+      }
+    }
     return NextResponse.json({
       details: {
         recipientName: order.recipientName,
         recipientPhone: order.recipientPhoneEnc ? decryptSensitive(order.recipientPhoneEnc) : null,
         recipientAddress: order.recipientAddressEnc ? decryptSensitive(order.recipientAddressEnc) : null,
         cashQrCodeUrl: order.cashQrCodeUrl,
+        membershipFields,
         trackingNumber: order.trackingNumber,
         fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
         kind: order.gift.kind,
       },
-    });
+    }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无法读取订单资料" }, { status: 403 });
   }

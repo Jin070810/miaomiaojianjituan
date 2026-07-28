@@ -33,7 +33,7 @@ type RecordData = {
     totalCost: number;
     createdAt: string;
     trackingNumber: string | null;
-    gift: { name: string; kind: "PHYSICAL" | "CASH" };
+    gift: { name: string; kind: "PHYSICAL" | "CASH" | "MEMBERSHIP" };
   }>;
 };
 
@@ -179,11 +179,11 @@ export function TransferRecordsView({ onBack, data, hasMore, loadingMore, onLoad
   );
 }
 
-function orderStatusLabel(status: string, kind: "PHYSICAL" | "CASH") {
+function orderStatusLabel(status: string, kind: "PHYSICAL" | "CASH" | "MEMBERSHIP") {
   const labels: Record<string, string> = {
     PENDING: "待发放",
-    APPROVED: kind === "PHYSICAL" ? "待发放" : "正在准备",
-    FULFILLED: kind === "PHYSICAL" ? "已发货" : "已完成",
+    APPROVED: kind === "PHYSICAL" ? "待发放" : kind === "MEMBERSHIP" ? "待开通" : "正在准备",
+    FULFILLED: kind === "PHYSICAL" ? "已发货" : kind === "MEMBERSHIP" ? "已开通" : "已完成",
     REJECTED: "未通过",
     REFUNDED: "积分已退回",
   };

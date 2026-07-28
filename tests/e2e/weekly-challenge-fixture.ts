@@ -147,6 +147,8 @@ export async function cleanupWeeklyChallengeE2E() {
 }
 
 export async function login(page: import("@playwright/test").Page, kuaishouId: string) {
+  const testIp = `198.51.${100 + Math.floor(Math.random() * 50)}.${1 + Math.floor(Math.random() * 253)}`;
+  await page.setExtraHTTPHeaders({ "x-real-ip": testIp });
   await page.goto("/login");
   await page.getByLabel("快手 ID").fill(kuaishouId);
   await page.getByLabel("密码", { exact: true }).fill(e2ePassword);

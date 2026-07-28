@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleHelp,
+  ChartNoAxesCombined,
   ClipboardCheck,
   ClipboardPaste,
   Coins,
@@ -25,6 +26,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  RefreshCw,
   Target,
   Trophy,
   UserRound,
@@ -50,8 +52,9 @@ import { BrandMark, PageScene, StateMessage } from "./member/brand";
 import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
 import { miaoAssets } from "./member/visual-assets";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
+import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
 
-type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "ledger" | "transfers" | "orders";
+type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "ledger" | "transfers" | "orders";
 
 type DialogType = "submit" | "transfer" | "redeem" | "profile" | "recipient" | "password" | null;
 
@@ -184,6 +187,31 @@ type DisplayGift = {
   fulfillmentFields: MembershipFieldDefinition[];
   salesCount: number;
   pinned: boolean;
+};
+
+type GrowthMetric = {
+  start: string;
+  end: string;
+  approvedVideos: number;
+  likes: number;
+  videoPoints: number;
+  averageLikes: number;
+};
+
+type GrowthData = {
+  timezone: "Asia/Shanghai";
+  generatedAt: string;
+  currentWeek: GrowthMetric;
+  previousWeekSameWindow: GrowthMetric;
+  delta: { approvedVideos: number; likes: number; videoPoints: number };
+  trend: Array<GrowthMetric & { complete: boolean }>;
+  topVideos: Array<{
+    id: string;
+    sourceUrl: string;
+    submittedAt: string;
+    likes: number | null;
+    points: number;
+  }>;
 };
 
 type MemberAward = {
@@ -407,16 +435,227 @@ function BottomNav({
   );
 }
 
+function growthDeltaLabel(current: number, previous: number, delta: number) {
+  if (previous === 0 && current > 0) return "本周开始有记录";
+  if (delta > 0) return `较上周同期 +${delta.toLocaleString()}`;
+  if (delta < 0) return `较上周同期 ${delta.toLocaleString()}`;
+  return "与上周同期持平";
+}
+
+function formatGrowthWeek(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    timeZone: "Asia/Shanghai",
+  }).format(new Date(value));
+}
+
+function GrowthSummaryCard({
+  growth,
+  loading,
+  error,
+  challenge,
+  exceptionCount,
+  onNavigate,
+  onOpen,
+  onRetry,
+}: {
+  growth: GrowthData | null;
+  loading: boolean;
+  error: string;
+  challenge: WeeklyChallengeData | null;
+  exceptionCount: number;
+  onNavigate: (view: MemberView) => void;
+  onOpen: (dialog: DialogType) => void;
+  onRetry: () => void;
+}) {
+  const action = chooseGrowthAction({
+    exceptionCount,
+    approvedVideosThisWeek: growth?.currentWeek.approvedVideos ?? null,
+    challenge: challenge ? {
+      status: challenge.status,
+      claimable: challenge.claimable,
+      claimableRewardPoints: challenge.claimableRewardPoints,
+      rewardsEnabled: challenge.rewardsEnabled,
+      qualified: challenge.progress.qualified,
+    } : null,
+  });
+  const runAction = (kind: GrowthActionKind) => {
+    if (kind === "submit") onOpen("submit");
+    else if (kind === "exceptions") onNavigate("videos");
+    else if (kind === "claim" || kind === "challenge") onNavigate("challenge");
+    else onNavigate("growth");
+  };
+
+  return (
+    <section className="growth-summary" aria-labelledby="growth-summary-title">
+      <div className="journal-section-heading ruled">
+        <h2 id="growth-summary-title">本周成长</h2>
+        {growth && <button onClick={() => onNavigate("growth")}>查看 8 周趋势</button>}
+      </div>
+      {loading && !growth ? (
+        <div className="growth-local-state" aria-label="成长数据正在加载">
+          <span className="growth-loading-bar" />
+          <small>正在整理本周表现…</small>
+        </div>
+      ) : error && !growth ? (
+        <div className="growth-local-state is-error" role="alert">
+          <span>{error}</span>
+          <button onClick={onRetry}><RefreshCw size={15} />重新加载</button>
+        </div>
+      ) : growth ? (
+        <>
+          <div className="growth-stat-grid">
+            <div>
+              <span>通过切片</span>
+              <strong>{growth.currentWeek.approvedVideos.toLocaleString()}</strong>
+              <small className={growth.delta.approvedVideos < 0 ? "is-down" : ""}>
+                {growthDeltaLabel(growth.currentWeek.approvedVideos, growth.previousWeekSameWindow.approvedVideos, growth.delta.approvedVideos)}
+              </small>
+            </div>
+            <div>
+              <span>点赞总量</span>
+              <strong>{growth.currentWeek.likes.toLocaleString()}</strong>
+              <small className={growth.delta.likes < 0 ? "is-down" : ""}>
+                {growthDeltaLabel(growth.currentWeek.likes, growth.previousWeekSameWindow.likes, growth.delta.likes)}
+              </small>
+            </div>
+            <div>
+              <span>视频积分</span>
+              <strong>{growth.currentWeek.videoPoints.toLocaleString()}</strong>
+              <small className={growth.delta.videoPoints < 0 ? "is-down" : ""}>
+                {growthDeltaLabel(growth.currentWeek.videoPoints, growth.previousWeekSameWindow.videoPoints, growth.delta.videoPoints)}
+              </small>
+            </div>
+          </div>
+          {error && <div className="growth-stale-note">暂时无法刷新，正在显示上次加载的数据。</div>}
+        </>
+      ) : null}
+      <button className="growth-next-action" onClick={() => runAction(action.kind)}>
+        <span><Sparkles size={19} /></span>
+        <div><small>下一步建议</small><strong>{action.title}</strong><p>{action.description}</p></div>
+        <ChevronRight size={21} />
+      </button>
+    </section>
+  );
+}
+
+function GrowthView({
+  growth,
+  loading,
+  error,
+  onBack,
+  onRetry,
+}: {
+  growth: GrowthData | null;
+  loading: boolean;
+  error: string;
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  const maxVideos = Math.max(1, ...(growth?.trend.map((row) => row.approvedVideos) ?? []));
+  const maxLikes = Math.max(1, ...(growth?.trend.map((row) => row.likes) ?? []));
+  const maxPoints = Math.max(1, ...(growth?.trend.map((row) => row.videoPoints) ?? []));
+  return (
+    <div className="member-content journal-record-page growth-page">
+      <header className="record-header">
+        <button aria-label="返回" onClick={onBack}><ArrowLeft size={28} /></button>
+        <h1>成长记录</h1>
+        <span aria-hidden="true" />
+      </header>
+      {loading && !growth ? (
+        <div className="growth-page-state"><ChartNoAxesCombined size={34} /><strong>正在整理最近 8 周</strong><span>视频、点赞和积分趋势马上就好。</span></div>
+      ) : error && !growth ? (
+        <div className="growth-page-state is-error" role="alert">
+          <ChartNoAxesCombined size={34} />
+          <strong>成长记录暂时没加载出来</strong>
+          <span>{error}</span>
+          <button className="journal-primary" onClick={onRetry}><RefreshCw size={17} />再试一次</button>
+        </div>
+      ) : growth ? (
+        <>
+          <section className="growth-hero">
+            <span>本周截至现在</span>
+            <strong>{growth.currentWeek.approvedVideos.toLocaleString()} 条切片</strong>
+            <p>{growth.currentWeek.likes.toLocaleString()} 赞 · {growth.currentWeek.videoPoints.toLocaleString()} 视频积分 · 平均 {growth.currentWeek.averageLikes.toLocaleString()} 赞</p>
+          </section>
+          {error && <div className="growth-stale-note">刷新失败，以下为上次成功加载的数据。 <button onClick={onRetry}>重试</button></div>}
+          <section className="growth-comparison">
+            <div className="journal-section-heading ruled"><h2>相比上周同期</h2></div>
+            <div className="growth-comparison-grid">
+              {[
+                ["通过切片", growth.currentWeek.approvedVideos, growth.previousWeekSameWindow.approvedVideos, growth.delta.approvedVideos],
+                ["点赞总量", growth.currentWeek.likes, growth.previousWeekSameWindow.likes, growth.delta.likes],
+                ["视频积分", growth.currentWeek.videoPoints, growth.previousWeekSameWindow.videoPoints, growth.delta.videoPoints],
+              ].map(([label, current, previous, delta]) => (
+                <article key={String(label)}>
+                  <span>{label}</span>
+                  <strong>{Number(current).toLocaleString()}</strong>
+                  <small className={Number(delta) < 0 ? "is-down" : ""}>{growthDeltaLabel(Number(current), Number(previous), Number(delta))}</small>
+                  <p>上周同期 {Number(previous).toLocaleString()}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+          <section className="growth-trend">
+            <div className="journal-section-heading ruled"><h2>最近 8 周</h2><span>当前周仍在进行</span></div>
+            <div className="growth-trend-legend"><span><i className="videos" />切片</span><span><i className="likes" />点赞</span><span><i className="points" />积分</span></div>
+            <div className="growth-trend-list">
+              {growth.trend.map((week) => (
+                <article key={week.start} className={!week.complete ? "is-current" : ""}>
+                  <div className="growth-week-label"><strong>{formatGrowthWeek(week.start)}</strong><small>{week.complete ? "已结束" : "本周"}</small></div>
+                  <div className="growth-bars">
+                    <span><i className="videos" style={{ width: `${(week.approvedVideos / maxVideos) * 100}%` }} /></span>
+                    <span><i className="likes" style={{ width: `${(week.likes / maxLikes) * 100}%` }} /></span>
+                    <span><i className="points" style={{ width: `${(week.videoPoints / maxPoints) * 100}%` }} /></span>
+                  </div>
+                  <div className="growth-week-values">
+                    <b>{week.approvedVideos.toLocaleString()} 条</b>
+                    <b>{week.likes.toLocaleString()} 赞</b>
+                    <b>{week.videoPoints.toLocaleString()} 分</b>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+          <section className="growth-top-videos">
+            <div className="journal-section-heading ruled"><h2>本月高光切片</h2><span>按点赞排序</span></div>
+            {growth.topVideos.length ? (
+              <div className="growth-top-list">
+                {growth.topVideos.map((video, index) => (
+                  <article key={video.id}>
+                    <span>{index + 1}</span>
+                    <div><strong>{(video.likes ?? 0).toLocaleString()} 赞</strong><small>{formatDate(video.submittedAt)} · {video.points.toLocaleString()} 积分</small></div>
+                    <p title={video.sourceUrl}>{video.sourceUrl}</p>
+                  </article>
+                ))}
+              </div>
+            ) : <StateMessage {...miaoAssets.states.first}>本月还没有通过的切片，从第一条开始吧</StateMessage>}
+          </section>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function HomeView({
   onNavigate,
   onOpen,
   challenge,
   data,
+  growth,
+  growthLoading,
+  growthError,
+  onRetryGrowth,
 }: {
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
   challenge: WeeklyChallengeData | null;
   data: DashboardData;
+  growth: GrowthData | null;
+  growthLoading: boolean;
+  growthError: string;
+  onRetryGrowth: () => void;
 }) {
   const recentLedger = data.ledger.slice(0, 3);
   const progressPercent = challenge ? challengeProgressPercent(challenge) : 0;
@@ -436,6 +675,17 @@ function HomeView({
           </button>
         </div>
       </section>
+
+      <GrowthSummaryCard
+        growth={growth}
+        loading={growthLoading}
+        error={growthError}
+        challenge={challenge}
+        exceptionCount={data.summary.videoCounts.exception}
+        onNavigate={onNavigate}
+        onOpen={onOpen}
+        onRetry={onRetryGrowth}
+      />
 
       <section className={`challenge-entry ${challenge ? "" : "is-empty"}`} aria-labelledby="weekly-challenge-title">
         <div className="challenge-entry-head">
@@ -1109,6 +1359,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
       <section className="journal-section">
         <div className="journal-section-heading ruled"><h2>记录</h2></div>
         <div className="journal-menu">
+        <button aria-label="成长记录" onClick={() => onNavigate("growth")}><span><ChartNoAxesCombined size={19} />成长记录</span><ChevronRight size={18} /></button>
         <button aria-label="积分记录" onClick={() => onNavigate("ledger")}><span><WalletCards size={19} />积分记录</span><ChevronRight size={18} /></button>
         <button aria-label="送积分记录" onClick={() => onNavigate("transfers")}><span><Send size={19} />送积分记录</span><ChevronRight size={18} /></button>
         <button aria-label="兑换记录" onClick={() => onNavigate("orders")}><span><PackageCheck size={19} />兑换记录</span><ChevronRight size={18} /></button>
@@ -1625,6 +1876,10 @@ export default function MemberApp() {
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [weeklyChallenge, setWeeklyChallenge] = useState<WeeklyChallengeData | null>(null);
+  const [growth, setGrowth] = useState<GrowthData | null>(null);
+  const [growthLoading, setGrowthLoading] = useState(true);
+  const [growthError, setGrowthError] = useState("");
+  const [growthRevision, setGrowthRevision] = useState(0);
   const [loadError, setLoadError] = useState("");
   const [revision, setRevision] = useState(0);
   const [historyMore, setHistoryMore] = useState({ ledger: false, videos: false, transfers: false, orders: false });
@@ -1666,6 +1921,34 @@ export default function MemberApp() {
       });
     return () => { active = false; };
   }, [revision, router]);
+
+  useEffect(() => {
+    let active = true;
+    setGrowthLoading(true);
+    fetch("/api/member/growth", { cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 401) {
+          router.replace("/login");
+          return null;
+        }
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error ?? "成长数据加载失败");
+        return result as GrowthData;
+      })
+      .then((result) => {
+        if (active && result) {
+          setGrowth(result);
+          setGrowthError("");
+        }
+      })
+      .catch((error) => {
+        if (active) setGrowthError(error instanceof Error ? error.message : "成长数据加载失败");
+      })
+      .finally(() => {
+        if (active) setGrowthLoading(false);
+      });
+    return () => { active = false; };
+  }, [growthRevision, revision, router]);
 
   const giftRows = useMemo<DisplayGift[]>(() => {
     if (!dashboard) return [];
@@ -1732,11 +2015,12 @@ export default function MemberApp() {
     if (view === "rank") return <RankView data={dashboard} />;
     if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { clearNotificationPromptSession(); await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
     if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
+    if (view === "growth") return <GrowthView growth={growth} loading={growthLoading} error={growthError} onBack={() => handleNavigate("home")} onRetry={() => setGrowthRevision((value) => value + 1)} />;
     if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} />;
     if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} />;
     if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} />;
-    return <HomeView data={dashboard} challenge={weeklyChallenge} onNavigate={handleNavigate} onOpen={openDialog} />;
-  }, [dashboard, giftRows, router, view, weeklyChallenge]);
+    return <HomeView data={dashboard} challenge={weeklyChallenge} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
+  }, [dashboard, giftRows, growth, growthError, growthLoading, router, view, weeklyChallenge]);
 
   if (!dashboard) {
     return (
@@ -1760,8 +2044,8 @@ export default function MemberApp() {
     setDialog(null);
     setRevision((value) => value + 1);
   };
-  const secondaryView = ["challenge", "ledger", "transfers", "orders"].includes(view);
-  const navigationView: MemberView = view === "challenge" || view === "ledger"
+  const secondaryView = ["challenge", "growth", "ledger", "transfers", "orders"].includes(view);
+  const navigationView: MemberView = view === "challenge" || view === "growth" || view === "ledger"
     ? "home"
     : view === "transfers" || view === "orders"
       ? "profile"

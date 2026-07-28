@@ -259,6 +259,33 @@ type AdminWeeklyChallengeDetail = AdminWeeklyChallengePeriod & {
     error: string | null;
   }>;
 };
+type AdminMemberGrowth = {
+  timezone: "Asia/Shanghai";
+  generatedAt: string;
+  activeMembers: number;
+  currentWeek: {
+    submitters: number;
+    approvedSubmitters: number;
+    approvedVideos: number;
+    likes: number;
+    videoPoints: number;
+  };
+  previousWeekSameWindow: {
+    submitters: number;
+    approvedSubmitters: number;
+    approvedVideos: number;
+    likes: number;
+    videoPoints: number;
+  };
+  delta: {
+    submitters: number;
+    approvedSubmitters: number;
+    approvedVideos: number;
+    likes: number;
+    videoPoints: number;
+  };
+  challenge: { covered: number; completed: number; claimed: number };
+};
 type AdminData = {
   metrics: { users: number; pendingVideos: number; activeGifts: number; pendingOrders: number; totalBalance: number };
   pointsTrend: Array<{ label: string; videoReward: number; adminAdjustment: number }>;
@@ -283,6 +310,7 @@ type AdminData = {
   pointUsersPagination: AdminPagination;
   ordersPagination: AdminPagination;
   auditPagination: AdminPagination;
+  memberGrowth: AdminMemberGrowth | null;
 };
 
 const emptyPagination: AdminPagination = { page: 1, take: 50, total: 0, pages: 1 };
@@ -300,6 +328,7 @@ function initialAdminData(dashboard: {
   pointsTrend?: AdminData["pointsTrend"];
   audit?: AdminAuditRow[];
   recentVideos?: AdminVideo[];
+  memberGrowth?: AdminMemberGrowth;
 }): AdminData {
   return {
     metrics: dashboard.metrics,
@@ -325,6 +354,7 @@ function initialAdminData(dashboard: {
     pointUsersPagination: emptyPagination,
     ordersPagination: emptyPagination,
     auditPagination: { ...emptyPagination, total: dashboard.audit?.length ?? 0 },
+    memberGrowth: dashboard.memberGrowth ?? null,
   };
 }
 
@@ -340,6 +370,12 @@ function formatAdminToday() {
     year: "numeric",
     timeZone: "Asia/Shanghai",
   }).format(new Date()).toUpperCase().replace(",", " ·");
+}
+
+function adminGrowthDelta(value: number) {
+  if (value > 0) return `较上周同期 +${value.toLocaleString()}`;
+  if (value < 0) return `较上周同期 ${value.toLocaleString()}`;
+  return "与上周同期持平";
 }
 
 function videoStatusLabel(status: string) {
@@ -531,6 +567,28 @@ function Overview({ data }: { data: AdminData }) {
           <button className="secondary-button full-button">查看全部待处理 <ChevronRight size={16} /></button>
         </section>
       </div>
+      {data.memberGrowth && (
+        <section className="admin-panel member-growth-panel">
+          <div className="admin-panel-head">
+            <div><h2>本周成员参与</h2><p>按上海时间与上周同期比较，只读展示，不触发积分操作</p></div>
+            <BarChart3 size={19} color="#6850ab" />
+          </div>
+          <div className="member-growth-admin-grid">
+            <div><span>有效成员</span><strong>{data.memberGrowth.activeMembers.toLocaleString()}</strong><small>当前有效普通成员</small></div>
+            <div><span>提交人数</span><strong>{data.memberGrowth.currentWeek.submitters.toLocaleString()}</strong><small className={data.memberGrowth.delta.submitters < 0 ? "trend-down" : "trend-up"}>{adminGrowthDelta(data.memberGrowth.delta.submitters)}</small></div>
+            <div><span>通过人数</span><strong>{data.memberGrowth.currentWeek.approvedSubmitters.toLocaleString()}</strong><small className={data.memberGrowth.delta.approvedSubmitters < 0 ? "trend-down" : "trend-up"}>{adminGrowthDelta(data.memberGrowth.delta.approvedSubmitters)}</small></div>
+            <div><span>通过切片</span><strong>{data.memberGrowth.currentWeek.approvedVideos.toLocaleString()}</strong><small className={data.memberGrowth.delta.approvedVideos < 0 ? "trend-down" : "trend-up"}>{adminGrowthDelta(data.memberGrowth.delta.approvedVideos)}</small></div>
+            <div><span>点赞量</span><strong>{data.memberGrowth.currentWeek.likes.toLocaleString()}</strong><small className={data.memberGrowth.delta.likes < 0 ? "trend-down" : "trend-up"}>{adminGrowthDelta(data.memberGrowth.delta.likes)}</small></div>
+            <div><span>视频积分</span><strong>{data.memberGrowth.currentWeek.videoPoints.toLocaleString()}</strong><small className={data.memberGrowth.delta.videoPoints < 0 ? "trend-down" : "trend-up"}>{adminGrowthDelta(data.memberGrowth.delta.videoPoints)}</small></div>
+          </div>
+          <div className="member-growth-challenge">
+            <span>本周挑战</span>
+            <strong>{data.memberGrowth.challenge.covered.toLocaleString()} 人覆盖</strong>
+            <span>{data.memberGrowth.challenge.completed.toLocaleString()} 人达标</span>
+            <span>{data.memberGrowth.challenge.claimed.toLocaleString()} 人已领取</span>
+          </div>
+        </section>
+      )}
       <section className="admin-panel audit-panel">
         <div className="admin-panel-head"><div><h2>最近视频记录</h2><p>实时查看自动入账和异常状态</p></div><button className="text-button">查看全部 <ChevronRight size={15} /></button></div>
         <AuditTable rows={data.recentVideos} compact />
@@ -1561,8 +1619,8 @@ export default function AdminPage() {
       setData((current) => {
         if (!current) return current;
         if (section === "overview") {
-          const dashboard = payload.dashboard as { metrics: AdminData["metrics"]; pointsTrend?: AdminData["pointsTrend"]; audit?: AdminAuditRow[]; recentVideos?: AdminVideo[] };
-          return { ...current, metrics: dashboard.metrics, pointsTrend: dashboard.pointsTrend ?? [], audit: dashboard.audit ?? current.audit, recentVideos: dashboard.recentVideos ?? current.recentVideos };
+          const dashboard = payload.dashboard as { metrics: AdminData["metrics"]; pointsTrend?: AdminData["pointsTrend"]; audit?: AdminAuditRow[]; recentVideos?: AdminVideo[]; memberGrowth?: AdminMemberGrowth };
+          return { ...current, metrics: dashboard.metrics, pointsTrend: dashboard.pointsTrend ?? [], audit: dashboard.audit ?? current.audit, recentVideos: dashboard.recentVideos ?? current.recentVideos, memberGrowth: dashboard.memberGrowth ?? null };
         }
         if (section === "videos") {
           const videos = payload.videos as { videos?: AdminVideo[]; pagination?: AdminPagination };

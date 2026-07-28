@@ -107,6 +107,16 @@ v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新
 
 首周值守见 [`docs/V1.4-FIRST-WEEK-OPERATIONS.md`](docs/V1.4-FIRST-WEEK-OPERATIONS.md)，验收和回滚见 [`docs/ACCEPTANCE-V1.4-STABLE-OPERATIONS.md`](docs/ACCEPTANCE-V1.4-STABLE-OPERATIONS.md)。
 
+## v1.6 成员成长反馈
+
+- 成员首页异步展示本周通过切片、点赞量和视频积分，以及相对上周同期的整数变化；成长接口失败不会阻塞首页，卡片可局部重试。
+- 成长记录页展示最近 8 周趋势、本周与上周同期对比、本月点赞最高的 3 条已通过切片，并覆盖空数据、下降、持平和超大数字状态。
+- 下一步建议按“领取挑战奖励 -> 处理异常切片 -> 继续周挑战 -> 提交本周第一条 -> 查看成长记录”的固定优先级生成，不引入额外积分奖励。
+- 管理后台概览只读展示本周提交人数、通过人数、通过视频、点赞、视频积分及周挑战覆盖/达标/领取情况。
+- 所有统计使用 `Asia/Shanghai` 周一 00:00 周界，按视频 `submittedAt` 归属，只统计 `APPROVED` 视频；本版不增加 migration，不改变积分、榜单或周挑战事务。
+
+完整口径、验收和回滚步骤见 [`docs/ACCEPTANCE-V1.6-MEMBER-GROWTH.md`](docs/ACCEPTANCE-V1.6-MEMBER-GROWTH.md)。
+
 ## 数据安全
 
 - 密码使用 Argon2id，Session 使用 HttpOnly、Secure（生产环境）和 SameSite Cookie。

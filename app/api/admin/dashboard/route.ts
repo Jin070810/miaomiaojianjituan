@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { presentAuditLog } from "@/lib/audit";
+import { getAdminMemberGrowth } from "@/lib/member-growth";
 
 function shanghaiDateKey(value: Date) {
   const parts = new Intl.DateTimeFormat("en", {
@@ -27,7 +28,7 @@ export async function GET() {
   try {
     await requireAdmin();
     const trendStart = new Date(Date.now() - 6 * 86_400_000);
-    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts, recentVideos] = await Promise.all([
+    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts, recentVideos, memberGrowth] = await Promise.all([
       db.user.count(),
       db.videoAppeal.count({ where: { status: "PENDING" } }),
       db.gift.count({ where: { active: true } }),
@@ -43,6 +44,7 @@ export async function GET() {
         take: 5,
         include: { user: { select: { kuaishouId: true, nickname: true } } },
       }),
+      getAdminMemberGrowth(),
     ]);
     const trendLedger = await db.pointLedger.findMany({
       where: {
@@ -73,6 +75,7 @@ export async function GET() {
       audit: recentAudit.map((row) => presentAuditLog(row)),
       recentVideos,
       pointsTrend,
+      memberGrowth,
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });

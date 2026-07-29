@@ -53,6 +53,7 @@ import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member
 import { miaoAssets } from "./member/visual-assets";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
 import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
+import { fetchMemberJson, MemberFetchError } from "@/lib/member-fetch";
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "ledger" | "transfers" | "orders";
 
@@ -130,6 +131,9 @@ type DashboardData = {
   }>;
   leaderboard: Array<{ rank: number; userId: string; kuaishouId: string; nickname: string; avatarUrl: string | null; points: number; current: boolean }>;
 };
+
+type DeferredSection = "videos" | "gifts" | "ledger" | "transfers" | "orders";
+type DeferredState = "idle" | "loading" | "ready" | "error";
 
 type WeeklyChallengeData = {
   id: string;
@@ -642,6 +646,9 @@ function HomeView({
   onNavigate,
   onOpen,
   challenge,
+  challengeLoading,
+  challengeError,
+  onRetryChallenge,
   data,
   growth,
   growthLoading,
@@ -651,6 +658,9 @@ function HomeView({
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
   challenge: WeeklyChallengeData | null;
+  challengeLoading: boolean;
+  challengeError: string;
+  onRetryChallenge: () => void;
   data: DashboardData;
   growth: GrowthData | null;
   growthLoading: boolean;
@@ -695,7 +705,11 @@ function HomeView({
           </div>
           {challenge && <span className={`challenge-status status-${challenge.status.toLowerCase()}`}>{challengeStatusLabel(challenge)}</span>}
         </div>
-        {challenge ? (
+        {challengeLoading ? (
+          <div className="growth-local-state" aria-label="周挑战正在加载"><span className="growth-loading-bar" /><small>正在整理本周任务…</small></div>
+        ) : challengeError ? (
+          <div className="growth-local-state is-error" role="alert"><span>{challengeError}</span><button onClick={onRetryChallenge}><RefreshCw size={15} />重新加载</button></div>
+        ) : challenge ? (
           <>
             <button className="challenge-entry-main" onClick={() => onNavigate("challenge")} aria-label={`查看本周任务：${challenge.title}`}>
               <span>
@@ -753,11 +767,15 @@ function HomeView({
 
 function ChallengeView({
   challenge,
+  error,
+  onRetry,
   onBack,
   onNavigate,
   onClaimChallenge,
 }: {
   challenge: WeeklyChallengeData | null;
+  error: string;
+  onRetry: () => void;
   onBack: () => void;
   onNavigate: (view: MemberView) => void;
   onClaimChallenge: () => Promise<void>;
@@ -778,6 +796,14 @@ function ChallengeView({
     }
   }
 
+  if (error) {
+    return (
+      <div className="member-content challenge-page journal-record-page">
+        <header className="record-header"><button aria-label="返回首页" onClick={onBack}><ArrowLeft size={28} /></button><h1>本周任务</h1><span aria-hidden="true" /></header>
+        <div className="growth-page-state is-error" role="alert"><WarningCircle size={34} /><strong>本周任务暂时没加载出来</strong><span>{error}</span><button className="journal-primary" onClick={onRetry}><RefreshCw size={17} />再试一次</button></div>
+      </div>
+    );
+  }
   if (!challenge) {
     return (
       <div className="member-content challenge-page journal-record-page">
@@ -1193,8 +1219,7 @@ function AwardClaimDialog({ award, onClose, onClaimed }: { award: MemberAward; o
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   useEffect(() => {
-    fetch("/api/profile/recipient", { cache: "no-store" })
-      .then((response) => response.json())
+    fetchMemberJson<{ profile: { recipientName?: string; phone?: string; address?: string } | null }>("/api/profile/recipient", "收货信息加载失败")
       .then((result) => {
         setRecipientName(result.profile?.recipientName ?? "");
         setPhone(result.profile?.phone ?? "");
@@ -1249,10 +1274,8 @@ function RankView({ data }: { data: DashboardData }) {
     let active = true;
     setLoading(true);
     setError("");
-    fetch(`/api/rankings?type=${kind}`, { cache: "no-store" })
-      .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? "榜单加载失败");
+    fetchMemberJson<{ rankings: typeof ranking }>(`/api/rankings?type=${kind}`, "榜单加载失败")
+      .then((result) => {
         if (active) setRanking(result.rankings ?? []);
       })
       .catch((loadError) => {
@@ -1266,15 +1289,13 @@ function RankView({ data }: { data: DashboardData }) {
     };
   }, [kind]);
   useEffect(() => {
-    fetch("/api/rankings/awards", { cache: "no-store" })
-      .then((response) => response.json())
+    fetchMemberJson<{ awards: MemberAward[] }>("/api/rankings/awards", "榜单奖励加载失败")
       .then((result) => setAwards(result.awards ?? []))
       .catch(() => undefined);
   }, []);
   async function refreshAwards() {
-    const response = await fetch("/api/rankings/awards", { cache: "no-store" });
-    const result = await response.json();
-    if (response.ok) setAwards(result.awards ?? []);
+    const result = await fetchMemberJson<{ awards: MemberAward[] }>("/api/rankings/awards", "榜单奖励加载失败").catch(() => null);
+    if (result) setAwards(result.awards ?? []);
   }
   return (
     <div className="member-content journal-page">
@@ -1462,10 +1483,8 @@ function RecipientProfileDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    fetch("/api/profile/recipient", { cache: "no-store" })
-      .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? "收货信息加载失败");
+    fetchMemberJson<{ profile: { recipientName?: string; phone?: string; address?: string; cashQrCodeUrl?: string } | null }>("/api/profile/recipient", "收货信息加载失败")
+      .then((result) => {
         setRecipientName(result.profile?.recipientName ?? "");
         setPhone(result.profile?.phone ?? "");
         setAddress(result.profile?.address ?? "");
@@ -1656,7 +1675,7 @@ function SubmitDialog({ onClose, onComplete }: { onClose: () => void; onComplete
   );
 }
 
-function TransferDialog({ onClose, balance }: { onClose: () => void; balance: number }) {
+function TransferDialog({ onClose, onComplete, balance }: { onClose: () => void; onComplete: () => void; balance: number }) {
   const [done, setDone] = useState(false);
   const [receiverKuaishouId, setReceiverKuaishouId] = useState("");
   const [receiver, setReceiver] = useState<{ kuaishouId: string; nickname: string } | null>(null);
@@ -1670,9 +1689,7 @@ function TransferDialog({ onClose, balance }: { onClose: () => void; balance: nu
     setSubmitting(true);
     setError("");
     try {
-      const response = await fetch(`/api/members/lookup?kuaishouId=${encodeURIComponent(receiverKuaishouId)}`, { cache: "no-store" });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "未找到收款成员");
+      const result = await fetchMemberJson<{ member: { kuaishouId: string; nickname: string } }>(`/api/members/lookup?kuaishouId=${encodeURIComponent(receiverKuaishouId)}`, "未找到收款成员");
       setReceiver(result.member);
     } catch (lookupError) {
       setReceiver(null);
@@ -1693,6 +1710,7 @@ function TransferDialog({ onClose, balance }: { onClose: () => void; balance: nu
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "转账失败");
       setDone(true);
+      onComplete();
     } catch (transferError) {
       setError(transferError instanceof Error ? transferError.message : "转账失败");
     } finally {
@@ -1727,6 +1745,30 @@ function TransferDialog({ onClose, balance }: { onClose: () => void; balance: nu
   );
 }
 
+function DeferredPage({
+  state,
+  error,
+  onRetry,
+  children,
+}: {
+  state: DeferredState;
+  error: string;
+  onRetry: () => void;
+  children: React.ReactNode;
+}) {
+  if (state === "ready") return <>{children}</>;
+  return (
+    <div className="member-content journal-page">
+      <div className={`growth-page-state ${state === "error" ? "is-error" : ""}`} role={state === "error" ? "alert" : "status"}>
+        {state === "error" ? <WarningCircle size={34} /> : <Clock size={34} />}
+        <strong>{state === "error" ? "内容暂时没加载出来" : "正在加载…"}</strong>
+        <span>{state === "error" ? error : "你可以稍后查看，首页和提交切片不受影响。"}</span>
+        {state === "error" && <button className="journal-primary" onClick={onRetry}><RefreshCw size={17} />再试一次</button>}
+      </div>
+    </div>
+  );
+}
+
 function RedeemDialog({
   gift,
   onClose,
@@ -1749,10 +1791,8 @@ function RedeemDialog({
   useEffect(() => {
     if (gift?.kind === "MEMBERSHIP") return;
     let active = true;
-    fetch("/api/profile/recipient", { cache: "no-store" })
-      .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? "收货信息加载失败");
+    fetchMemberJson<{ profile: { recipientName?: string; phone?: string; address?: string; cashQrCodeUrl?: string } | null }>("/api/profile/recipient", "收货信息加载失败")
+      .then((result) => {
         if (active) {
           setRecipientName(result.profile?.recipientName ?? "");
           setPhone(result.profile?.phone ?? "");
@@ -1876,79 +1916,150 @@ export default function MemberApp() {
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [weeklyChallenge, setWeeklyChallenge] = useState<WeeklyChallengeData | null>(null);
+  const [challengeRevision, setChallengeRevision] = useState(0);
+  const [challengeLoading, setChallengeLoading] = useState(true);
+  const [challengeError, setChallengeError] = useState("");
   const [growth, setGrowth] = useState<GrowthData | null>(null);
   const [growthLoading, setGrowthLoading] = useState(true);
   const [growthError, setGrowthError] = useState("");
   const [growthRevision, setGrowthRevision] = useState(0);
   const [loadError, setLoadError] = useState("");
-  const [revision, setRevision] = useState(0);
+  const [homeRevision, setHomeRevision] = useState(0);
+  const [sectionStates, setSectionStates] = useState<Record<DeferredSection, DeferredState>>({ videos: "idle", gifts: "idle", ledger: "idle", transfers: "idle", orders: "idle" });
+  const [sectionErrors, setSectionErrors] = useState<Record<DeferredSection, string>>({ videos: "", gifts: "", ledger: "", transfers: "", orders: "" });
   const [historyMore, setHistoryMore] = useState({ ledger: false, videos: false, transfers: false, orders: false });
   const [historyLoading, setHistoryLoading] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      fetch("/api/dashboard", { cache: "no-store" }),
-      fetch("/api/weekly-challenges/current", { cache: "no-store" }),
-    ])
-      .then(async ([response, challengeResponse]) => {
-        if (response.status === 401 || challengeResponse.status === 401) {
-          router.replace("/login");
-          return null;
-        }
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? "数据加载失败");
-        const challengeResult = await challengeResponse.json();
-        if (!challengeResponse.ok) throw new Error(challengeResult.error ?? "周挑战加载失败");
-        return { dashboard: result as DashboardData, challenge: challengeResult.challenge as WeeklyChallengeData | null };
-      })
+    fetchMemberJson<Pick<DashboardData, "user" | "ledger"> & { summary: Pick<DashboardData["summary"], "approvedVideos" | "rank" | "videoCounts"> }>("/api/member/home", "首页加载失败")
       .then((result) => {
-        if (active && result) {
-          setDashboard(result.dashboard);
+        if (!active) return;
+        setDashboard({
+          ...result,
+          summary: {
+            monthlyIncome: 0,
+            approvedVideos: result.summary.approvedVideos,
+            monthlyApprovedVideos: 0,
+            videoPoints: 0,
+            totalLikes: 0,
+            averageLikes: 0,
+            rank: result.summary.rank,
+            videoCounts: result.summary.videoCounts,
+          },
+          videos: [],
+          gifts: [],
+          orders: [],
+          transfers: [],
+          leaderboard: [],
+        });
+        setLoadError("");
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof MemberFetchError && error.status === 401) router.replace("/login");
+        else setLoadError(error instanceof Error ? error.message : "首页加载失败");
+      });
+    return () => { active = false; };
+  }, [homeRevision, router]);
+
+  useEffect(() => {
+    let active = true;
+    setChallengeLoading(true);
+    fetchMemberJson<{ challenge: WeeklyChallengeData | null }>("/api/weekly-challenges/current", "周挑战加载失败")
+      .then((result) => {
+        if (active) {
           setWeeklyChallenge(result.challenge);
-          setHistoryMore({
-            ledger: result.dashboard.ledger.length === 50,
-            videos: result.dashboard.videos.length === 50,
-            transfers: result.dashboard.transfers.length === 50,
-            orders: result.dashboard.orders.length === 50,
-          });
-          setLoadError("");
+          setChallengeError("");
         }
       })
       .catch((error) => {
-        if (active) setLoadError(error instanceof Error ? error.message : "数据加载失败");
+        if (error instanceof MemberFetchError && error.status === 401) router.replace("/login");
+        else if (active) setChallengeError(error instanceof Error ? error.message : "周挑战加载失败");
+      })
+      .finally(() => {
+        if (active) setChallengeLoading(false);
       });
     return () => { active = false; };
-  }, [revision, router]);
+  }, [challengeRevision, homeRevision, router]);
 
   useEffect(() => {
     let active = true;
     setGrowthLoading(true);
-    fetch("/api/member/growth", { cache: "no-store" })
-      .then(async (response) => {
-        if (response.status === 401) {
-          router.replace("/login");
-          return null;
-        }
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? "成长数据加载失败");
-        return result as GrowthData;
-      })
+    fetchMemberJson<GrowthData>("/api/member/growth", "成长数据加载失败")
       .then((result) => {
-        if (active && result) {
+        if (active) {
           setGrowth(result);
           setGrowthError("");
         }
       })
       .catch((error) => {
-        if (active) setGrowthError(error instanceof Error ? error.message : "成长数据加载失败");
+        if (!active) return;
+        if (error instanceof MemberFetchError && error.status === 401) router.replace("/login");
+        else setGrowthError(error instanceof Error ? error.message : "成长数据加载失败");
       })
       .finally(() => {
         if (active) setGrowthLoading(false);
       });
     return () => { active = false; };
-  }, [growthRevision, revision, router]);
+  }, [growthRevision, homeRevision, router]);
+
+  async function loadSection(section: DeferredSection, force = false) {
+    if (!force && ["loading", "ready"].includes(sectionStates[section])) return;
+    setSectionStates((current) => ({ ...current, [section]: "loading" }));
+    setSectionErrors((current) => ({ ...current, [section]: "" }));
+    try {
+      if (section === "videos") {
+        const result = await fetchMemberJson<{ videos: DashboardData["videos"]; pagination: { page: number; pages: number }; summary: Omit<DashboardData["summary"], "monthlyIncome" | "rank"> }>("/api/videos?page=1&take=50", "切片记录加载失败");
+        setDashboard((current) => current ? { ...current, videos: result.videos, summary: { ...current.summary, ...result.summary } } : current);
+        setHistoryMore((current) => ({ ...current, videos: result.pagination.page < result.pagination.pages }));
+      } else if (section === "gifts") {
+        const result = await fetchMemberJson<{ gifts: DashboardData["gifts"] }>("/api/gifts", "礼物屋加载失败");
+        setDashboard((current) => current ? { ...current, gifts: result.gifts } : current);
+      } else if (section === "ledger") {
+        const result = await fetchMemberJson<{ ledger: DashboardData["ledger"]; pagination: { page: number; pages: number } }>("/api/points?page=1&take=50", "积分记录加载失败");
+        setDashboard((current) => current ? { ...current, ledger: result.ledger } : current);
+        setHistoryMore((current) => ({ ...current, ledger: result.pagination.page < result.pagination.pages }));
+      } else if (section === "transfers") {
+        const result = await fetchMemberJson<{ transfers: DashboardData["transfers"]; pagination: { page: number; pages: number } }>("/api/transfers?page=1&take=50", "转账记录加载失败");
+        setDashboard((current) => current ? { ...current, transfers: result.transfers } : current);
+        setHistoryMore((current) => ({ ...current, transfers: result.pagination.page < result.pagination.pages }));
+      } else {
+        const result = await fetchMemberJson<{ orders: DashboardData["orders"]; pagination: { page: number; pages: number } }>("/api/redemptions?page=1&take=50", "兑换记录加载失败");
+        setDashboard((current) => current ? { ...current, orders: result.orders } : current);
+        setHistoryMore((current) => ({ ...current, orders: result.pagination.page < result.pagination.pages }));
+      }
+      setSectionStates((current) => ({ ...current, [section]: "ready" }));
+    } catch (error) {
+      if (error instanceof MemberFetchError && error.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      setSectionStates((current) => ({ ...current, [section]: "error" }));
+      setSectionErrors((current) => ({ ...current, [section]: error instanceof Error ? error.message : "内容加载失败" }));
+    }
+  }
+
+  useEffect(() => {
+    const section = view === "videos" ? "videos"
+      : view === "mall" ? "gifts"
+        : view === "ledger" ? "ledger"
+          : view === "transfers" ? "transfers"
+            : view === "orders" ? "orders" : null;
+    if (section) void loadSection(section);
+  // Loading is intentionally triggered only by navigation; resource state prevents duplicate reads.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  function invalidateSections(sections: DeferredSection[]) {
+    setSectionStates((current) => {
+      const next = { ...current };
+      for (const section of sections) next[section] = "idle";
+      return next;
+    });
+    setHomeRevision((value) => value + 1);
+  }
 
   const giftRows = useMemo<DisplayGift[]>(() => {
     if (!dashboard) return [];
@@ -1984,14 +2095,15 @@ export default function MemberApp() {
     const endpoint = kind === "ledger" ? "/api/points" : kind === "videos" ? "/api/videos" : kind === "transfers" ? "/api/transfers" : "/api/redemptions";
     setHistoryLoading(true);
     try {
-      const response = await fetch(`${endpoint}?page=${page}&take=50`, { cache: "no-store" });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "记录加载失败");
+      const result = await fetchMemberJson<Record<string, unknown>>(`${endpoint}?page=${page}&take=50`, "记录加载失败");
       const rows = result[kind] ?? [];
+      if (!Array.isArray(rows)) throw new Error("记录响应格式不正确");
       setDashboard((current) => current ? { ...current, [kind]: [...current[kind], ...rows] } : current);
-      setHistoryMore((current) => ({ ...current, [kind]: rows.length === 50 }));
+      const pagination = result.pagination as { page?: number; pages?: number } | undefined;
+      setHistoryMore((current) => ({ ...current, [kind]: Boolean(pagination && pagination.page && pagination.pages && pagination.page < pagination.pages) }));
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "记录加载失败");
+      if (error instanceof MemberFetchError && error.status === 401) router.replace("/login");
+      else setSectionErrors((current) => ({ ...current, [kind]: error instanceof Error ? error.message : "记录加载失败" }));
     } finally {
       setHistoryLoading(false);
     }
@@ -2005,22 +2117,23 @@ export default function MemberApp() {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error ?? "任务奖励领取失败");
-    setRevision((value) => value + 1);
+    setChallengeRevision((value) => value + 1);
+    invalidateSections(["ledger"]);
   }
 
   const page = useMemo(() => {
     if (!dashboard) return null;
-    if (view === "videos") return <VideosView onOpen={openDialog} data={dashboard} hasMore={historyMore.videos} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("videos")} />;
-    if (view === "mall") return <MallView items={giftRows} balance={dashboard.user.balance} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? giftRows[0]); openDialog(type); }} />;
+    if (view === "videos") return <DeferredPage state={sectionStates.videos} error={sectionErrors.videos} onRetry={() => void loadSection("videos", true)}><VideosView onOpen={openDialog} data={dashboard} hasMore={historyMore.videos} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("videos")} /></DeferredPage>;
+    if (view === "mall") return <DeferredPage state={sectionStates.gifts} error={sectionErrors.gifts} onRetry={() => void loadSection("gifts", true)}><MallView items={giftRows} balance={dashboard.user.balance} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? giftRows[0]); openDialog(type); }} /></DeferredPage>;
     if (view === "rank") return <RankView data={dashboard} />;
     if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { clearNotificationPromptSession(); await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
-    if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
+    if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} error={challengeError} onRetry={() => setChallengeRevision((value) => value + 1)} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
     if (view === "growth") return <GrowthView growth={growth} loading={growthLoading} error={growthError} onBack={() => handleNavigate("home")} onRetry={() => setGrowthRevision((value) => value + 1)} />;
-    if (view === "ledger") return <LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} />;
-    if (view === "transfers") return <TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} />;
-    if (view === "orders") return <RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} />;
-    return <HomeView data={dashboard} challenge={weeklyChallenge} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
-  }, [dashboard, giftRows, growth, growthError, growthLoading, router, view, weeklyChallenge]);
+    if (view === "ledger") return <DeferredPage state={sectionStates.ledger} error={sectionErrors.ledger} onRetry={() => void loadSection("ledger", true)}><LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} /></DeferredPage>;
+    if (view === "transfers") return <DeferredPage state={sectionStates.transfers} error={sectionErrors.transfers} onRetry={() => void loadSection("transfers", true)}><TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} /></DeferredPage>;
+    if (view === "orders") return <DeferredPage state={sectionStates.orders} error={sectionErrors.orders} onRetry={() => void loadSection("orders", true)}><RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} /></DeferredPage>;
+    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
+  }, [challengeError, challengeLoading, dashboard, giftRows, growth, growthError, growthLoading, historyLoading, historyMore, router, sectionErrors, sectionStates, view, weeklyChallenge]);
 
   if (!dashboard) {
     return (
@@ -2032,7 +2145,7 @@ export default function MemberApp() {
               <PageScene {...miaoAssets.states.failed} />
               <strong>页面暂时没加载出来</strong>
               <span>{loadError}，可以再试一次。</span>
-              <button className="primary-button" onClick={() => setRevision((value) => value + 1)}>再试一次</button>
+              <button className="primary-button" onClick={() => setHomeRevision((value) => value + 1)}>再试一次</button>
             </div>
           ) : <div className="loading-line" aria-label="正在加载" />}
         </div>
@@ -2042,7 +2155,6 @@ export default function MemberApp() {
 
   const closeDialog = () => {
     setDialog(null);
-    setRevision((value) => value + 1);
   };
   const secondaryView = ["challenge", "growth", "ledger", "transfers", "orders"].includes(view);
   const navigationView: MemberView = view === "challenge" || view === "growth" || view === "ledger"
@@ -2070,9 +2182,9 @@ export default function MemberApp() {
         {page}
         <BottomNav active={navigationView} onChange={handleNavigate} />
       </div>
-      {dialog === "submit" && <SubmitDialog onClose={closeDialog} onComplete={() => { closeDialog(); handleNavigate("videos"); }} />}
-      {dialog === "transfer" && <TransferDialog balance={dashboard.user.balance} onClose={closeDialog} />}
-      {dialog === "redeem" && <RedeemDialog balance={dashboard.user.balance} gift={selectedGift ?? giftRows[0] ?? null} onClose={closeDialog} onComplete={() => { closeDialog(); handleNavigate("orders"); }} />}
+      {dialog === "submit" && <SubmitDialog onClose={closeDialog} onComplete={() => { invalidateSections(["videos", "ledger"]); closeDialog(); handleNavigate("videos"); }} />}
+      {dialog === "transfer" && <TransferDialog balance={dashboard.user.balance} onClose={closeDialog} onComplete={() => invalidateSections(["ledger", "transfers"])} />}
+      {dialog === "redeem" && <RedeemDialog balance={dashboard.user.balance} gift={selectedGift ?? giftRows[0] ?? null} onClose={closeDialog} onComplete={() => { invalidateSections(["gifts", "ledger", "orders"]); closeDialog(); handleNavigate("orders"); }} />}
       {dialog === "profile" && <ProfileEditDialog user={dashboard.user} onClose={closeDialog} />}
       {dialog === "recipient" && <RecipientProfileDialog onClose={closeDialog} />}
       {dialog === "password" && <PasswordDialog onClose={closeDialog} />}

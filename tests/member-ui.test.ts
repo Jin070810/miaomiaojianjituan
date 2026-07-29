@@ -60,8 +60,8 @@ describe("成员端品牌视觉库", () => {
   it("成功态按钮进入对应记录页", () => {
     const source = readFileSync(path.resolve(__dirname, "..", "app", "page.tsx"), "utf8");
 
-    expect(source).toContain('onComplete={() => { closeDialog(); handleNavigate("videos"); }}');
-    expect(source).toContain('onComplete={() => { closeDialog(); handleNavigate("orders"); }}');
+    expect(source).toContain('invalidateSections(["videos", "ledger"]); closeDialog(); handleNavigate("videos");');
+    expect(source).toContain('invalidateSections(["gifts", "ledger", "orders"]); closeDialog(); handleNavigate("orders");');
   });
 
   it("商城提供综合、销量和价格排序入口", () => {

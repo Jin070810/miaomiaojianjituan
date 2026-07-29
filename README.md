@@ -117,6 +117,13 @@ v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新
 - 管理后台概览只读展示本周提交人数、通过人数、通过视频、点赞、视频积分及周挑战覆盖/达标/领取情况。
 - 所有统计使用 `Asia/Shanghai` 周一 00:00 周界，按视频 `submittedAt` 归属，只统计 `APPROVED` 视频；本版不增加 migration，不改变积分、榜单或周挑战事务。
 
+## v1.7 成员端可靠首屏
+
+- 登录后的首页只加载成员必要资料、积分摘要和最近动态；周挑战与成长卡片独立加载，单个接口超时或失败不会阻止提交切片。
+- 切片、礼物、积分、转账和兑换记录按首次进入页面加载并缓存，页面级失败可单独重试。
+- 成员端只读请求统一在 10 秒后取消并显示可重试提示；`GET /api/dashboard` 保持兼容，`GET /api/videos` 新增可选统计摘要字段。
+- 完整验收与回滚步骤见 [`docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md`](docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md)。
+
 完整口径、验收和回滚步骤见 [`docs/ACCEPTANCE-V1.6-MEMBER-GROWTH.md`](docs/ACCEPTANCE-V1.6-MEMBER-GROWTH.md)。
 
 ## 数据安全

@@ -6,7 +6,7 @@ import { assertSameOrigin, getClientIp } from "@/lib/security";
 
 const schema = z.object({
   active: z.boolean().optional(),
-  role: z.enum(["MEMBER", "ADMIN"]).optional(),
+  role: z.enum(["MEMBER", "REVIEWER", "ADMIN"]).optional(),
   guildStatus: z.string().trim().max(30).nullable().optional(),
   invited: z.boolean().optional(),
 });
@@ -20,8 +20,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const before = await db.user.findUnique({ where: { id } });
     if (!before) return NextResponse.json({ error: "成员不存在" }, { status: 404 });
     if (before.id === admin.id && input.active === false) return NextResponse.json({ error: "不能停用当前管理员账号" }, { status: 400 });
-    if (before.id === admin.id && input.role === "MEMBER") return NextResponse.json({ error: "不能移除当前管理员自己的权限" }, { status: 400 });
-    if (before.role === "ADMIN" && input.role === "MEMBER") {
+    if (before.id === admin.id && input.role !== undefined && input.role !== "ADMIN") return NextResponse.json({ error: "不能移除当前管理员自己的权限" }, { status: 400 });
+    if (before.role === "ADMIN" && input.role !== undefined && input.role !== "ADMIN") {
       const activeAdmins = await db.user.count({ where: { role: "ADMIN", active: true } });
       if (activeAdmins <= 1) return NextResponse.json({ error: "系统必须至少保留一个启用的管理员" }, { status: 400 });
     }

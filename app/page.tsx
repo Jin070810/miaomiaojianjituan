@@ -47,6 +47,7 @@ import {
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import NotificationCenter, { clearNotificationPromptSession } from "./components/NotificationCenter";
 import { BrandMark, PageScene, StateMessage } from "./member/brand";
 import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
@@ -65,7 +66,7 @@ type DashboardData = {
     kuaishouId: string;
     nickname: string;
     avatarUrl: string | null;
-    role: "MEMBER" | "ADMIN";
+    role: "MEMBER" | "REVIEWER" | "ADMIN";
     guildStatus: string | null;
     invited: boolean;
     balance: number;
@@ -1390,6 +1391,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
         <div className="journal-section-heading ruled"><h2>账号</h2></div>
         <div className="journal-menu">
           <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
+          {data.user.role === "REVIEWER" && <Link href="/password-support" aria-label="密码协助中心"><span><ShieldCheck size={19} />密码协助中心</span><ChevronRight size={18} /></Link>}
         </div>
       </section>
       <button className="logout-button" onClick={onLogout}><LogOut size={18} />退出登录</button>

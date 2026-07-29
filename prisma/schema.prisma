@@ -9,7 +9,15 @@ datasource db {
 
 enum Role {
   MEMBER
+  REVIEWER
   ADMIN
+}
+
+enum PasswordResetRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
 }
 
 enum VideoStatus {
@@ -161,6 +169,25 @@ model User {
   operationSettings SystemSetting[]     @relation("OperationSettingUpdater")
   weeklyChallengeAssignments WeeklyChallengeAssignment[]
   weeklyRaceWins             WeeklyRaceWinner[]
+  passwordResetRequests      PasswordResetRequest[] @relation("PasswordResetTarget")
+  reviewedPasswordResetRequests PasswordResetRequest[] @relation("PasswordResetReviewer")
+}
+
+model PasswordResetRequest {
+  id                   String                     @id @default(cuid())
+  userId               String
+  proposedPasswordHash String
+  status               PasswordResetRequestStatus @default(PENDING)
+  expiresAt            DateTime
+  reviewedById         String?
+  reviewedAt           DateTime?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  user                 User                       @relation("PasswordResetTarget", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy           User?                      @relation("PasswordResetReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@index([userId, status])
 }
 
 model Session {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { memberParticipantRoles } from "@/lib/member-roles";
 
 export async function GET() {
   const user = await currentUser();
@@ -19,7 +20,7 @@ export async function GET() {
       where: { userId: user.id },
       _count: { id: true },
     }),
-    db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true } } }),
+    db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true, role: { in: memberParticipantRoles } } } }),
     db.videoSubmission.count({ where: { userId: user.id, status: "APPROVED" } }),
   ]);
   const videoCounts = videoStatusGroups.reduce(

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { db } from "./db";
 import { MAX_PERSONAL_REWARD, REWARD_POLICY_VERSION } from "./weekly-challenge-rewards";
+import { memberParticipantRoles } from "./member-roles";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -26,7 +27,7 @@ export async function prepareWeeklyChallengePeriodRegeneration(input: {
     const previousWeekStart = new Date(period.periodStart.getTime() - 7 * DAY_MS);
     const audience = await tx.user.findMany({
       where: {
-        role: "MEMBER",
+        role: { in: memberParticipantRoles },
         active: true,
         createdAt: { lt: period.periodStart },
         videos: {

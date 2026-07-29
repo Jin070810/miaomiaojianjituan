@@ -2,6 +2,7 @@ import { RankingPeriodType, Prisma } from "@prisma/client";
 import { db } from "./db";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { createNotification } from "./notifications";
+import { memberParticipantRoles } from "./member-roles";
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -55,7 +56,7 @@ type ComputedRow = { userId: string; value: number; videoCount: number; likes: n
 async function computeRows(tx: Prisma.TransactionClient | typeof db, kind: RankingKind, start?: Date, end?: Date) {
   if (kind === "total") {
     const rows = await tx.pointAccount.findMany({
-      where: { user: { active: true } },
+      where: { user: { active: true, role: { in: memberParticipantRoles } } },
       select: { userId: true, balance: true },
       orderBy: [{ balance: "desc" }, { userId: "asc" }],
       take: 100,
@@ -68,7 +69,7 @@ async function computeRows(tx: Prisma.TransactionClient | typeof db, kind: Ranki
     where: {
       status: "APPROVED",
       submittedAt: { gte: start, lt: end },
-      user: { active: true },
+      user: { active: true, role: { in: memberParticipantRoles } },
     },
     _count: { id: true },
     _sum: { likes: true },
@@ -202,7 +203,7 @@ export async function settleRankingPeriod(input: {
         awards.push(award);
       }
     }
-    const members = await tx.user.findMany({ where: { active: true, role: "MEMBER" }, select: { id: true } });
+    const members = await tx.user.findMany({ where: { active: true, role: { in: memberParticipantRoles } }, select: { id: true } });
     const winnerByUser = new Map(awards.map((award) => [award.userId, award]));
     for (const member of members) {
       const award = winnerByUser.get(member.id);

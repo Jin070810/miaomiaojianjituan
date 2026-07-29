@@ -2,6 +2,7 @@
 
 import { Check, ChevronDown, CircleDollarSign, Search, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
+import { isMemberParticipantRole } from "@/lib/member-roles";
 
 type AdminUserRow = {
   id: string;
@@ -78,7 +79,7 @@ export function PointsAdmin({
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
 
-  const activeMembers = users.filter((user) => user.active && user.role === "MEMBER");
+  const activeMembers = users.filter((user) => user.active && isMemberParticipantRole(user.role));
   const filteredMembers = activeMembers;
   const numericAmount = Number(amount);
 

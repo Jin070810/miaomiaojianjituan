@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { periodBounds } from "./rankings";
+import { memberParticipantRoles } from "./member-roles";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -154,18 +155,18 @@ function summarizeParticipation(rows: ParticipationRow[]) {
 export async function getAdminMemberGrowth(reference = new Date()) {
   const windows = growthWindows(reference);
   const [activeMembers, currentRows, previousRows, challenge] = await Promise.all([
-    db.user.count({ where: { active: true, role: "MEMBER" } }),
+    db.user.count({ where: { active: true, role: { in: memberParticipantRoles } } }),
     db.videoSubmission.findMany({
       where: {
         submittedAt: { gte: windows.currentWeek.start, lt: windows.currentWeek.end },
-        user: { active: true, role: "MEMBER" },
+        user: { active: true, role: { in: memberParticipantRoles } },
       },
       select: { userId: true, status: true, likes: true, points: true },
     }),
     db.videoSubmission.findMany({
       where: {
         submittedAt: { gte: windows.previousWeekSameWindow.start, lt: windows.previousWeekSameWindow.end },
-        user: { active: true, role: "MEMBER" },
+        user: { active: true, role: { in: memberParticipantRoles } },
       },
       select: { userId: true, status: true, likes: true, points: true },
     }),

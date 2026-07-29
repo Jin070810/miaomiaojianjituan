@@ -17,6 +17,7 @@ import {
   RewardTier,
   targetBounds,
 } from "./weekly-challenge-rewards";
+import { memberParticipantRoles } from "./member-roles";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -86,7 +87,7 @@ async function buildProfiles(periodStart: Date, userIds: string[]) {
   const referenceStart = new Date(periodStart.getTime() - 14 * DAY_MS);
   const [users, videos, historicalTasks] = await Promise.all([
     db.user.findMany({
-      where: { id: { in: userIds }, active: true, role: "MEMBER" },
+      where: { id: { in: userIds }, active: true, role: { in: memberParticipantRoles } },
       select: { id: true, createdAt: true },
     }),
     db.videoSubmission.findMany({
@@ -478,7 +479,7 @@ async function frozenAudience(periodStart: Date) {
   const previousWeekStart = new Date(periodStart.getTime() - 7 * DAY_MS);
   return db.user.findMany({
     where: {
-      role: "MEMBER",
+      role: { in: memberParticipantRoles },
       active: true,
       createdAt: { lt: periodStart },
       videos: {

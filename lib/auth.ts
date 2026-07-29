@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { db } from "./db";
+import { isPasswordResetApproverRole } from "./member-roles";
 
 const COOKIE = "miaomiao_session";
 const DAYS = 14;
@@ -48,5 +49,11 @@ export async function requireUser() {
 export async function requireAdmin() {
   const user = await requireUser();
   if (user.role !== "ADMIN") throw new Error("无权执行此操作");
+  return user;
+}
+
+export async function requirePasswordResetApprover() {
+  const user = await requireUser();
+  if (!isPasswordResetApproverRole(user.role)) throw new Error("无权执行此操作");
   return user;
 }

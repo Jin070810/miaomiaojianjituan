@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchMemberJson } from "@/lib/member-fetch";
 
 type NotificationRow = {
   id: string;
@@ -78,16 +79,12 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
   const load = useCallback(async (nextPage = page, nextFilter = filter, showPrompt = false) => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/notifications?status=${nextFilter}&page=${nextPage}&take=20`, { cache: "no-store" });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "通知加载失败");
-      const parsed = result as NotificationResponse;
+      const parsed = await fetchMemberJson<NotificationResponse>(`/api/notifications?status=${nextFilter}&page=${nextPage}&take=20`, "通知加载失败");
       setData(parsed);
       setError("");
       if (showPrompt && parsed.unreadCount > 0 && !window.sessionStorage.getItem(PROMPT_SESSION_KEY)) {
-        const unreadResponse = await fetch("/api/notifications?status=unread&page=1&take=10", { cache: "no-store" });
-        const unreadResult = await unreadResponse.json();
-        if (unreadResponse.ok && unreadResult.notifications?.length) {
+        const unreadResult = await fetchMemberJson<NotificationResponse>("/api/notifications?status=unread&page=1&take=10", "通知加载失败").catch(() => null);
+        if (unreadResult?.notifications?.length) {
           setPopupRows(unreadResult.notifications.slice(0, 10));
           setPopupOpen(true);
           window.sessionStorage.setItem(PROMPT_SESSION_KEY, "1");

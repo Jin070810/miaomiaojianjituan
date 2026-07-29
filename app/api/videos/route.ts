@@ -9,6 +9,7 @@ import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } 
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
+import { periodBounds } from "@/lib/rankings";
 
 const schema = z.object({ link: z.string().trim().min(8).max(2000) });
 
@@ -119,9 +120,38 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const { page, take, skip } = parsePagination(url, 50, 100);
   const where = { userId: user.id };
-  const [rows, total] = await Promise.all([
+  const startOfMonth = periodBounds("month").start;
+  const [rows, total, videoStats, monthlyVideoStats, videoStatusGroups] = await Promise.all([
     db.videoSubmission.findMany({ where, include: { appeals: { orderBy: { createdAt: "desc" }, take: 3 } }, orderBy: [{ submittedAt: "desc" }, { id: "desc" }], skip, take }),
     db.videoSubmission.count({ where }),
+    db.videoSubmission.aggregate({
+      where: { userId: user.id, status: "APPROVED" },
+      _count: { id: true },
+      _sum: { points: true, likes: true },
+    }),
+    db.videoSubmission.count({ where: { userId: user.id, status: "APPROVED", submittedAt: { gte: startOfMonth } } }),
+    db.videoSubmission.groupBy({ by: ["status"], where, _count: { id: true } }),
   ]);
-  return NextResponse.json({ videos: rows, pagination: paginationResult(page, take, total) });
+  const videoCounts = videoStatusGroups.reduce(
+    (counts, row) => {
+      counts.all += row._count.id;
+      if (row.status === "APPROVED") counts.approved += row._count.id;
+      if (row.status === "PROCESSING") counts.processing += row._count.id;
+      if (["REJECTED", "FAILED", "PENDING_REVIEW", "REVOKED"].includes(row.status)) counts.exception += row._count.id;
+      return counts;
+    },
+    { all: 0, approved: 0, processing: 0, exception: 0 },
+  );
+  return NextResponse.json({
+    videos: rows,
+    pagination: paginationResult(page, take, total),
+    summary: {
+      approvedVideos: videoStats._count.id,
+      monthlyApprovedVideos: monthlyVideoStats,
+      videoPoints: videoStats._sum.points ?? 0,
+      totalLikes: videoStats._sum.likes ?? 0,
+      averageLikes: videoStats._count.id > 0 ? Math.floor((videoStats._sum.likes ?? 0) / videoStats._count.id) : 0,
+      videoCounts,
+    },
+  });
 }

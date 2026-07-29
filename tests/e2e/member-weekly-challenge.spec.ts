@@ -23,21 +23,22 @@ test("member weekly challenge states fit 390x844", async ({ page }) => {
   await login(page, e2eIds.noTaskMember);
   await expect(page.getByRole("button", { name: "查看本周任务：完成 2 条稳定输出" })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
-  let releaseDashboard: (() => void) | undefined;
-  const dashboardGate = new Promise<void>((resolve) => {
-    releaseDashboard = resolve;
+  let releaseChallenge: (() => void) | undefined;
+  const challengeGate = new Promise<void>((resolve) => {
+    releaseChallenge = resolve;
   });
-  await page.route("**/api/dashboard", async (route) => {
+  await page.route("**/api/weekly-challenges/current", async (route) => {
     const response = await route.fetch();
-    await dashboardGate;
+    await challengeGate;
     await route.fulfill({ response });
   });
   const reload = page.reload();
-  await expect(page.getByLabel("正在加载")).toBeVisible();
-  releaseDashboard?.();
+  await expect(page.getByRole("button", { name: "提交切片", exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("周挑战正在加载")).toBeVisible();
+  releaseChallenge?.();
   await reload;
-  await expect(page.getByLabel("正在加载")).toHaveCount(0);
-  await page.unroute("**/api/dashboard");
+  await expect(page.getByLabel("周挑战正在加载")).toHaveCount(0);
+  await page.unroute("**/api/weekly-challenges/current");
 
   await page.request.post("/api/auth/logout");
   await login(page, e2eIds.member);

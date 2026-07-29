@@ -2033,7 +2033,8 @@
 }
 
 .journal-profile-actions button,
-.journal-menu button {
+.journal-menu button,
+.journal-menu a {
   min-height: 58px;
   padding: 0 4px;
   border: 0;
@@ -2048,12 +2049,14 @@
 }
 
 .journal-profile-actions button:last-child,
-.journal-menu button:last-child {
+.journal-menu button:last-child,
+.journal-menu a:last-child {
   border-bottom: 0;
 }
 
 .journal-profile-actions button > span,
-.journal-menu button > span {
+.journal-menu button > span,
+.journal-menu a > span {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -2063,9 +2066,49 @@
 }
 
 .journal-profile-actions button > svg:first-child,
-.journal-menu button > span > svg {
+.journal-menu button > span > svg,
+.journal-menu a > span > svg {
   color: var(--grape);
   flex: 0 0 auto;
+}
+
+.password-support-request {
+  min-height: 82px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.password-support-request:last-child {
+  border-bottom: 0;
+}
+
+.password-support-request > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.password-support-request small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 480px) {
+  .password-support-request {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .password-support-request .table-actions-inline {
+    width: 100%;
+  }
 }
 
 .logout-button {

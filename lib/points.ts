@@ -5,6 +5,7 @@ import { calculateVideoPoints } from "./kuaishou";
 import { getVideoPointRule } from "./point-rules";
 import { createNotification } from "./notifications";
 import { writeAuditLog } from "./audit";
+import { isMemberParticipantRole, memberParticipantRoles } from "./member-roles";
 import {
   evaluateWeeklyChallengeAfterVideoApproval,
   reconcileWeeklyChallengesAfterVideoRevocation,
@@ -273,7 +274,7 @@ export async function adminAdjustPointsBatch(input: {
         };
       }
       const userIds = await resolveBatchMemberIds(input.selectionMode, explicitUserIds, () => tx.user.findMany({
-        where: { active: true, role: "MEMBER" },
+        where: { active: true, role: { in: memberParticipantRoles } },
         select: { id: true },
         orderBy: { id: "asc" },
       }));
@@ -300,7 +301,7 @@ export async function adminAdjustPointsBatch(input: {
         .filter((userId) => !byId.has(userId))
         .map((userId) => ({ userId, reason: "成员不存在" }))
         .concat(userIds.filter((userId) => byId.has(userId) && !byId.get(userId)?.active).map((userId) => ({ userId, reason: "成员已停用" })))
-        .concat(userIds.filter((userId) => byId.has(userId) && byId.get(userId)?.active && byId.get(userId)?.role !== "MEMBER").map((userId) => ({ userId, reason: "不是普通成员" })));
+        .concat(userIds.filter((userId) => byId.has(userId) && byId.get(userId)?.active && !isMemberParticipantRole(byId.get(userId)?.role ?? "")).map((userId) => ({ userId, reason: "不是可参与积分的成员" })));
       if (blockers.length) throw new BulkPointAdjustmentError("批量调整未执行", blockers);
       if (input.amount < 0) {
         const accounts = await tx.pointAccount.findMany({ where: { userId: { in: userIds } }, select: { userId: true, balance: true } });

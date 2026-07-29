@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { periodBounds } from "@/lib/rankings";
+import { memberParticipantRoles } from "@/lib/member-roles";
 
 export async function GET() {
   const user = await currentUser();
@@ -49,7 +50,7 @@ export async function GET() {
       take: 50,
     }),
     db.pointAccount.findMany({
-      where: { user: { active: true } },
+      where: { user: { active: true, role: { in: memberParticipantRoles } } },
       include: { user: { select: { id: true, kuaishouId: true, nickname: true, avatarUrl: true } } },
       orderBy: { balance: "desc" },
       take: 20,
@@ -74,7 +75,7 @@ export async function GET() {
       where: { userId: user.id },
       _count: { id: true },
     }),
-    db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true } } }),
+    db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true, role: { in: memberParticipantRoles } } } }),
   ]);
   const videoCounts = videoStatusGroups.reduce(
     (counts, row) => {

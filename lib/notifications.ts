@@ -1,5 +1,6 @@
 import { AnnouncementAudience, NotificationType, Prisma } from "@prisma/client";
 import { db } from "./db";
+import { memberParticipantRoles } from "./member-roles";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -34,7 +35,7 @@ async function validateSelectedRecipients(tx: Transaction, userIds: string[]) {
     throw new Error("定向公告需要选择 1 至 200 名成员");
   }
   const users = await tx.user.findMany({
-    where: { id: { in: uniqueIds }, active: true, role: "MEMBER" },
+    where: { id: { in: uniqueIds }, active: true, role: { in: memberParticipantRoles } },
     select: { id: true },
   });
   if (users.length !== uniqueIds.length) throw new Error("公告收件人包含不存在、停用或非普通成员账号");
@@ -134,7 +135,7 @@ export async function publishAnnouncement(input: { announcementId: string; actor
     if (announcement.status !== "DRAFT") throw new Error("当前公告不能发布");
 
     const recipientIds = announcement.audience === "ALL"
-      ? await tx.user.findMany({ where: { active: true, role: "MEMBER" }, select: { id: true } }).then((rows) => rows.map((row) => row.id))
+      ? await tx.user.findMany({ where: { active: true, role: { in: memberParticipantRoles } }, select: { id: true } }).then((rows) => rows.map((row) => row.id))
       : await validateSelectedRecipients(tx, announcement.recipients.map((recipient) => recipient.userId));
     const publishedAt = new Date();
     const claimed = await tx.announcement.updateMany({

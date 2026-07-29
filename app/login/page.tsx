@@ -19,18 +19,19 @@ function Mark() {
 }
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "reset">("login");
   const [showPassword, setShowPassword] = useState(false);
   const [guild, setGuild] = useState(false);
   const [kuaishouId, setKuaishouId] = useState("");
   const [nickname, setNickname] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  function switchMode(nextMode: "login" | "register") {
+  function switchMode(nextMode: "login" | "register" | "reset") {
     setMode(nextMode);
     setError("");
   }
@@ -40,13 +41,22 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/register";
+      if (mode === "reset" && password !== confirmPassword) throw new Error("两次输入的新密码不一致");
+      const endpoint = mode === "login" ? "/api/auth/login" : mode === "register" ? "/api/auth/register" : "/api/auth/password-reset-requests";
       const payload = mode === "login"
         ? { kuaishouId, password }
-        : { kuaishouId, nickname, password, guildStatus: guild ? "已入会" : "未绑定", boundPhone: guild ? undefined : phone };
+        : mode === "register"
+          ? { kuaishouId, nickname, password, guildStatus: guild ? "已入会" : "未绑定", boundPhone: guild ? undefined : phone }
+          : { kuaishouId, password };
       const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "操作失败");
+      if (mode === "reset") {
+        setError("找回申请已提交。请联系审核员完成身份核验后再使用新密码登录。");
+        setPassword("");
+        setConfirmPassword("");
+        return;
+      }
       router.push(result.user?.role === "ADMIN" ? "/admin" : "/");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "操作失败");
@@ -61,8 +71,8 @@ export default function LoginPage() {
         <section className="auth-hero">
           <div className="auth-brand"><Mark /><span>妙妙剪辑团<small>直播高光积分站</small></span></div>
           <div className="auth-hero-copy">
-            <h1>{mode === "login" ? "欢迎回来" : "加入剪辑团"}</h1>
-            <p>和妙妙一起，把高光剪成积分</p>
+            <h1>{mode === "login" ? "欢迎回来" : mode === "register" ? "加入剪辑团" : "找回账号"}</h1>
+            <p>{mode === "reset" ? "提交申请后，请联系审核员完成身份核验" : "和妙妙一起，把高光剪成积分"}</p>
           </div>
           <div className="auth-character-stage">
             <Image className="auth-swoosh" src={miaoAssets.v3.heroSwoosh} alt="" width={1440} height={1080} priority />
@@ -74,6 +84,7 @@ export default function LoginPage() {
               <button className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>登录</button>
               <button className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>注册</button>
             </div>
+            {mode === "reset" && <div className="auth-form"><p className="field-hint">填写快手 ID 和新密码后提交申请，再联系审核员完成线下身份核验。申请会在 24 小时后失效。</p></div>}
             <form className="auth-form" onSubmit={submit}>
               {mode === "register" && (
                 <>
@@ -88,15 +99,16 @@ export default function LoginPage() {
                 <div className="auth-input"><User size={22} /><input id="ksid" autoComplete="username" value={kuaishouId} onChange={(event) => setKuaishouId(event.target.value)} placeholder="输入快手 ID" /></div>
               </div>
               <div className="field">
-                <label htmlFor="password">密码</label>
+                <label htmlFor="password">{mode === "reset" ? "新密码" : "密码"}</label>
                 <div className="auth-input">
                   <LockKey size={22} />
-                  <input id="password" autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} minLength={mode === "register" ? 8 : 6} placeholder={mode === "register" ? "至少 8 位密码" : "请输入密码"} />
+                  <input id="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} type={showPassword ? "text" : "password"} minLength={mode === "login" ? 6 : 8} placeholder={mode === "login" ? "请输入密码" : "至少 8 位密码"} />
                   <button type="button" className="toggle-password" aria-label={showPassword ? "隐藏密码" : "显示密码"} onClick={() => setShowPassword(!showPassword)}>
                     {showPassword ? <EyeSlash size={21} /> : <Eye size={21} />}
                   </button>
                 </div>
               </div>
+              {mode === "reset" && <div className="field"><label htmlFor="confirm-password">确认新密码</label><div className="auth-input"><LockKey size={22} /><input id="confirm-password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} type={showPassword ? "text" : "password"} minLength={8} placeholder="再次输入新密码" /></div></div>}
               {mode === "register" && (
                 <div className="guild-check">
                   <label>
@@ -109,10 +121,11 @@ export default function LoginPage() {
               )}
               {error && <p className="form-error" role="alert">{error}</p>}
               <button className="primary-button full-button auth-submit" disabled={loading}>
-                {loading ? "请稍等..." : mode === "login" ? "进入剪辑团" : "创建账号"} <ArrowRight size={20} />
+                {loading ? "请稍等..." : mode === "login" ? "进入剪辑团" : mode === "register" ? "创建账号" : "提交找回申请"} <ArrowRight size={20} />
               </button>
             </form>
-            {mode === "login" && <button className="forgot-password">忘记密码？联系管理员重置</button>}
+            {mode === "login" && <button className="forgot-password" type="button" onClick={() => switchMode("reset")}>忘记密码？提交找回申请</button>}
+            {mode === "reset" && <button className="forgot-password" type="button" onClick={() => switchMode("login")}>返回登录</button>}
             <div className="auth-security"><ShieldCheck size={15} /><span>你的积分和兑换记录会被好好保存</span></div>
         </section>
       </div>

@@ -1,4 +1,4 @@
-export type AdminSection = "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "challenges" | "announcements" | "logs" | "settings";
+export type AdminSection = "workbench" | "overview" | "videos" | "users" | "points" | "gifts" | "orders" | "rankings" | "challenges" | "announcements" | "logs" | "settings";
 
 export class AdminFetchError extends Error {
   status: number;
@@ -29,6 +29,7 @@ async function fetchJson(path: string, fallbackMessage: string, fetcher: Fetcher
 }
 
 export async function loadAdminSection(section: AdminSection, fetcher: Fetcher = fetch): Promise<Record<string, unknown>> {
+  if (section === "workbench") return {};
   if (section === "overview") return { dashboard: await fetchJson("/api/admin/dashboard", "后台概览加载失败", fetcher) };
   if (section === "settings") return {};
   if (section === "videos") {

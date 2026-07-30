@@ -124,6 +124,13 @@ v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新
 - 成员端只读请求统一在 10 秒后取消并显示可重试提示；`GET /api/dashboard` 保持兼容，`GET /api/videos` 新增可选统计摘要字段。
 - 完整验收与回滚步骤见 [`docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md`](docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md)。
 
+## 管理后台运营工作台 v2
+
+- 管理后台默认进入“运营工作台”，按上海时区汇总近 7 天或近 30 天的成员参与、通过切片、积分、订单履约和库存风险；待复查申诉、待履约订单、密码找回、失败周挑战和已关闭运营入口均可直接进入对应处理位置。
+- 后台支持 URL 深链接（`/admin?section=orders&filter=PENDING_SHIPMENT`）、成员/视频/订单/礼品全局检索，以及视频和订单的脱敏审计动态抽屉。新增后台只读接口都要求 `ADMIN` 会话并返回 `Cache-Control: private, no-store`。
+- 视频撤销/重抓、申诉处理与订单履约、驳回、退款会在原有事务前展示影响确认；积分、库存、通知、审计和幂等约束不变，不新增高风险批量审批、Prisma migration 或历史数据回填。
+- 完整验收与发布前置见 [`docs/ACCEPTANCE-V2-ADMIN-WORKBENCH.md`](docs/ACCEPTANCE-V2-ADMIN-WORKBENCH.md)。
+
 完整口径、验收和回滚步骤见 [`docs/ACCEPTANCE-V1.6-MEMBER-GROWTH.md`](docs/ACCEPTANCE-V1.6-MEMBER-GROWTH.md)。
 
 ## 数据安全

@@ -44,6 +44,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AdminFetchError, buildAdminUsersPath, loadAdminSection, type AdminSection } from "./admin-loader";
 import { PointsAdmin } from "./modules/points-admin";
+import { WorkbenchAdmin } from "./modules/workbench";
+import { AdminGlobalSearch } from "./modules/admin-search";
+import { ActivityDrawer } from "./modules/activity-drawer";
 import { isMemberParticipantRole } from "@/lib/member-roles";
 import {
   DEFAULT_GIFT_CATEGORIES,
@@ -315,6 +318,7 @@ type AdminData = {
 };
 
 const emptyPagination: AdminPagination = { page: 1, take: 50, total: 0, pages: 1 };
+const adminSections: AdminSection[] = ["workbench", "overview", "videos", "users", "points", "gifts", "orders", "rankings", "challenges", "announcements", "logs", "settings"];
 const defaultPointRule: VideoPointRule = {
   minimumLikes: 200,
   fixedTierMaxLikes: 1000,
@@ -452,7 +456,7 @@ function AdminSidebar({
     {
       label: "工作台",
       items: [
-        { id: "overview" as const, label: "数据概览", icon: LayoutDashboard },
+        { id: "workbench" as const, label: "运营工作台", icon: LayoutDashboard },
         { id: "videos" as const, label: "视频与申诉", icon: ClipboardCheck, badge: pendingVideos ? pendingVideos.toString() : undefined },
       ],
     },
@@ -599,7 +603,7 @@ function Overview({ data }: { data: AdminData }) {
   );
 }
 
-function AuditTable({ rows, compact = false, onAction }: { rows: AdminVideo[]; compact?: boolean; onAction?: (video: AdminVideo, action: "revoke" | "reprocess") => void }) {
+function AuditTable({ rows, compact = false, onAction, onActivity }: { rows: AdminVideo[]; compact?: boolean; onAction?: (video: AdminVideo, action: "revoke" | "reprocess") => void; onActivity?: (video: AdminVideo) => void }) {
   return (
     <div className="data-table-wrap">
       <table className="data-table">
@@ -618,6 +622,7 @@ function AuditTable({ rows, compact = false, onAction }: { rows: AdminVideo[]; c
                 {!compact && <td><details className="video-result-detail"><summary title={reason}>{reason}</summary><div><span>抓取作者：{row.fetchedOwner ?? "未获取"}</span><span>提交昵称：{row.submittedNickname || "未记录"}</span><span>photoId：{row.photoId ?? "未获取"}</span></div></details></td>}
                 <td>{formatAdminDate(row.submittedAt)}</td>
                 <td>{onAction ? <div className="table-actions-inline">
+                  {onActivity && <button className="table-more" title="查看操作动态" aria-label="查看视频操作动态" onClick={() => onActivity(row)}><FileText size={16} /></button>}
                   {row.status === "APPROVED" && <button className="table-more" title="撤销并扣回积分" aria-label="撤销视频积分" onClick={() => onAction(row, "revoke")}><X size={16} /></button>}
                   {["REJECTED", "FAILED"].includes(row.status) && <button className="table-more" title="重新抓取并自动审核" aria-label="重新抓取" onClick={() => onAction(row, "reprocess")}><Activity size={16} /></button>}
                 </div> : <button className="table-more" aria-label="更多操作"><MoreHorizontal size={17} /></button>}</td>
@@ -638,6 +643,7 @@ function VideosAdmin({
   onLoadMore,
   onSearch,
   onFilter,
+  onActivity,
 }: {
   rows: AdminVideo[];
   pagination: AdminPagination;
@@ -645,6 +651,7 @@ function VideosAdmin({
   onLoadMore: () => Promise<void>;
   onSearch: (query: string) => Promise<void>;
   onFilter: (status: string) => Promise<void>;
+  onActivity: (video: AdminVideo) => void;
 }) {
   const [filter, setFilter] = useState("全部");
   const [query, setQuery] = useState("");
@@ -659,7 +666,7 @@ function VideosAdmin({
       </div>
       <section className="admin-panel audit-panel">
         <div className="admin-panel-head"><div><h2>{filter}视频</h2><p>共 {pagination.total} 条记录，当前第 {pagination.page} / {pagination.pages} 页</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索链接、photoId、作者、驳回原因或快手 ID" /></div><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>
-        <AuditTable rows={rows} onAction={onAction} />
+        <AuditTable rows={rows} onAction={onAction} onActivity={onActivity} />
         {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多视频 <ChevronDown size={15} /></button></div>}
       </section>
     </>
@@ -719,6 +726,7 @@ function VideoManagement({
   onSearchVideos,
   onFilterVideos,
   onSearchAppeals,
+  onVideoActivity,
 }: {
   videos: AdminVideo[];
   appeals: AdminAppeal[];
@@ -731,6 +739,7 @@ function VideoManagement({
   onSearchVideos: (query: string) => Promise<void>;
   onFilterVideos: (status: string) => Promise<void>;
   onSearchAppeals: (query: string) => Promise<void>;
+  onVideoActivity: (video: AdminVideo) => void;
 }) {
   const [view, setView] = useState<"appeals" | "history">("appeals");
   return (
@@ -745,7 +754,7 @@ function VideoManagement({
       </div>
       {view === "appeals"
         ? <AppealsAdmin rows={appeals} pagination={appealsPagination} onAction={onAppealAction} onLoadMore={onLoadMoreAppeals} onSearch={onSearchAppeals} />
-        : <VideosAdmin rows={videos} pagination={videosPagination} onAction={onVideoAction} onLoadMore={onLoadMoreVideos} onSearch={onSearchVideos} onFilter={onFilterVideos} />}
+        : <VideosAdmin rows={videos} pagination={videosPagination} onAction={onVideoAction} onLoadMore={onLoadMoreVideos} onSearch={onSearchVideos} onFilter={onFilterVideos} onActivity={onVideoActivity} />}
     </>
   );
 }
@@ -1016,7 +1025,7 @@ function useAdminPrompt() {
   };
 }
 
-function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void> }) {
+function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter, onActivity }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void>; onActivity: (order: AdminOrderRow) => void }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl" | "membershipFields">>>({});
@@ -1110,7 +1119,7 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
             : Boolean(merged.recipientName && (merged.recipientPhone || merged.hasRecipientPhone) && (merged.recipientAddress || merged.hasRecipientAddress));
         const pendingShipment = ["PENDING", "APPROVED"].includes(order.status);
         const processing = processingOrderId === order.id;
-        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(order.gift.imageUrl) ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} loading={detailsLoadingId === order.id} onLoad={() => void loadDetails(order)} onViewQr={(url) => setQrPreview({ url, giftName: order.gift.name, memberName: order.user.nickname })} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline">{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : order.gift.kind === "MEMBERSHIP" ? "需先填写开通资料" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
+        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(order.gift.imageUrl) ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} loading={detailsLoadingId === order.id} onLoad={() => void loadDetails(order)} onViewQr={(url) => setQrPreview({ url, giftName: order.gift.name, memberName: order.user.nickname })} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline"><button className="table-more" title="查看操作动态" aria-label="查看订单操作动态" onClick={() => onActivity(order)}><FileText size={16} /></button>{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : order.gift.kind === "MEMBERSHIP" ? "需先填写开通资料" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
       })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多订单 <ChevronDown size={15} /></button></div>}</section>
       {qrPreview && <div className="modal-backdrop" role="presentation" onMouseDown={() => setQrPreview(null)}><section className="modal-sheet qr-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-preview-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">PAYMENT QR CODE</span><h2 id="qr-preview-title">收款码</h2><p>{qrPreview.memberName} · {qrPreview.giftName}</p></div><button className="icon-button" aria-label="关闭收款码预览" onClick={() => setQrPreview(null)}><X size={20} /></button></div><div className="qr-preview-image"><img src={qrPreview.url} alt={`${qrPreview.memberName}的收款码`} /></div></section></div>}
       {dialog}
@@ -1544,6 +1553,14 @@ function auditRoleLabel(role: string) {
   return role === "ADMIN" ? "管理员" : role === "REVIEWER" ? "审核员" : "成员";
 }
 
+function AdminMobileNav({ active, open, onClose, onChange }: { active: AdminSection; open: boolean; onClose: () => void; onChange: (section: AdminSection) => void }) {
+  if (!open) return null;
+  const items: Array<{ id: AdminSection; label: string }> = [
+    { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉" }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单" }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
+  ];
+  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}>{item.label}</button>)}</nav></div>;
+}
+
 function auditActorLabel(row: AdminAuditRow) {
   if (row.actor) return row.actor.nickname;
   if (["VIDEO_AUTO_REJECTED", "VIDEO_WORKER_RECOVERY", "VIDEO_REPROCESS_REQUESTED", "VIDEO_BULK_REPROCESS_REQUESTED", "VIDEO_ENQUEUE_FAILED", "VIDEO_REPROCESS_ENQUEUE_FAILED", "VIDEO_APPROVED", "VIDEO_POINTS_ADJUSTED", "REDEMPTION_RECONCILIATION_COMPLETED", "RANKING_SETTLED"].includes(row.action)) return "系统自动任务";
@@ -1580,7 +1597,10 @@ function AdminModuleState({ loading, error, onRetry }: { loading: boolean; error
 }
 
 export default function AdminPage() {
-  const [active, setActive] = useState<AdminSection>("overview");
+  const [active, setActive] = useState<AdminSection>("workbench");
+  const [navigationTarget, setNavigationTarget] = useState<{ section: AdminSection; filter?: string } | null>(null);
+  const [activityTarget, setActivityTarget] = useState<{ entity: string; entityId: string; title: string } | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [data, setData] = useState<AdminData | null>(null);
   const [error, setError] = useState("");
   const [giftEditor, setGiftEditor] = useState<{ gift: AdminGiftRow | null } | null>(null);
@@ -1598,6 +1618,27 @@ export default function AdminPage() {
   const loadingSections = useRef(new Set<AdminSection>());
   const { ask: askAdminValue, dialog: adminPromptDialog } = useAdminPrompt();
   const router = useRouter();
+  function changeSection(section: AdminSection, filter?: string) {
+    const params = new URLSearchParams();
+    params.set("section", section);
+    if (filter) params.set("filter", filter);
+    router.replace(`/admin?${params.toString()}`, { scroll: false });
+    setActive(section);
+    setNavigationTarget(filter ? { section, filter } : null);
+  }
+  useEffect(() => {
+    const syncLocation = () => {
+      const params = new URLSearchParams(window.location.search);
+      const requested = params.get("section");
+      const section = adminSections.includes(requested as AdminSection) ? requested as AdminSection : "workbench";
+      setActive(section);
+      const filter = params.get("filter")?.trim() || undefined;
+      setNavigationTarget(filter ? { section, filter } : null);
+    };
+    syncLocation();
+    window.addEventListener("popstate", syncLocation);
+    return () => window.removeEventListener("popstate", syncLocation);
+  }, []);
   useEffect(() => {
     let activeRequest = true;
     fetch("/api/admin/dashboard", { cache: "no-store" }).then(async (dashboardResponse) => {
@@ -1877,6 +1918,13 @@ export default function AdminPage() {
       confirmLabel: "确认撤销",
     }) : undefined;
     if (action === "revoke" && !reason) return;
+    const confirmed = await askAdminValue({
+      title: action === "revoke" ? "确认撤销视频奖励" : "确认重新抓取视频",
+      label: action === "revoke" ? `将扣回 ${video.points.toLocaleString()} 积分，并重新核对关联挑战奖励。` : "将把视频重新放入自动处理队列，历史记录会保留。",
+      required: false,
+      confirmLabel: action === "revoke" ? "确认撤销" : "确认重抓",
+    });
+    if (confirmed === null) return;
     const response = await fetch(`/api/videos/${video.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1940,6 +1988,13 @@ export default function AdminPage() {
         }
       }
     }
+    const confirmed = await askAdminValue({
+      title: action === "approve" ? "确认通过视频申诉" : "确认驳回视频申诉",
+      label: action === "approve" ? `将为 ${appeal.user.nickname} 入账 ${points ?? appeal.video.points ?? 0} 积分，并写入审计记录。` : "将保留原自动驳回结果，并向成员发送处理结果。",
+      required: false,
+      confirmLabel: action === "approve" ? "确认通过并入账" : "确认驳回",
+    });
+    if (confirmed === null) return;
     const response = await fetch(`/api/admin/video-appeals/${appeal.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1967,6 +2022,15 @@ export default function AdminPage() {
       confirmLabel: action === "reject" ? "确认驳回" : "确认退款",
     }) : undefined;
     if (["reject", "refund"].includes(action) && !reason) return false;
+    if (["fulfill", "reject", "refund"].includes(action)) {
+      const confirmed = await askAdminValue({
+        title: action === "fulfill" ? "确认完成订单履约" : action === "reject" ? "确认驳回订单" : "确认退款订单",
+        label: action === "fulfill" ? `将把“${order.gift.name}”标记为已履约。` : `将变更“${order.gift.name}”的订单状态${action === "reject" || action === "refund" ? "并退回积分与库存" : ""}。`,
+        required: false,
+        confirmLabel: "确认操作",
+      });
+      if (confirmed === null) return false;
+    }
     const response = await fetch(`/api/admin/orders/${order.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -2236,17 +2300,29 @@ export default function AdminPage() {
       setGiftActionId(null);
     }
   }
+  useEffect(() => {
+    if (!navigationTarget || !data) return;
+    const { section, filter } = navigationTarget;
+    if (!filter) return;
+    const search = filter.startsWith("search:") ? filter.slice("search:".length) : "";
+    if (section === "users") { if (!loadedSections.users) return; if (search) void loadUsers({ search }); }
+    if (section === "videos") { if (!loadedSections.videos) return; if (search) void loadVideos({ search }); }
+    if (section === "orders") { if (!loadedSections.orders) return; void loadOrders(search ? { search } : { status: filter }); }
+    if (section === "logs") { if (!loadedSections.logs) return; if (search) void loadAudit({ search }); }
+    setNavigationTarget(null);
+  }, [navigationTarget, data, loadedSections.users, loadedSections.videos, loadedSections.orders, loadedSections.logs]);
   const render = () => {
     if (!data) return null;
+    if (active === "workbench") return <WorkbenchAdmin onNavigate={(section, filter) => changeSection(section as AdminSection, filter)} />;
     const status = sectionStatus[active];
     if (!loadedSections[active] && (status?.loading || status?.error)) {
       return <AdminModuleState loading={Boolean(status.loading)} error={status.error} onRetry={() => void ensureSectionLoaded(active, true)} />;
     }
-    if (active === "videos") return <VideoManagement videos={data.videos} appeals={data.appeals} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} />;
+    if (active === "videos") return <VideoManagement videos={data.videos} appeals={data.appeals} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} onVideoActivity={(video) => setActivityTarget({ entity: "VideoSubmission", entityId: video.id, title: video.photoId ?? `${video.user.nickname} 的视频` })} />;
     if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} />;
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;
-    if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} />;
+    if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
     if (active === "challenges") return <WeeklyChallengesAdmin periods={data.weeklyChallengePeriods} onRetry={handleWeeklyChallengeRetry} onUpgrade={handleWeeklyChallengeUpgrade} />;
     if (active === "announcements") return <AnnouncementsAdmin rows={data.announcements} users={data.announcementUsers} onSave={saveAnnouncement} onAction={actionAnnouncement} />;
@@ -2259,12 +2335,13 @@ export default function AdminPage() {
   }
   return (
     <main className="admin-shell">
-      <AdminSidebar active={active} pendingVideos={data.metrics.pendingVideos} pendingOrders={data.metrics.pendingOrders} onChange={setActive} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />
+      <AdminSidebar active={active} pendingVideos={data.metrics.pendingVideos} pendingOrders={data.metrics.pendingOrders} onChange={changeSection} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />
       <section className="admin-main">
         <header className="admin-topbar">
-          <button className="mobile-admin-menu" aria-label="打开菜单"><MoreHorizontal size={20} /></button>
-          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "challenges" ? "AI 周挑战" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
-          <div className="admin-top-actions"><button className="icon-button"><Bell size={18} /></button><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
+          <button className="mobile-admin-menu" aria-label="打开菜单" onClick={() => setMobileNavOpen(true)}><MoreHorizontal size={20} /></button>
+          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "workbench" ? "运营工作台" : active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "challenges" ? "AI 周挑战" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
+          <AdminGlobalSearch onNavigate={(section, filter) => changeSection(section as AdminSection, filter)} onActivity={(item) => setActivityTarget({ entity: ({ users: "User", videos: "VideoSubmission", orders: "RedemptionOrder", gifts: "Gift" } as Record<string, string>)[item.section] ?? "AuditLog", entityId: item.id, title: item.title })} />
+          <div className="admin-top-actions"><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
         </header>
         <div className="admin-content">
           {adminFeedback && (
@@ -2278,6 +2355,8 @@ export default function AdminPage() {
         </div>
       </section>
       {giftEditor && <GiftEditorDialog gift={giftEditor.gift} onClose={() => setGiftEditor(null)} onSave={handleGiftSave} />}
+      {activityTarget && <ActivityDrawer {...activityTarget} onClose={() => setActivityTarget(null)} />}
+      <AdminMobileNav active={active} open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} onChange={changeSection} />
       {adminPromptDialog}
     </main>
   );

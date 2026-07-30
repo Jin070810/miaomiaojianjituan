@@ -19,8 +19,8 @@ test.afterAll(async () => {
 
 test("admin sees period health and failure details at 1440x900", async ({ page }) => {
   await login(page, e2eIds.admin);
-  await expect(page.getByRole("heading", { name: "本周成员参与" })).toBeVisible();
-  await expect(page.getByText("本周挑战", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运营工作台" })).toBeVisible();
+  await expect(page.getByText("待复查申诉", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "AI 周挑战" }).click();
   await expect(page.getByRole("heading", { name: "AI 周挑战" })).toBeVisible();
   await expect(page.getByText("生成失败")).toBeVisible();
@@ -48,9 +48,9 @@ test("admin modules load on demand, retry locally, and keep cross-page selection
     if (url.pathname.startsWith("/api/admin/")) adminRequests.push(`${request.method()} ${url.pathname}${url.search}`);
   });
   await login(page, e2eIds.admin);
-  await expect(page.getByRole("heading", { name: "数据概览" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运营工作台" })).toBeVisible();
   expect([...new Set(adminRequests.filter((request) => request.startsWith("GET ")))])
-    .toEqual(["GET /api/admin/dashboard"]);
+    .toEqual(["GET /api/admin/dashboard", "GET /api/admin/workbench?range=7d"]);
 
   let failVideos = true;
   await page.route("**/api/admin/videos?take=50", async (route) => {
@@ -66,7 +66,7 @@ test("admin modules load on demand, retry locally, and keep cross-page selection
   await page.getByRole("button", { name: "重新加载" }).click();
   await expect(page.getByRole("heading", { name: "视频与审核" })).toBeVisible();
   const videoRequestCount = adminRequests.filter((request) => request.includes("/api/admin/videos?take=50")).length;
-  await page.getByRole("button", { name: "数据概览" }).click();
+  await page.getByRole("button", { name: "运营工作台" }).click();
   await page.getByRole("button", { name: "视频与申诉" }).click();
   await expect(page.getByRole("heading", { name: "视频与审核" })).toBeVisible();
   expect(adminRequests.filter((request) => request.includes("/api/admin/videos?take=50"))).toHaveLength(videoRequestCount);

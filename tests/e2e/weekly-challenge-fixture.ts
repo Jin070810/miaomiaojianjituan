@@ -9,6 +9,7 @@ export const e2eIds = {
   noTaskMember: "weekly-e2e-no-task",
   admin: "weekly-e2e-admin",
 };
+export const e2eGiftName = "E2E 移动端兑换礼品";
 
 export async function seedWeeklyChallengeE2E() {
   if (!process.env.DATABASE_URL?.includes("schema=")) {
@@ -50,7 +51,8 @@ export async function seedWeeklyChallengeE2E() {
   ]);
   const current = shanghaiWeekBounds();
   const next = nextShanghaiWeekBounds();
-  const period = await db.weeklyChallengePeriod.create({
+  const [period] = await Promise.all([
+    db.weeklyChallengePeriod.create({
     data: {
       periodStart: current.start,
       periodEnd: current.end,
@@ -79,7 +81,18 @@ export async function seedWeeklyChallengeE2E() {
       },
     },
     include: { assignments: true },
-  });
+    }),
+    db.gift.create({
+      data: {
+        name: e2eGiftName,
+        kind: "PHYSICAL",
+        pointsCost: 500,
+        stock: 10,
+        active: true,
+        description: "仅用于成员端移动适配验收的 E2E 礼品。",
+      },
+    }),
+  ]);
   await db.weeklyChallengePeriod.create({
     data: {
       periodStart: next.start,
@@ -116,6 +129,12 @@ export async function seedWeeklyChallengeE2E() {
 }
 
 export async function cleanupWeeklyChallengeE2E() {
+  const gifts = await db.gift.findMany({ where: { name: e2eGiftName }, select: { id: true } });
+  const giftIds = gifts.map((gift) => gift.id);
+  if (giftIds.length) {
+    await db.redemptionOrder.deleteMany({ where: { giftId: { in: giftIds } } });
+    await db.gift.deleteMany({ where: { id: { in: giftIds } } });
+  }
   const users = await db.user.findMany({
     where: { kuaishouId: { in: Object.values(e2eIds) } },
     select: { id: true },

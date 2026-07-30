@@ -7,7 +7,9 @@ const enabled = process.env.RUN_DB_TESTS === "1";
 
 describe.skipIf(!enabled)("member growth database integration", () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const reference = new Date(Date.UTC(2180, 0, 1) + (Date.now() % 5000) * 7 * 24 * 60 * 60 * 1000 + 2 * 24 * 60 * 60 * 1000);
+  // Keep both the current and previous weekly windows in one calendar month so
+  // the member-facing monthly highlight assertion cannot depend on wall-clock time.
+  const reference = new Date("2180-05-21T04:00:00.000Z");
   const windows = growthWindows(reference);
   const week = periodBounds("week", reference);
   const userIds: string[] = [];

@@ -18,6 +18,12 @@ describe("admin section loader", () => {
     expect(result).toEqual({ dashboard: { metrics: {} } });
   });
 
+  it("keeps the workbench shell independent from legacy module requests", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({})) as unknown as typeof fetch;
+    await expect(loadAdminSection("workbench", fetcher)).resolves.toEqual({});
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("loads the two video resources without requesting unrelated modules", async () => {
     const paths: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {

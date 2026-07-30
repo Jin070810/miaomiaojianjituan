@@ -20,6 +20,46 @@ export default defineConfig({
       testMatch: [/member-weekly-challenge\.spec\.ts/, /member-growth\.spec\.ts/],
     },
     {
+      name: "member-android-320",
+      use: { viewport: { width: 320, height: 568 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-android-360",
+      use: { viewport: { width: 360, height: 800 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-android-390",
+      use: { viewport: { width: 390, height: 844 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-android-412",
+      use: { viewport: { width: 412, height: 915 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-ios-375",
+      use: { browserName: "webkit", viewport: { width: 375, height: 812 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-ios-390",
+      use: { browserName: "webkit", viewport: { width: 390, height: 844 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-ios-430",
+      use: { browserName: "webkit", viewport: { width: 430, height: 932 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
+      name: "member-mobile-landscape",
+      use: { viewport: { width: 568, height: 320 } },
+      testMatch: /member-mobile-matrix\.spec\.ts/,
+    },
+    {
       name: "member-growth-desktop",
       use: { viewport: { width: 1440, height: 900 } },
       testMatch: /member-growth\.spec\.ts/,

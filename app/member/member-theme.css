@@ -3073,6 +3073,270 @@
   background: var(--paper-raised);
 }
 
+/*
+ * Member mobile layout is intentionally owned here. These rules are mobile
+ * first (320px and up) so that a component cannot widen the document while
+ * trying to preserve the desktop composition.
+ */
+@media (max-width: 899px) {
+  .member-shell,
+  .auth-shell {
+    min-width: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: clip;
+  }
+
+  .member-app,
+  .auth-journal {
+    width: 100%;
+    max-width: 430px;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .member-app {
+    --member-gutter: clamp(16px, 6.15vw, 24px);
+    padding-bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  .member-topbar {
+    height: auto;
+    min-height: 84px;
+    padding: max(18px, env(safe-area-inset-top)) var(--member-gutter) 8px;
+    gap: 10px;
+  }
+
+  .brand-lockup,
+  .topbar-actions,
+  .auth-brand,
+  .auth-security,
+  .challenge-entry-head,
+  .challenge-section-title,
+  .challenge-entry-foot,
+  .journal-section-heading,
+  .modal-head,
+  .notification-toolbar {
+    min-width: 0;
+  }
+
+  .brand-name,
+  .auth-brand > span:last-child,
+  .modal-head > div,
+  .notification-panel-head > div {
+    min-width: 0;
+  }
+
+  .member-content {
+    padding-right: var(--member-gutter);
+    padding-bottom: calc(30px + env(safe-area-inset-bottom));
+    padding-left: var(--member-gutter);
+  }
+
+  .journal-hero,
+  .compact-journal-hero,
+  .challenge-hero {
+    margin-right: calc(var(--member-gutter) * -1);
+    margin-left: calc(var(--member-gutter) * -1);
+  }
+
+  .hero-copy {
+    left: var(--member-gutter);
+    width: min(54%, 210px);
+  }
+
+  .hero-character {
+    width: clamp(226px, 66vw, 250px);
+    right: -2vw;
+  }
+
+  .hero-swoosh {
+    width: max(560px, 190vw);
+    left: min(-108px, -36vw);
+  }
+
+  .compact-journal-hero {
+    padding-right: var(--member-gutter);
+    padding-left: var(--member-gutter);
+  }
+
+  .compact-journal-hero > div,
+  .challenge-hero-copy {
+    width: min(58%, 220px);
+  }
+
+  .challenge-hero {
+    padding-right: var(--member-gutter);
+    padding-left: var(--member-gutter);
+  }
+
+  .challenge-hero > img {
+    width: clamp(210px, 64vw, 240px);
+    right: -15vw;
+  }
+
+  .journal-section-heading,
+  .challenge-entry-head,
+  .challenge-section-title,
+  .challenge-entry-foot,
+  .notification-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .journal-section-heading h2,
+  .challenge-entry h2,
+  .challenge-section-title h2,
+  .modal-head h2,
+  .notification-panel-head h2 {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .growth-local-state.is-error {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+
+  .growth-trend-list article {
+    grid-template-columns: 48px minmax(0, 1fr) minmax(66px, auto);
+  }
+
+  .growth-top-list article {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .growth-top-list article > p {
+    grid-column: 2;
+    overflow-wrap: anywhere;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .record-row > b,
+  .record-side {
+    min-width: 0;
+    max-width: 42%;
+    overflow-wrap: anywhere;
+  }
+
+  .journal-tabs,
+  .gift-sort-toolbar,
+  .category-tabs {
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .bottom-nav {
+    width: min(100%, 430px);
+    min-height: calc(76px + env(safe-area-inset-bottom));
+    padding: 7px max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+
+  .modal-backdrop,
+  .notification-popup-backdrop {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+
+  .modal-sheet,
+  .notification-popup,
+  .notification-panel {
+    width: 100%;
+    max-height: 100%;
+    padding: clamp(16px, 5vw, 22px);
+    overscroll-behavior: contain;
+  }
+
+  .notification-panel {
+    position: relative;
+    align-self: center;
+    margin: 0;
+    padding: 0;
+  }
+
+  .input-action {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .input-action input {
+    min-width: 0;
+  }
+
+  .auth-journal {
+    padding-bottom: max(28px, env(safe-area-inset-bottom));
+  }
+
+  .auth-brand {
+    padding-top: max(18px, env(safe-area-inset-top));
+    padding-right: clamp(16px, 6.15vw, 24px);
+    padding-left: clamp(16px, 6.15vw, 24px);
+  }
+
+  .auth-hero-copy {
+    left: clamp(16px, 6.15vw, 24px);
+    width: min(68%, 250px);
+  }
+
+  .auth-character {
+    width: clamp(230px, 72vw, 270px);
+    right: -20vw;
+  }
+
+  .auth-swoosh {
+    width: max(520px, 184vw);
+    left: -34vw;
+  }
+
+  .auth-panel {
+    padding-right: clamp(16px, 6.15vw, 24px);
+    padding-left: clamp(16px, 6.15vw, 24px);
+  }
+
+  .auth-security {
+    flex-wrap: wrap;
+    text-align: center;
+  }
+}
+
+@media (max-width: 360px) {
+  .growth-stat-grid,
+  .growth-comparison-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .growth-stat-grid > :last-child,
+  .growth-comparison-grid > :last-child {
+    grid-column: 1 / -1;
+  }
+
+  .growth-trend-list article {
+    grid-template-columns: 42px minmax(0, 1fr) minmax(56px, auto);
+    gap: 7px;
+  }
+
+  .growth-week-values b {
+    font-size: 8px;
+  }
+
+  .record-row {
+    padding-left: 58px;
+    gap: 8px;
+  }
+
+  .record-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .record-row > b,
+  .record-side > b {
+    font-size: 19px;
+  }
+}
+
 @media (max-width: 380px) {
   .member-content {
     padding-inline: 20px;

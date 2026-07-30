@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { nextShanghaiWeekBounds, shanghaiWeekBounds } from "@/lib/weekly-challenges";
@@ -33,7 +34,7 @@ export async function seedWeeklyChallengeE2E() {
         passwordHash,
         role: "MEMBER",
         active: true,
-        account: { create: { balance: 0 } },
+        account: { create: { balance: 10_000 } },
       },
     }),
     db.user.create({
@@ -150,8 +151,12 @@ export async function login(page: import("@playwright/test").Page, kuaishouId: s
   const testIp = `198.51.${100 + Math.floor(Math.random() * 50)}.${1 + Math.floor(Math.random() * 253)}`;
   await page.setExtraHTTPHeaders({ "x-real-ip": testIp });
   await page.goto("/login");
-  await page.getByLabel("快手 ID").fill(kuaishouId);
-  await page.getByLabel("密码", { exact: true }).fill(e2ePassword);
+  const kuaishouIdInput = page.getByLabel("快手 ID");
+  const passwordInput = page.getByLabel("密码", { exact: true });
+  await kuaishouIdInput.fill(kuaishouId);
+  await expect(kuaishouIdInput).toHaveValue(kuaishouId);
+  await passwordInput.fill(e2ePassword);
+  await expect(passwordInput).toHaveValue(e2ePassword);
   const loginResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST");
   await page.getByRole("button", { name: "进入剪辑团" }).click();
   const response = await loginResponse;
@@ -168,4 +173,16 @@ export async function expectNoHorizontalOverflow(page: import("@playwright/test"
   if (dimensions.scrollWidth > dimensions.clientWidth) {
     throw new Error(`页面横向溢出：${dimensions.scrollWidth} > ${dimensions.clientWidth}`);
   }
+}
+
+export async function expectElementsWithinViewport(page: import("@playwright/test").Page, selector: string) {
+  const escapes = await page.locator(selector).evaluateAll((elements) => elements.flatMap((element) => {
+    const bounds = element.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return [];
+    const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth;
+    return bounds.left < -1 || bounds.right > viewportWidth + 1
+      ? [`${element.className || element.tagName}: ${Math.round(bounds.left)}..${Math.round(bounds.right)} / ${Math.round(viewportWidth)}`]
+      : [];
+  }));
+  if (escapes.length) throw new Error(`组件越出移动视口：${escapes.join("; ")}`);
 }

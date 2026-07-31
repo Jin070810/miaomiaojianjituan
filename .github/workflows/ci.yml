@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  core:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -55,16 +55,6 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:e2e
-      - name: Upload Playwright screenshots
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-screenshots
-          path: output/playwright/*.png
-          if-no-files-found: error
-          retention-days: 14
       - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
       - run: docker compose config
@@ -74,3 +64,53 @@ jobs:
       - run: docker compose build app
       - run: docker build --target worker -t miaomiao-points-worker:ci .
       - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts"
+
+  e2e:
+    needs: core
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.0-noble
+      options: --user 1001
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: miaomiao_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d miaomiao_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/miaomiao_test?schema=public
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ci-session-secret-012345678901234567890123
+      PHONE_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      RUN_DB_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      - run: npm run test:e2e
+      - name: Upload Playwright screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-screenshots
+          path: output/playwright/*.png
+          if-no-files-found: error
+          retention-days: 14

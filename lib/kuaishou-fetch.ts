@@ -6,6 +6,9 @@ export type FetchedKuaishouVideo = {
   source: ReturnType<typeof normalizeKuaishouLink>;
   likes: number;
   views: number | null;
+  commentCount: number | null;
+  caption: string | null;
+  coverUrl: string | null;
   publishedAt: Date;
   photoId: string;
   owner: string;
@@ -63,6 +66,25 @@ function capture(html: string, pattern: RegExp) {
   return match?.[1] ?? null;
 }
 
+function decodeJsonText(value: string | null) {
+  if (value === null) return null;
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+}
+
+function safePublicImageUrl(value: string | null) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function captureVideoPublishedAt(html: string) {
   const likeMatch = /"likeCount"\s*:\s*\d+/.exec(html);
   if (!likeMatch) return null;
@@ -81,14 +103,17 @@ export function parseKuaishouHtml(rawHtml: string) {
   const photoId = capture(rawHtml, /"photoId"\s*:\s*"(\d+)"/);
   const owner = capture(rawHtml, /"userName"\s*:\s*"((?:\\.|[^"\\])*)"/);
   const viewsText = capture(rawHtml, /"viewCount"\s*:\s*(\d+)/);
+  const commentsText = capture(rawHtml, /"commentCount"\s*:\s*(\d+)/);
+  const caption = decodeJsonText(capture(rawHtml, /"caption"\s*:\s*"((?:\\.|[^"\\])*)"/));
+  const coverUrl = safePublicImageUrl(decodeJsonText(capture(rawHtml, /"(?:coverUrl|cover)"\s*:\s*"((?:\\.|[^"\\])*)"/)));
   const publishedAt = captureVideoPublishedAt(rawHtml);
   if (!likesText || !photoId || owner === null || !publishedAt) {
     throw new Error("快手页面未返回完整的视频数据，请稍后重试");
   }
-  const decodedOwner = owner.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  const decodedOwner = decodeJsonText(owner) ?? "";
   const likes = Number(likesText);
   const views = viewsText ? Number(viewsText) : null;
-  return { likes, views, publishedAt, photoId, owner: decodedOwner };
+  return { likes, views, commentCount: commentsText ? Number(commentsText) : null, caption, coverUrl, publishedAt, photoId, owner: decodedOwner };
 }
 
 export async function fetchKuaishouVideo(

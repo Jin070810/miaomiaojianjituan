@@ -55,8 +55,9 @@ import { miaoAssets } from "./member/visual-assets";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
 import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
 import { fetchMemberJson, MemberFetchError } from "@/lib/member-fetch";
+import { AchievementSummaryCard, AchievementView, type AchievementData } from "./member/achievement-view";
 
-type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "ledger" | "transfers" | "orders";
+type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "achievements" | "ledger" | "transfers" | "orders";
 
 type DialogType = "submit" | "transfer" | "redeem" | "profile" | "recipient" | "password" | null;
 
@@ -656,6 +657,10 @@ function HomeView({
   growthLoading,
   growthError,
   onRetryGrowth,
+  achievements,
+  achievementsLoading,
+  achievementsError,
+  onRetryAchievements,
 }: {
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
@@ -668,6 +673,10 @@ function HomeView({
   growthLoading: boolean;
   growthError: string;
   onRetryGrowth: () => void;
+  achievements: AchievementData | null;
+  achievementsLoading: boolean;
+  achievementsError: string;
+  onRetryAchievements: () => void;
 }) {
   const recentLedger = data.ledger.slice(0, 3);
   const progressPercent = challenge ? challengeProgressPercent(challenge) : 0;
@@ -701,6 +710,14 @@ function HomeView({
         onNavigate={onNavigate}
         onOpen={onOpen}
         onRetry={onRetryGrowth}
+      />
+
+      <AchievementSummaryCard
+        data={achievements}
+        loading={achievementsLoading}
+        error={achievementsError}
+        onOpen={() => onNavigate("achievements")}
+        onRetry={onRetryAchievements}
       />
 
       <section className={`challenge-entry ${challenge ? "" : "is-empty"}`} aria-labelledby="weekly-challenge-title">
@@ -1386,6 +1403,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
       <section className="journal-section">
         <div className="journal-section-heading ruled"><h2>记录</h2></div>
         <div className="journal-menu">
+        <button aria-label="成长与成就" onClick={() => onNavigate("achievements")}><span><Medal size={19} />成长与成就</span><ChevronRight size={18} /></button>
         <button aria-label="成长记录" onClick={() => onNavigate("growth")}><span><ChartNoAxesCombined size={19} />成长记录</span><ChevronRight size={18} /></button>
         <button aria-label="积分记录" onClick={() => onNavigate("ledger")}><span><WalletCards size={19} />积分记录</span><ChevronRight size={18} /></button>
         <button aria-label="送积分记录" onClick={() => onNavigate("transfers")}><span><Send size={19} />送积分记录</span><ChevronRight size={18} /></button>
@@ -1944,6 +1962,10 @@ export default function MemberApp() {
   const [growthLoading, setGrowthLoading] = useState(true);
   const [growthError, setGrowthError] = useState("");
   const [growthRevision, setGrowthRevision] = useState(0);
+  const [achievements, setAchievements] = useState<AchievementData | null>(null);
+  const [achievementsLoading, setAchievementsLoading] = useState(true);
+  const [achievementsError, setAchievementsError] = useState("");
+  const [achievementsRevision, setAchievementsRevision] = useState(0);
   const [loadError, setLoadError] = useState("");
   const [homeRevision, setHomeRevision] = useState(0);
   const [sectionStates, setSectionStates] = useState<Record<DeferredSection, DeferredState>>({ videos: "idle", gifts: "idle", ledger: "idle", transfers: "idle", orders: "idle" });
@@ -2028,6 +2050,25 @@ export default function MemberApp() {
       });
     return () => { active = false; };
   }, [growthRevision, homeRevision, router]);
+
+  useEffect(() => {
+    let active = true;
+    setAchievementsLoading(true);
+    fetchMemberJson<AchievementData>("/api/member/achievements", "成长与成就加载失败")
+      .then((result) => {
+        if (active) {
+          setAchievements(result);
+          setAchievementsError("");
+        }
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof MemberFetchError && error.status === 401) router.replace("/login");
+        else setAchievementsError(error instanceof Error ? error.message : "成长与成就加载失败");
+      })
+      .finally(() => { if (active) setAchievementsLoading(false); });
+    return () => { active = false; };
+  }, [achievementsRevision, homeRevision, router]);
 
   async function loadSection(section: DeferredSection, force = false) {
     if (!force && ["loading", "ready"].includes(sectionStates[section])) return;
@@ -2153,11 +2194,12 @@ export default function MemberApp() {
     if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { clearNotificationPromptSession(); await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
     if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} error={challengeError} onRetry={() => setChallengeRevision((value) => value + 1)} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
     if (view === "growth") return <GrowthView growth={growth} loading={growthLoading} error={growthError} onBack={() => handleNavigate("home")} onRetry={() => setGrowthRevision((value) => value + 1)} />;
+    if (view === "achievements") return <AchievementView data={achievements} loading={achievementsLoading} error={achievementsError} onBack={() => handleNavigate("home")} onRetry={() => setAchievementsRevision((value) => value + 1)} />;
     if (view === "ledger") return <DeferredPage state={sectionStates.ledger} error={sectionErrors.ledger} onRetry={() => void loadSection("ledger", true)}><LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} /></DeferredPage>;
     if (view === "transfers") return <DeferredPage state={sectionStates.transfers} error={sectionErrors.transfers} onRetry={() => void loadSection("transfers", true)}><TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} /></DeferredPage>;
     if (view === "orders") return <DeferredPage state={sectionStates.orders} error={sectionErrors.orders} onRetry={() => void loadSection("orders", true)}><RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} /></DeferredPage>;
-    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
-  }, [challengeError, challengeLoading, dashboard, giftRows, growth, growthError, growthLoading, historyLoading, historyMore, router, sectionErrors, sectionStates, view, weeklyChallenge]);
+    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} achievements={achievements} achievementsLoading={achievementsLoading} achievementsError={achievementsError} onRetryAchievements={() => setAchievementsRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
+  }, [achievements, achievementsError, achievementsLoading, challengeError, challengeLoading, dashboard, giftRows, growth, growthError, growthLoading, historyLoading, historyMore, router, sectionErrors, sectionStates, view, weeklyChallenge]);
 
   if (!dashboard) {
     return (
@@ -2189,8 +2231,8 @@ export default function MemberApp() {
       setClearanceOnboardingOpen(false);
     }
   };
-  const secondaryView = ["challenge", "growth", "ledger", "transfers", "orders"].includes(view);
-  const navigationView: MemberView = view === "challenge" || view === "growth" || view === "ledger"
+  const secondaryView = ["challenge", "growth", "achievements", "ledger", "transfers", "orders"].includes(view);
+  const navigationView: MemberView = view === "challenge" || view === "growth" || view === "achievements" || view === "ledger"
     ? "home"
     : view === "transfers" || view === "orders"
       ? "profile"
@@ -2208,6 +2250,7 @@ export default function MemberApp() {
               if (notification.entityType === "Transfer") handleNavigate("transfers");
               if (notification.entityType === "PointLedger") handleNavigate("ledger");
               if (notification.entityType === "WeeklyChallengeAssignment") handleNavigate("challenge");
+              if (["MemberGrowthProfile", "MemberAchievement", "MemberMonthlyGoal"].includes(notification.entityType ?? "")) handleNavigate("achievements");
             }} />
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>

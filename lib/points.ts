@@ -12,6 +12,7 @@ import {
 } from "./weekly-challenges";
 import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
+import { reconcileMemberAchievements } from "./member-achievements";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -583,6 +584,7 @@ export async function creditVideoReward(input: {
       submittedAt: video.submittedAt,
       completedAt: updated.reviewedAt ?? new Date(),
     });
+    await reconcileMemberAchievements(tx, input.userId);
     return updated;
   });
 }
@@ -737,6 +739,7 @@ export async function resolveVideoAppeal(input: {
       submittedAt: video.submittedAt,
       completedAt: video.reviewedAt ?? new Date(),
     });
+    await reconcileMemberAchievements(tx, appeal.video.userId);
     return updated;
   });
 }
@@ -783,6 +786,7 @@ export async function revokeVideoReward(input: { videoId: string; actorId: strin
       videoId: video.id,
       reason: input.reason,
     });
+    await reconcileMemberAchievements(tx, video.userId);
     return updated;
   });
 }

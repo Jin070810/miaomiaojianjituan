@@ -98,6 +98,7 @@ enum NotificationType {
   RANKING_AWARD
   WEEKLY_CHALLENGE
   MEMBER_CLEARANCE
+  ACHIEVEMENT
 }
 
 enum MemberEligibilityStatus {
@@ -192,6 +193,10 @@ model User {
   clearancePolicyVersions    MembershipClearancePolicyVersion[] @relation("ClearancePolicyCreator")
   rejoinRequests             RejoinRequest[]
   reviewedRejoinRequests     RejoinRequest[] @relation("RejoinReviewer")
+  growthProfile              MemberGrowthProfile?
+  achievements               MemberAchievement[]
+  monthlyGoals               MemberMonthlyGoal[]
+  monthlyReviews             MemberMonthlyReview[]
 }
 
 model MemberClearanceProgram {
@@ -344,6 +349,10 @@ model VideoSubmission {
   photoId           String?
   likes             Int?
   views             Int?
+  commentCount      Int?
+  caption           String?
+  coverUrl          String?
+  metadataFetchedAt DateTime?
   publishedAt       DateTime?
   fetchedOwner      String?
   matchedOwner      Boolean?
@@ -422,6 +431,67 @@ model Gift {
 
   @@index([deletedAt, active, pinned, displayOrder])
   @@index([deletedAt, active, category])
+}
+
+model MemberGrowthProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  experience     Int      @default(0)
+  level          Int      @default(1)
+  scoreVersion   String   @default("v1")
+  calculatedAt   DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MemberAchievement {
+  id          String   @id @default(cuid())
+  userId      String
+  code        String
+  earnedAt    DateTime @default(now())
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, code])
+  @@index([userId, earnedAt])
+}
+
+model MemberMonthlyGoal {
+  id                 String   @id @default(cuid())
+  userId             String
+  monthStart         DateTime
+  baselineVideos     Int
+  baselineEngagement Int
+  targetVideos       Int
+  targetEngagement   Int
+  completedAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, monthStart])
+  @@index([userId, monthStart])
+}
+
+model MemberMonthlyReview {
+  id               String   @id @default(cuid())
+  userId           String
+  monthStart       DateTime
+  approvedVideos   Int
+  engagement       Int
+  goalCompleted    Boolean
+  baselineVideos   Int      @default(0)
+  baselineEngagement Int    @default(0)
+  previousVideos   Int      @default(0)
+  previousEngagement Int    @default(0)
+  highlightVideoId String?
+  createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, monthStart])
+  @@index([userId, monthStart])
 }
 
 model RedemptionOrder {

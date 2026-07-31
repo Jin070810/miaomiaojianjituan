@@ -73,6 +73,12 @@ describe("快手链接与积分规则", () => {
     expect(parseKuaishouHtml(html).photoId).toBe("123456");
   });
 
+  it("treats enhanced public metadata as optional enrichment", () => {
+    const html = '{"timestamp":1784295138758,"likeCount":201,"viewCount":300,"commentCount":12,"photoId":"123","userName":"妙妙","caption":"夏日高光","coverUrl":"https:\\/\\/cdn.example.com\\/cover.jpg"}';
+    expect(parseKuaishouHtml(html)).toMatchObject({ photoId: "123", likes: 201, views: 300, commentCount: 12, caption: "夏日高光", coverUrl: "https://cdn.example.com/cover.jpg" });
+    expect(parseKuaishouHtml('{"timestamp":1784295138758,"likeCount":201,"photoId":"123","userName":"妙妙"}').commentCount).toBeNull();
+  });
+
   it("rejects videos outside the seven-day window or below 200 likes", () => {
     const submittedAt = new Date("2026-07-23T13:32:18.758Z");
     expect(videoEligibilityError(199, new Date("2026-07-23T12:00:00.000Z"), submittedAt)).toContain("点赞量不足");

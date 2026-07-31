@@ -122,6 +122,8 @@ v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新
 - 登录后的首页只加载成员必要资料、积分摘要和最近动态；周挑战与成长卡片独立加载，单个接口超时或失败不会阻止提交切片。
 - 切片、礼物、积分、转账和兑换记录按首次进入页面加载并缓存，页面级失败可单独重试。
 - 成员端只读请求统一在 10 秒后取消并显示可重试提示；`GET /api/dashboard` 保持兼容，`GET /api/videos` 新增可选统计摘要字段。
+- 未登录访问根路径时由服务端直接跳转到登录页；根路径和登录页的 HTML 禁止缓存，避免微信 WebView 保留旧页面壳而无法加载新脚本。版本化 `/_next` 静态资源仍保留不可变缓存。
+- 登录成功后会先校验会话 Cookie，再以完整页面跳转成员端；若微信 WebView 没有保存会话，会在登录页提示清理网页缓存或改用系统浏览器，而不是循环回到登录页。
 - 完整验收与回滚步骤见 [`docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md`](docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md)。
 
 ## 管理后台运营工作台 v2

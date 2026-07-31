@@ -181,7 +181,7 @@ export async function login(page: import("@playwright/test").Page, kuaishouId: s
   const response = await loginResponse;
   const result = await response.json();
   if (!response.ok()) throw new Error(`E2E 登录失败：${result.error ?? response.status()}`);
-  await page.goto(result.user?.role === "ADMIN" ? "/admin" : "/");
+  await page.waitForURL(result.user?.role === "ADMIN" ? "**/admin" : "**/");
 }
 
 export async function expectNoHorizontalOverflow(page: import("@playwright/test").Page) {

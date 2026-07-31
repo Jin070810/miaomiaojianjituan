@@ -57,6 +57,24 @@ function signed(value: number) {
   return `${value > 0 ? "+" : ""}${value.toLocaleString()}`;
 }
 
+const BADGE_ASSETS: Record<string, string> = {
+  FIRST_APPROVED: "/brand/miaomiao/growth/badge-first-approved.webp",
+  VIDEOS_10: "/brand/miaomiao/growth/badge-videos-10.webp",
+  VIDEOS_50: "/brand/miaomiao/growth/badge-videos-50.webp",
+  VIDEOS_100: "/brand/miaomiao/growth/badge-videos-100.webp",
+  LIKES_10000: "/brand/miaomiao/growth/badge-likes-10k.webp",
+  LIKES_100000: "/brand/miaomiao/growth/badge-likes-100k.webp",
+  VIEWS_100000: "/brand/miaomiao/growth/badge-views-100k.webp",
+  VIEWS_1000000: "/brand/miaomiao/growth/badge-views-1m.webp",
+  ACTIVE_MONTHS_3: "/brand/miaomiao/growth/badge-active-3m.webp",
+  ACTIVE_MONTHS_6: "/brand/miaomiao/growth/badge-active-6m.webp",
+  CHALLENGES_4: "/brand/miaomiao/growth/badge-challenges-4.webp",
+};
+
+function badgeAsset(code: string) {
+  return BADGE_ASSETS[code] ?? "/brand/miaomiao/growth/achievement-badge.png";
+}
+
 export function AchievementSummaryCard({ data, loading, error, onOpen, onRetry }: {
   data: AchievementData | null;
   loading: boolean;
@@ -89,14 +107,14 @@ export function AchievementView({ data, loading, error, onBack, onRetry }: {
   onBack: () => void;
   onRetry: () => void;
 }) {
-  if (loading) return <div className="member-content journal-page achievement-page"><button className="page-back" onClick={onBack}><ArrowLeft size={19} />返回首页</button><section className="achievement-local-state"><span className="growth-loading-bar" /><p>正在打开成长档案…</p></section></div>;
-  if (error || !data) return <div className="member-content journal-page achievement-page"><button className="page-back" onClick={onBack}><ArrowLeft size={19} />返回首页</button><section className="achievement-local-state is-error" role="alert"><p>{error || "成长档案暂时不可用"}</p><button className="journal-primary" onClick={onRetry}>重新加载</button></section></div>;
+  if (loading) return <div className="member-content journal-page achievement-page"><button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button><section className="achievement-local-state"><span className="growth-loading-bar" /><p>正在打开成长档案…</p></section></div>;
+  if (error || !data) return <div className="member-content journal-page achievement-page"><button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button><section className="achievement-local-state is-error" role="alert"><p>{error || "成长档案暂时不可用"}</p><button className="journal-primary" onClick={onRetry}>重新加载</button></section></div>;
   const next = data.profile.nextLevel;
   const levelProgress = next ? ratio(data.profile.experience - (next.level === 1 ? 0 : [0, 500, 1500, 3500, 7000][next.level - 2] ?? 0), next.minimumExperience - ([0, 500, 1500, 3500, 7000][next.level - 2] ?? 0)) : 100;
   const recommendation = data.goal.completedAt ? "继续复用高互动选题，让下一支作品成为新的高光。" : data.goal.progress.videos < data.goal.targetVideos ? "先稳定完成一条通过作品，再集中优化互动表现。" : "作品数量已达标，下一步聚焦点赞、播放和评论互动。";
   return (
     <div className="member-content journal-page achievement-page">
-      <button className="page-back" onClick={onBack}><ArrowLeft size={19} />返回首页</button>
+      <button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button>
       <section className="achievement-hero">
         <div><span className="journal-kicker">我的成长档案</span><h1>Lv.{data.profile.level} {data.profile.name}</h1><p>成长经验独立累计，不参与积分兑换或结算。</p></div>
         <img src="/brand/miaomiao/growth/growth-hero.png" alt="剪辑团成长档案插画" />
@@ -117,7 +135,7 @@ export function AchievementView({ data, loading, error, onBack, onRetry }: {
       <section className="achievement-section">
         <div className="journal-section-heading ruled"><h2>勋章墙</h2><span>{data.achievements.filter((item) => item.earnedAt).length} / {data.achievements.length} 已点亮</span></div>
         <div className="achievement-badge-grid">
-          {data.achievements.map((item) => <article className={item.earnedAt ? "is-earned" : ""} key={item.code}><img src="/brand/miaomiao/growth/achievement-badge.png" alt="" /><div><strong>{item.title}</strong><small>{item.earnedAt ? `获得于 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(item.earnedAt))}` : item.description}</small></div></article>)}
+          {data.achievements.map((item) => <article className={item.earnedAt ? "is-earned" : ""} key={item.code}><img src={badgeAsset(item.code)} alt="" /><div><strong>{item.title}</strong><small>{item.earnedAt ? `获得于 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(item.earnedAt))}` : item.description}</small></div></article>)}
         </div>
       </section>
       <section className="achievement-section">

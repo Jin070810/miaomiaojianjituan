@@ -1,0 +1,58 @@
+name: Enable Member Clearance
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_enable:
+        description: "I confirm that the member-clearance production rollout has passed validation and may be enabled"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: member-clearance-enable-production
+  cancel-in-progress: false
+
+jobs:
+  enable:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_enable
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Enable audited member-clearance switch
+        env:
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          ADMIN_KUAISHOU_IDS: ${{ secrets.ADMIN_KUAISHOU_IDS }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DOMAIN"
+          test -n "$ADMIN_KUAISHOU_IDS"
+          test -n "$ADMIN_PASSWORD"
+
+          admin_kuaishou_id="${ADMIN_KUAISHOU_IDS%%,*}"
+          cookie_jar="$(mktemp)"
+          trap 'rm -f "$cookie_jar"' EXIT
+          origin="https://$PRODUCTION_DOMAIN"
+
+          login_payload="$(jq -cn --arg kuaishou_id "$admin_kuaishou_id" --arg password "$ADMIN_PASSWORD" \
+            '{kuaishouId: $kuaishou_id, password: $password}')"
+          curl --fail --silent --show-error \
+            --cookie-jar "$cookie_jar" \
+            --header "Content-Type: application/json" \
+            --header "Origin: $origin" \
+            --data "$login_payload" \
+            "$origin/api/auth/login" \
+            --output /dev/null
+
+          curl --fail --silent --show-error \
+            --cookie "$cookie_jar" \
+            --header "Content-Type: application/json" \
+            --header "Origin: $origin" \
+            --request PATCH \
+            --data '{"key":"MEMBER_CLEARANCE","enabled":true}' \
+            "$origin/api/admin/operation-switches" \
+            | jq -e '.switches[] | select(.key == "MEMBER_CLEARANCE" and .enabled == true) | {key, enabled, updatedAt}'

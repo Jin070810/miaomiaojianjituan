@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateVideoPoints, compareOwnerNames, normalizeKuaishouLink, ownerMatches, videoEligibilityError } from "@/lib/kuaishou";
+import { calculateVideoPoints, canonicalKuaishouVideoUrl, compareOwnerNames, normalizeKuaishouLink, ownerMatches, videoEligibilityError } from "@/lib/kuaishou";
 import { captureVideoPublishedAt, parseKuaishouHtml } from "@/lib/kuaishou-fetch";
 
 describe("快手链接与积分规则", () => {
@@ -7,6 +7,13 @@ describe("快手链接与积分规则", () => {
     expect(normalizeKuaishouLink("https://v.kuaishou.com/abc_123").requestUrl).toBe("https://v.kuaishou.com/abc_123");
     expect(normalizeKuaishouLink("https://www.kuaishou.com/short-video/123").requestUrl).toContain("/short-video/123");
     expect(normalizeKuaishouLink("复制打开快手 https://v.kuaishou.com/abc_123 看看").shortCode).toBe("abc_123");
+  });
+
+  it("uses the fetched photoId for stable history links", () => {
+    expect(canonicalKuaishouVideoUrl("123456789")).toBe("https://www.kuaishou.com/short-video/123456789");
+    expect(canonicalKuaishouVideoUrl("video_abc-123")).toBe("https://www.kuaishou.com/short-video/video_abc-123");
+    expect(canonicalKuaishouVideoUrl(null)).toBeNull();
+    expect(canonicalKuaishouVideoUrl("../../another-video")).toBeNull();
   });
 
   it("applies all points boundaries", () => {

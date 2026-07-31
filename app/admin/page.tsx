@@ -48,6 +48,7 @@ import { WorkbenchAdmin } from "./modules/workbench";
 import { AdminGlobalSearch } from "./modules/admin-search";
 import { ActivityDrawer } from "./modules/activity-drawer";
 import { isMemberParticipantRole } from "@/lib/member-roles";
+import { canonicalKuaishouVideoUrl } from "@/lib/kuaishou";
 import {
   DEFAULT_GIFT_CATEGORIES,
   inferGiftCategory,
@@ -397,18 +398,6 @@ function orderStatusLabel(status: string, kind: GiftKindValue) {
   } as Record<string, string>)[status] ?? status;
 }
 
-function safeKuaishouUrl(value: string) {
-  try {
-    const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
-    return url.protocol === "https:" && (hostname === "kuaishou.com" || hostname.endsWith(".kuaishou.com"))
-      ? url.toString()
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 const gifts = [
   {
     name: "剪辑团定制保温杯",
@@ -610,13 +599,13 @@ function AuditTable({ rows, compact = false, onAction, onActivity }: { rows: Adm
         <thead><tr><th>视频与成员</th><th>点赞</th><th>奖励积分</th><th>状态</th>{!compact && <th>结果说明</th>}<th>提交时间</th><th /></tr></thead>
         <tbody>
           {(compact ? rows.slice(0, 4) : rows).map((row) => {
-            const href = safeKuaishouUrl(row.sourceUrl);
+            const href = canonicalKuaishouVideoUrl(row.photoId);
             const reason = row.reviewReason?.trim() || (row.status === "APPROVED" ? "自动审核通过" : "历史记录未保存具体原因");
             return (
               <tr key={row.id}>
                 <td><div className="table-main"><span className="table-thumb">▶</span><div>{href
-                  ? <a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${row.user.nickname}提交的快手视频`} title="在新标签页打开快手视频"><strong>{row.sourceUrl}</strong><ExternalLink size={13} /></a>
-                  : <strong className="video-source-invalid" title="该历史链接不是安全的快手 HTTPS 地址">{row.sourceUrl}</strong>}<small>{row.user.nickname} · {row.user.kuaishouId}</small></div></div></td>
+                  ? <a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${row.user.nickname}已核验的快手视频`} title="在新标签页打开已核验的快手视频"><strong>{row.sourceUrl}</strong><ExternalLink size={13} /></a>
+                  : <strong className="video-source-invalid" title="该历史记录没有可核验的视频 ID，无法提供跳转">{row.sourceUrl}</strong>}<small>{row.user.nickname} · {row.user.kuaishouId}</small></div></div></td>
                 <td>{row.likes?.toLocaleString() ?? "未获取"}</td><td className={row.status === "APPROVED" && row.points > 0 ? "positive-text" : ""}>{row.status === "APPROVED" && row.points > 0 ? `+${row.points.toLocaleString()}` : "未入账"}</td>
                 <td><span className={`status-chip ${row.status === "APPROVED" ? "success" : row.status === "FAILED" ? "warning" : "danger"}`}>{videoStatusLabel(row.status)}</span></td>
                 {!compact && <td><details className="video-result-detail"><summary title={reason}>{reason}</summary><div><span>抓取作者：{row.fetchedOwner ?? "未获取"}</span><span>提交昵称：{row.submittedNickname || "未记录"}</span><span>photoId：{row.photoId ?? "未获取"}</span></div></details></td>}

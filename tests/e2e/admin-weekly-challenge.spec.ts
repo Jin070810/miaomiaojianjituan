@@ -41,6 +41,19 @@ test("admin sees period health and failure details at 1440x900", async ({ page }
   await page.screenshot({ path: "output/playwright/admin-weekly-detail-1440x900.png", fullPage: true });
 });
 
+test("video history opens the fetched photoId instead of the submitted short link", async ({ page }) => {
+  await login(page, e2eIds.admin);
+  await page.getByRole("button", { name: "视频与申诉" }).click();
+  await expect(page.getByRole("heading", { name: "视频与审核" })).toBeVisible();
+  await page.getByRole("button", { name: /视频历史/ }).click();
+  const videoSearch = page.getByPlaceholder("搜索链接、photoId、作者、驳回原因或快手 ID");
+  await videoSearch.fill("e2e-history-photo-987654321");
+  await videoSearch.press("Enter");
+  await expect(page.locator("a.video-source-link").first()).toHaveAttribute("href", "https://www.kuaishou.com/short-video/e2e-history-photo-987654321");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: "output/playwright/admin-video-history-1440x900.png", fullPage: true });
+});
+
 test("admin modules load on demand, retry locally, and keep cross-page selections", async ({ page }) => {
   const adminRequests: string[] = [];
   page.on("request", (request) => {

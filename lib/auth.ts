@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { db } from "./db";
-import { isPasswordResetApproverRole } from "./member-roles";
+import { isPasswordResetApproverRole, isVideoReviewOperatorRole } from "./member-roles";
 
 const COOKIE = "miaomiao_session";
 const DAYS = 14;
@@ -55,5 +55,11 @@ export async function requireAdmin() {
 export async function requirePasswordResetApprover() {
   const user = await requireUser();
   if (!isPasswordResetApproverRole(user.role)) throw new Error("无权执行此操作");
+  return user;
+}
+
+export async function requireVideoReviewOperator() {
+  const user = await requireUser();
+  if (!isVideoReviewOperatorRole(user.role)) throw new Error("无权执行此操作");
   return user;
 }

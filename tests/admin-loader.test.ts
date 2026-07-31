@@ -24,15 +24,16 @@ describe("admin section loader", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("loads the two video resources without requesting unrelated modules", async () => {
+  it("loads the video review resources without requesting unrelated modules", async () => {
     const paths: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       paths.push(String(input));
+      if (String(input).includes("video-reviews")) return jsonResponse({ reviews: [] });
       return jsonResponse(String(input).includes("appeals") ? { appeals: [] } : { videos: [] });
     }) as unknown as typeof fetch;
     const result = await loadAdminSection("videos", fetcher);
-    expect(paths.sort()).toEqual(["/api/admin/video-appeals?take=50", "/api/admin/videos?take=50"].sort());
-    expect(result).toEqual({ videos: { videos: [] }, appeals: { appeals: [] } });
+    expect(paths.sort()).toEqual(["/api/admin/video-appeals?take=50", "/api/admin/videos?take=50", "/api/reviewer/video-reviews?take=50"].sort());
+    expect(result).toEqual({ reviews: { reviews: [] }, videos: { videos: [] }, appeals: { appeals: [] } });
   });
 
   it("uses 50-member pages for selection-backed modules", async () => {

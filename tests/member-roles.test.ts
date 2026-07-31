@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMemberParticipantRole, isPasswordResetApproverRole, memberParticipantRoles } from "@/lib/member-roles";
+import { isMemberParticipantRole, isPasswordResetApproverRole, isVideoReviewOperatorRole, memberParticipantRoles } from "@/lib/member-roles";
 
 describe("成员与审核员角色", () => {
   it("keeps reviewers in every member-participant audience", () => {
@@ -13,5 +13,11 @@ describe("成员与审核员角色", () => {
     expect(isPasswordResetApproverRole("MEMBER")).toBe(false);
     expect(isPasswordResetApproverRole("REVIEWER")).toBe(true);
     expect(isPasswordResetApproverRole("ADMIN")).toBe(true);
+  });
+
+  it("limits secondary video review operations to reviewers and administrators", () => {
+    expect(isVideoReviewOperatorRole("MEMBER")).toBe(false);
+    expect(isVideoReviewOperatorRole("REVIEWER")).toBe(true);
+    expect(isVideoReviewOperatorRole("ADMIN")).toBe(true);
   });
 });

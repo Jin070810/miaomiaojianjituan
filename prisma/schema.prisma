@@ -35,6 +35,12 @@ enum VideoAppealStatus {
   REJECTED
 }
 
+enum VideoSecondaryReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum LedgerType {
   VIDEO_REWARD
   TRANSFER_IN
@@ -173,6 +179,7 @@ model User {
   videos           VideoSubmission[]
   videoAppeals     VideoAppeal[]      @relation("AppealRequester")
   reviewedAppeals  VideoAppeal[]      @relation("AppealReviewer")
+  secondaryVideoReviews VideoSecondaryReview[] @relation("SecondaryVideoReviewer")
   rankingEntries   RankingEntry[]
   rankingAwards    RankingAward[]
   outgoing         Transfer[]           @relation("sender")
@@ -366,10 +373,28 @@ model VideoSubmission {
   idempotencyKey    String      @unique
   user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   appeals           VideoAppeal[]
+  secondaryReview   VideoSecondaryReview?
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
   @@index([photoId, status])
+}
+
+model VideoSecondaryReview {
+  id           String                     @id @default(cuid())
+  videoId      String                     @unique
+  reviewerId   String?
+  status       VideoSecondaryReviewStatus @default(PENDING)
+  reviewReason String?
+  assignedAt   DateTime?
+  reviewedAt   DateTime?
+  createdAt    DateTime                   @default(now())
+  updatedAt    DateTime                   @updatedAt
+  video        VideoSubmission            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  reviewer     User?                      @relation("SecondaryVideoReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([reviewerId, status, createdAt])
 }
 
 model VideoAppeal {

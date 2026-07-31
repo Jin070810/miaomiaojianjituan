@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { LedgerType, Prisma, PrismaClient } from "@prisma/client";
+import { LedgerType, Prisma, PrismaClient, Role } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { calculateVideoPoints } from "./kuaishou";
 import { getVideoPointRule } from "./point-rules";
@@ -84,6 +84,45 @@ async function debitCompensating(
     data: { accountId: account.id, amount: -amount, balanceAfter: updated.balance, type, referenceId, note },
   });
   return updated;
+}
+
+async function assignVideoSecondaryReview(tx: Prisma.TransactionClient, videoId: string) {
+  const existing = await tx.videoSecondaryReview.findUnique({ where: { videoId } });
+  if (existing) return existing;
+  const reviewers = await tx.user.findMany({
+    where: { active: true, role: "REVIEWER" },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+  let reviewerId: string | null = null;
+  if (reviewers.length > 0) {
+    const reviewerIds = reviewers.map((reviewer) => reviewer.id);
+    const pendingCounts = await tx.videoSecondaryReview.groupBy({
+      by: ["reviewerId"],
+      where: { status: "PENDING", reviewerId: { in: reviewerIds } },
+      _count: { id: true },
+    });
+    const counts = new Map(pendingCounts.map((row) => [row.reviewerId, row._count.id]));
+    reviewerId = reviewerIds
+      .map((id) => ({ id, count: counts.get(id) ?? 0 }))
+      .sort((left, right) => left.count - right.count || left.id.localeCompare(right.id))[0]?.id ?? null;
+  }
+  const review = await tx.videoSecondaryReview.create({
+    data: {
+      videoId,
+      reviewerId,
+      assignedAt: reviewerId ? new Date() : null,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      action: "VIDEO_SECONDARY_REVIEW_CREATED",
+      entity: "VideoSecondaryReview",
+      entityId: review.id,
+      afterValue: { videoId, reviewerId, status: review.status },
+    },
+  });
+  return review;
 }
 
 export async function completeTransfer(input: {
@@ -492,6 +531,79 @@ export async function redeemGift(input: {
   }
 }
 
+async function revokeApprovedVideoInTransaction(
+  tx: Prisma.TransactionClient,
+  input: { videoId: string; actorId: string; reason: string; ip?: string },
+) {
+  const video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: input.videoId } });
+  if (video.status === "REVOKED") return video;
+  if (video.status !== "APPROVED") throw new Error("只有已到账视频可以撤销");
+  const claimed = await tx.videoSubmission.updateMany({
+    where: { id: video.id, status: "APPROVED" },
+    data: { status: "REVOKED", reviewReason: input.reason, reviewedAt: new Date() },
+  });
+  if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+  if (video.points > 0) {
+    await debitCompensating(tx, video.userId, video.points, "REVERSAL", video.id, `撤销视频奖励：${input.reason}`);
+  }
+  const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+  await tx.auditLog.create({
+    data: {
+      actorId: input.actorId,
+      action: "VIDEO_REVOKED",
+      entity: "VideoSubmission",
+      entityId: video.id,
+      beforeValue: { status: video.status, points: video.points },
+      afterValue: { status: updated.status, points: 0 },
+      reason: input.reason,
+      ip: input.ip,
+    },
+  });
+  await createNotification(tx, {
+    userId: video.userId,
+    type: "VIDEO_RESULT",
+    title: "视频奖励已撤销",
+    body: `${input.reason}${video.points > 0 ? `，已扣回 ${video.points} 积分` : ""}`,
+    entityType: "VideoSubmission",
+    entityId: video.id,
+    metadata: { amount: -video.points, status: "REVOKED" },
+    dedupeKey: `video:${video.id}:revoked`,
+  });
+  await reconcileWeeklyChallengesAfterVideoRevocation(tx, {
+    userId: video.userId,
+    submittedAt: video.submittedAt,
+    videoId: video.id,
+    reason: input.reason,
+  });
+  await reconcileMemberAchievements(tx, video.userId);
+  return updated;
+}
+
+async function closePendingSecondaryReviewAfterRevocation(
+  tx: Prisma.TransactionClient,
+  input: { videoId: string; actorId: string; reason: string; ip?: string },
+) {
+  const review = await tx.videoSecondaryReview.findUnique({ where: { videoId: input.videoId } });
+  if (!review || review.status !== "PENDING") return review;
+  const updated = await tx.videoSecondaryReview.update({
+    where: { id: review.id },
+    data: { status: "REJECTED", reviewReason: input.reason, reviewedAt: new Date() },
+  });
+  await tx.auditLog.create({
+    data: {
+      actorId: input.actorId,
+      action: "VIDEO_SECONDARY_REJECTED",
+      entity: "VideoSecondaryReview",
+      entityId: review.id,
+      beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
+      afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
+      reason: input.reason,
+      ip: input.ip,
+    },
+  });
+  return updated;
+}
+
 export async function creditVideoReward(input: {
   videoId: string;
   userId: string;
@@ -569,6 +681,9 @@ export async function creditVideoReward(input: {
         ip: input.ip,
       },
     });
+    if (!input.actorId) {
+      await assignVideoSecondaryReview(tx, video.id);
+    }
     await createNotification(tx, {
       userId: input.userId,
       type: "VIDEO_RESULT",
@@ -746,47 +861,87 @@ export async function resolveVideoAppeal(input: {
 
 export async function revokeVideoReward(input: { videoId: string; actorId: string; reason: string; ip?: string }) {
   return db.$transaction(async (tx) => {
-    const video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: input.videoId } });
-    if (video.status === "REVOKED") return video;
-    if (video.status !== "APPROVED") throw new Error("只有已到账视频可以撤销");
-    const claimed = await tx.videoSubmission.updateMany({
-      where: { id: video.id, status: "APPROVED" },
-      data: { status: "REVOKED", reviewReason: input.reason, reviewedAt: new Date() },
+    const updated = await revokeApprovedVideoInTransaction(tx, input);
+    await closePendingSecondaryReviewAfterRevocation(tx, input);
+    return updated;
+  });
+}
+
+export async function resolveVideoSecondaryReview(input: {
+  reviewId: string;
+  action: "approve" | "reject";
+  actorId: string;
+  actorRole: Role;
+  reason?: string;
+  ip?: string;
+}) {
+  return db.$transaction(async (tx) => {
+    const review = await tx.videoSecondaryReview.findUnique({
+      where: { id: input.reviewId },
+      include: { video: true },
     });
-    if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
-    if (video.points > 0) {
-      await debitCompensating(tx, video.userId, video.points, "REVERSAL", video.id, `撤销视频奖励：${input.reason}`);
+    if (!review) throw new Error("二次审核任务不存在");
+    if (input.actorRole === "REVIEWER" && review.reviewerId !== input.actorId) {
+      throw new Error("无权处理该二次审核任务");
     }
-    const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    if (review.status !== "PENDING") return review;
+
+    if (input.action === "approve") {
+      const claimed = await tx.videoSecondaryReview.updateMany({
+        where: { id: review.id, status: "PENDING" },
+        data: {
+          status: "APPROVED",
+          reviewerId: review.reviewerId ?? input.actorId,
+          reviewedAt: new Date(),
+        },
+      });
+      if (claimed.count !== 1) return tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
+      const updated = await tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
+      await tx.auditLog.create({
+        data: {
+          actorId: input.actorId,
+          action: "VIDEO_SECONDARY_APPROVED",
+          entity: "VideoSecondaryReview",
+          entityId: review.id,
+          beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
+          afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
+          ip: input.ip,
+        },
+      });
+      return updated;
+    }
+
+    const reason = input.reason?.trim();
+    if (!reason) throw new Error("二次审核驳回必须填写原因");
+    const claimed = await tx.videoSecondaryReview.updateMany({
+      where: { id: review.id, status: "PENDING" },
+      data: {
+        status: "REJECTED",
+        reviewerId: review.reviewerId ?? input.actorId,
+        reviewReason: reason,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1) return tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
+    const updated = await tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
     await tx.auditLog.create({
       data: {
         actorId: input.actorId,
-        action: "VIDEO_REVOKED",
-        entity: "VideoSubmission",
-        entityId: video.id,
-        beforeValue: { status: video.status, points: video.points },
-        afterValue: { status: updated.status, points: 0 },
-        reason: input.reason,
+        action: "VIDEO_SECONDARY_REJECTED",
+        entity: "VideoSecondaryReview",
+        entityId: review.id,
+        beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
+        afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
+        reason,
         ip: input.ip,
       },
     });
-    await createNotification(tx, {
-      userId: video.userId,
-      type: "VIDEO_RESULT",
-      title: "视频奖励已撤销",
-      body: `${input.reason}${video.points > 0 ? `，已扣回 ${video.points} 积分` : ""}`,
-      entityType: "VideoSubmission",
-      entityId: video.id,
-      metadata: { amount: -video.points, status: "REVOKED" },
-      dedupeKey: `video:${video.id}:revoked`,
+    await revokeApprovedVideoInTransaction(tx, {
+      videoId: review.videoId,
+      actorId: input.actorId,
+      reason,
+      ip: input.ip,
     });
-    await reconcileWeeklyChallengesAfterVideoRevocation(tx, {
-      userId: video.userId,
-      submittedAt: video.submittedAt,
-      videoId: video.id,
-      reason: input.reason,
-    });
-    await reconcileMemberAchievements(tx, video.userId);
     return updated;
   });
 }

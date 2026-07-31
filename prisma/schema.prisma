@@ -47,6 +47,7 @@ enum LedgerType {
   WEEKLY_RACE_REWARD
   WEEKLY_CHALLENGE_REVERSAL
   WEEKLY_RACE_REVERSAL
+  MEMBER_CLEARANCE_FORFEIT
 }
 
 enum TransferStatus {
@@ -60,6 +61,7 @@ enum RedemptionStatus {
   FULFILLED
   REJECTED
   REFUNDED
+  CLEARANCE_CANCELLED
 }
 
 enum GiftKind {
@@ -95,6 +97,21 @@ enum NotificationType {
   RANKING_RESULT
   RANKING_AWARD
   WEEKLY_CHALLENGE
+  MEMBER_CLEARANCE
+}
+
+enum MemberEligibilityStatus {
+  ACTIVE
+  COOLDOWN
+  REJOIN_PENDING
+  REJOIN_REJECTED
+  EXEMPT
+}
+
+enum RejoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum WeeklyChallengePeriodStatus {
@@ -171,6 +188,71 @@ model User {
   weeklyRaceWins             WeeklyRaceWinner[]
   passwordResetRequests      PasswordResetRequest[] @relation("PasswordResetTarget")
   reviewedPasswordResetRequests PasswordResetRequest[] @relation("PasswordResetReviewer")
+  eligibility                MemberEligibility?
+  clearancePolicyVersions    MembershipClearancePolicyVersion[] @relation("ClearancePolicyCreator")
+  rejoinRequests             RejoinRequest[]
+  reviewedRejoinRequests     RejoinRequest[] @relation("RejoinReviewer")
+}
+
+model MemberClearanceProgram {
+  id             String   @id @default("default")
+  firstEnabledAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model MembershipClearancePolicyVersion {
+  id             String              @id @default(cuid())
+  version        Int                 @unique
+  inactivityDays Int
+  warningDays    Int[]
+  cooldownDays   Int
+  createdById    String?
+  createdAt      DateTime            @default(now())
+  createdBy      User?               @relation("ClearancePolicyCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  eligibilities  MemberEligibility[]
+
+  @@index([createdAt])
+}
+
+model MemberEligibility {
+  id              String                  @id @default(cuid())
+  userId          String                  @unique
+  policyVersionId String
+  status          MemberEligibilityStatus @default(ACTIVE)
+  cycleStartedAt  DateTime
+  lastOutputAt    DateTime?
+  warning14SentAt DateTime?
+  warning3SentAt  DateTime?
+  clearedAt       DateTime?
+  cooldownEndsAt  DateTime?
+  rejoinRetryAt   DateTime?
+  onboardingSeenAt DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  policyVersion   MembershipClearancePolicyVersion @relation(fields: [policyVersionId], references: [id])
+  rejoinRequests  RejoinRequest[]
+
+  @@index([status, cooldownEndsAt])
+  @@index([status, cycleStartedAt])
+}
+
+model RejoinRequest {
+  id            String              @id @default(cuid())
+  eligibilityId String
+  userId        String
+  status        RejoinRequestStatus @default(PENDING)
+  requestedAt   DateTime            @default(now())
+  reviewedAt    DateTime?
+  reviewedById  String?
+  reviewReason  String?
+  eligibility   MemberEligibility   @relation(fields: [eligibilityId], references: [id], onDelete: Cascade)
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy    User?               @relation("RejoinReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, requestedAt])
+  @@index([userId, requestedAt])
 }
 
 model PasswordResetRequest {

@@ -11,6 +11,7 @@ import {
   reconcileWeeklyChallengesAfterVideoRevocation,
 } from "./weekly-challenges";
 import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
+import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -532,6 +533,18 @@ export async function creditVideoReward(input: {
     if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
       throw new Error("只有处理中视频可以自动入账");
     }
+    const canApprove = await refreshEligibilityAfterApprovedVideo(tx, input.userId, new Date());
+    if (!canApprove) {
+      const rejected = await tx.videoSubmission.update({
+        where: { id: video.id },
+        data: { status: "REJECTED", points: 0, reviewReason: "账号已清退，不能再为该视频入账", processedAt: new Date(), reviewedAt: new Date() },
+      });
+      await writeAuditLog(tx, {
+        action: "VIDEO_AUTO_REJECTED", entity: "VideoSubmission", entityId: video.id,
+        beforeValue: { status: video.status }, afterValue: { status: rejected.status }, reason: "账号已清退，不能再为该视频入账", ip: input.ip,
+      });
+      return rejected;
+    }
     const claimed = await tx.videoSubmission.updateMany({
       where: { id: video.id, status: { in: ["PROCESSING", "PENDING_REVIEW", "FAILED"] } },
       data: { status: "APPROVED", points: input.points, processedAt: new Date(), reviewedAt: new Date() },
@@ -674,6 +687,9 @@ export async function resolveVideoAppeal(input: {
     const points = input.points ?? calculateVideoPoints(appeal.video.likes ?? 0, rule);
     if (!Number.isInteger(points) || points < 0 || points > rule.maximumPoints) {
       throw new Error(`申诉积分必须是 0 至 ${rule.maximumPoints} 的整数`);
+    }
+    if (!(await refreshEligibilityAfterApprovedVideo(tx, appeal.video.userId, new Date()))) {
+      throw new Error("成员账号已清退，恢复资格后才能通过视频申诉");
     }
     const claimed = await tx.videoAppeal.updateMany({
       where: { id: appeal.id, status: "PENDING" },

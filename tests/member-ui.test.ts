@@ -89,4 +89,11 @@ describe("成员端品牌视觉库", () => {
     expect(panelRule).toContain("align-self: center");
     expect(panelRule).toContain("margin: 0");
   });
+
+  it("首次进入成员端会说明自动清退机制并允许确认", () => {
+    const source = readFileSync(path.resolve(__dirname, "..", "app", "page.tsx"), "utf8");
+    expect(source).toContain("成员资格机制说明");
+    expect(source).toContain("我已了解");
+    expect(source).toContain("/api/member/clearance-onboarding");
+  });
 });

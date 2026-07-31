@@ -7,7 +7,7 @@ export async function GET() {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
-  const [recentLedger, videoStatusGroups, higherBalanceCount, approvedVideos] = await Promise.all([
+  const [recentLedger, videoStatusGroups, higherBalanceCount, approvedVideos, eligibility] = await Promise.all([
     user.account
       ? db.pointLedger.findMany({
           where: { accountId: user.account.id },
@@ -22,6 +22,7 @@ export async function GET() {
     }),
     db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true, role: { in: memberParticipantRoles } } } }),
     db.videoSubmission.count({ where: { userId: user.id, status: "APPROVED" } }),
+    db.memberEligibility.findUnique({ where: { userId: user.id }, include: { policyVersion: true } }),
   ]);
   const videoCounts = videoStatusGroups.reduce(
     (counts, row) => {
@@ -46,6 +47,14 @@ export async function GET() {
       balance: user.account?.balance ?? 0,
     },
     summary: { approvedVideos, rank: higherBalanceCount + 1, videoCounts },
+    eligibility: eligibility ? {
+      status: eligibility.status,
+      deadlineAt: new Date((eligibility.lastOutputAt ?? eligibility.cycleStartedAt).getTime() + eligibility.policyVersion.inactivityDays * 86_400_000),
+      warningDays: eligibility.policyVersion.warningDays,
+      inactivityDays: eligibility.policyVersion.inactivityDays,
+      cooldownDays: eligibility.policyVersion.cooldownDays,
+      onboardingSeenAt: eligibility.onboardingSeenAt,
+    } : null,
     ledger: recentLedger,
   });
 }

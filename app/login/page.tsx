@@ -28,10 +28,12 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [clearance, setClearance] = useState<{ status: string; availableAt: string | null } | null>(null);
 
   function switchMode(nextMode: "login" | "register" | "reset") {
     setMode(nextMode);
     setError("");
+    setClearance(null);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -48,6 +50,11 @@ export default function LoginPage() {
           : { kuaishouId, password };
       const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       const result = await response.json();
+      if (mode === "login" && result.code === "MEMBER_CLEARED") {
+        setClearance({ status: result.status, availableAt: result.availableAt ?? null });
+        setError(result.error ?? "账号已清退");
+        return;
+      }
       if (!response.ok) throw new Error(result.error ?? "操作失败");
       if (mode === "reset") {
         setError("找回申请已提交。请联系审核员完成身份核验后再使用新密码登录。");
@@ -65,6 +72,22 @@ export default function LoginPage() {
       window.location.assign(result.user?.role === "ADMIN" ? "/admin" : "/");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "操作失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitRejoin() {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/rejoin-requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kuaishouId, password }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "重新加入申请失败");
+      setClearance({ status: "REJOIN_PENDING", availableAt: null });
+      setError("重新加入申请已提交，请等待审核员审核。");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "重新加入申请失败");
     } finally {
       setLoading(false);
     }
@@ -125,6 +148,12 @@ export default function LoginPage() {
                 </div>
               )}
               {error && <p className="form-error" role="alert">{error}</p>}
+              {clearance && <div className="field-hint" role="status">
+                {clearance.availableAt && <p>可操作时间：{new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(clearance.availableAt))}</p>}
+                {clearance.status === "COOLDOWN" && clearance.availableAt && new Date(clearance.availableAt) <= new Date() && <button className="secondary-button compact-button" type="button" disabled={loading} onClick={() => void submitRejoin()}>申请重新加入</button>}
+                {clearance.status === "REJOIN_REJECTED" && clearance.availableAt && new Date(clearance.availableAt) <= new Date() && <button className="secondary-button compact-button" type="button" disabled={loading} onClick={() => void submitRejoin()}>再次申请重新加入</button>}
+                {clearance.status === "REJOIN_PENDING" && <p>审核通过后将重新获得完整的 60 天产出周期。</p>}
+              </div>}
               <button className="primary-button full-button auth-submit" disabled={loading}>
                 {loading ? "请稍等..." : mode === "login" ? "进入剪辑团" : mode === "register" ? "创建账号" : "提交找回申请"} <ArrowRight size={20} />
               </button>

@@ -41,6 +41,11 @@ const actionLabels: Record<string, string> = {
   TRANSFER_COMPLETED: "完成积分转账",
   USER_REGISTERED: "注册账号",
   USER_UPDATED: "更新成员资料",
+  MEMBER_CLEARANCE_POLICY_CREATED: "创建成员清退规则版本",
+  MEMBER_AUTO_CLEARED: "自动清退成员资格",
+  MEMBER_REJOIN_REQUESTED: "提交重新加入申请",
+  MEMBER_REJOIN_APPROVED: "批准重新加入申请",
+  MEMBER_REJOIN_REJECTED: "驳回重新加入申请",
   VIDEO_APPROVED: "视频审核通过",
   VIDEO_APPEAL_APPROVED: "通过视频申诉",
   VIDEO_APPEAL_CREATED: "提交视频申诉",
@@ -75,6 +80,9 @@ const entityLabels: Record<string, string> = {
   User: "成员",
   VideoAppeal: "视频申诉",
   VideoSubmission: "视频",
+  MemberEligibility: "成员资格周期",
+  MembershipClearancePolicyVersion: "成员清退规则",
+  RejoinRequest: "重新加入申请",
 };
 
 const sensitiveKey = /(password|secret|session|phone|address|qrcode|cashqr|boundphone)/i;
@@ -148,6 +156,7 @@ function isSystemAction(action: string) {
     "VIDEO_POINTS_ADJUSTED",
     "REDEMPTION_RECONCILIATION_COMPLETED",
     "RANKING_SETTLED",
+    "MEMBER_AUTO_CLEARED",
   ].includes(action);
 }
 

@@ -5,6 +5,7 @@ import { assertSameOrigin, getClientIp, rateLimitResponse, requestId, verifyPass
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { createSession } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
+import { getLoginClearanceStatus } from "@/lib/member-clearance";
 
 const schema = z.object({
   kuaishouId: z.string().trim().min(2).max(80),
@@ -47,6 +48,16 @@ export async function POST(request: Request) {
           ip: getClientIp(request),
           requestId: auditRequestId,
       });
+      const clearance = await getLoginClearanceStatus(user.id);
+      if (clearance && ["COOLDOWN", "REJOIN_PENDING", "REJOIN_REJECTED"].includes(clearance.status)) {
+        const availableAt = clearance.status === "COOLDOWN" ? clearance.cooldownEndsAt : clearance.rejoinRetryAt;
+        return NextResponse.json({
+          error: clearance.status === "REJOIN_PENDING" ? "重新加入申请正在审核" : "账号已因长期无有效产出被清退",
+          code: "MEMBER_CLEARED",
+          status: clearance.status,
+          availableAt: availableAt?.toISOString() ?? null,
+        }, { status: 403 });
+      }
       return NextResponse.json({ error: "账号已停用，请联系管理员" }, { status: 403 });
     }
     await createSession(user.id);

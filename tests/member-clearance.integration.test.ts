@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { memberClearanceInternals, requestRejoin, reviewRejoin } from "@/lib/member-clearance";
+import { listMemberClearanceAdmin, memberClearanceInternals, requestRejoin, reviewRejoin } from "@/lib/member-clearance";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 
@@ -52,6 +52,11 @@ describe.skipIf(!enabled)("member clearance database integration", () => {
     expect(await db.pointAccount.findUniqueOrThrow({ where: { id: accountId } })).toMatchObject({ balance: 0 });
     expect(await db.pointLedger.count({ where: { accountId, type: "REDEMPTION_REFUND" } })).toBe(1);
     expect(await db.pointLedger.count({ where: { accountId, type: "MEMBER_CLEARANCE_FORFEIT" } })).toBe(1);
+    const clearanceAdmin = await listMemberClearanceAdmin();
+    expect(clearanceAdmin.summary.currentClearanceCount).toBeGreaterThan(0);
+    expect(clearanceAdmin.clearedMembers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: eligibilityId, status: "COOLDOWN", user: expect.objectContaining({ kuaishouId: `clearance-${suffix}` }) }),
+    ]));
 
     await db.memberEligibility.update({ where: { id: eligibilityId }, data: { cooldownEndsAt: new Date(Date.now() - 1) } });
     const request = await requestRejoin({ userId });

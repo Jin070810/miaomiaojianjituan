@@ -326,13 +326,29 @@ export async function reviewRejoin(input: { requestId: string; reviewerId: strin
 }
 
 export async function listMemberClearanceAdmin() {
-  const [policy, program, eligibilities, requests] = await Promise.all([
+  const [policy, program, eligibilities, requests, activeMemberCount, clearedHistoryCount, currentClearanceCount, clearedMembers] = await Promise.all([
     getClearancePolicy(),
     db.memberClearanceProgram.findUnique({ where: { id: "default" } }),
     db.memberEligibility.findMany({ include: { user: { select: { id: true, nickname: true, kuaishouId: true, active: true } }, policyVersion: true }, orderBy: { updatedAt: "desc" }, take: 200 }),
     db.rejoinRequest.findMany({ where: { status: "PENDING" }, include: { user: { select: { nickname: true, kuaishouId: true } } }, orderBy: { requestedAt: "asc" }, take: 100 }),
+    db.memberEligibility.count({ where: { status: "ACTIVE", user: { active: true, role: "MEMBER" } } }),
+    db.memberEligibility.count({ where: { clearedAt: { not: null } } }),
+    db.memberEligibility.count({ where: { status: { in: ["COOLDOWN", "REJOIN_PENDING", "REJOIN_REJECTED"] } } }),
+    db.memberEligibility.findMany({
+      where: { clearedAt: { not: null } },
+      include: { user: { select: { nickname: true, kuaishouId: true, active: true } } },
+      orderBy: [{ clearedAt: "desc" }, { id: "desc" }],
+      take: 200,
+    }),
   ]);
-  return { policy, program, eligibilities, requests };
+  return {
+    policy,
+    program,
+    eligibilities,
+    requests,
+    summary: { activeMemberCount, clearedHistoryCount, currentClearanceCount },
+    clearedMembers,
+  };
 }
 
 export const memberClearanceInternals = { clearMember };

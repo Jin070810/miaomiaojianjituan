@@ -1487,7 +1487,17 @@ type ClearanceAdminData = {
   program: { firstEnabledAt: string | null } | null;
   eligibilities: Array<{ id: string; status: string; cycleStartedAt: string; lastOutputAt: string | null; cooldownEndsAt: string | null; user: { nickname: string; kuaishouId: string; active: boolean }; policyVersion: { version: number } }>;
   requests: Array<{ id: string; requestedAt: string; user: { nickname: string; kuaishouId: string } }>;
+  summary: { activeMemberCount: number; clearedHistoryCount: number; currentClearanceCount: number };
+  clearedMembers: Array<{ id: string; status: string; clearedAt: string | null; cooldownEndsAt: string | null; rejoinRetryAt: string | null; user: { nickname: string; kuaishouId: string; active: boolean } }>;
 };
+
+function clearanceStatusLabel(status: string) {
+  if (status === "COOLDOWN") return "冷却中";
+  if (status === "REJOIN_PENDING") return "等待恢复审核";
+  if (status === "REJOIN_REJECTED") return "恢复申请已驳回";
+  if (status === "ACTIVE") return "已恢复资格";
+  return status;
+}
 
 function MemberClearanceSettings() {
   const [data, setData] = useState<ClearanceAdminData | null>(null);
@@ -1528,7 +1538,7 @@ function MemberClearanceSettings() {
     {!data ? <p className="empty-copy">正在加载成员资格...</p> : <>
       <div className="member-growth-admin-grid">
         <div><span>当前规则版本</span><strong>v{data.policy.version}</strong><small>{data.program?.firstEnabledAt ? `首次启用：${formatAdminDate(data.program.firstEnabledAt)}` : "尚未启用"}</small></div>
-        <div><span>正在预警/计时</span><strong>{data.eligibilities.filter((row) => row.status === "ACTIVE").length}</strong><small>活跃普通成员资格周期</small></div>
+        <div><span>正在预警/计时</span><strong>{data.summary.activeMemberCount}</strong><small>活跃普通成员资格周期</small></div>
         <div><span>待审核恢复</span><strong>{data.requests.length}</strong><small>冷却结束后的申请</small></div>
       </div>
       <div className="admin-form-grid">
@@ -1540,6 +1550,9 @@ function MemberClearanceSettings() {
       <div className="admin-panel-actions"><button className="secondary-button" disabled={saving} onClick={() => void save()}>{saving ? "保存中..." : "创建后续周期规则"}</button></div>
       <h3>重新加入申请</h3>
       {data.requests.length === 0 ? <p className="empty-copy">暂无待审核申请。</p> : <div className="journal-menu">{data.requests.map((row) => <article className="password-support-request" key={row.id}><div><strong>{row.user.nickname}</strong><small>{row.user.kuaishouId} · 申请于 {formatAdminDate(row.requestedAt)}</small></div><div className="table-actions-inline"><button className="secondary-button compact-button" disabled={saving} onClick={() => void review(row.id, "REJECT")}>驳回</button><button className="primary-button compact-button" disabled={saving} onClick={() => void review(row.id, "APPROVE")}>恢复资格</button></div></article>)}</div>}
+      <h3>已清退与冷却名单</h3>
+      <p className="empty-copy">累计清退 {data.summary.clearedHistoryCount} 人；当前处于冷却或等待恢复状态 {data.summary.currentClearanceCount} 人。展示最近 200 条记录。</p>
+      {data.clearedMembers.length === 0 ? <p className="empty-copy">暂无成员被清退。</p> : <div className="journal-menu">{data.clearedMembers.map((row) => <article className="password-support-request" key={row.id}><div><strong>{row.user.nickname}</strong><small>{row.user.kuaishouId} · 清退于 {row.clearedAt ? formatAdminDate(row.clearedAt) : "—"}</small><small>{row.status === "COOLDOWN" && row.cooldownEndsAt ? `冷却至 ${formatAdminDate(row.cooldownEndsAt)}` : row.status === "REJOIN_REJECTED" && row.rejoinRetryAt ? `可再次申请：${formatAdminDate(row.rejoinRetryAt)}` : ""}</small></div><span className={`status-chip ${row.status === "ACTIVE" ? "success" : "warning"}`}>{clearanceStatusLabel(row.status)}</span></article>)}</div>}
     </>}
   </section>;
 }

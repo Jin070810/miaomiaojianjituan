@@ -113,6 +113,7 @@ export async function seedWeeklyChallengeE2E() {
       requestUrl: "https://v.kuaishou.com/weekly-e2e-progress",
       sourceKind: "short-link",
       status: "APPROVED",
+      photoId: "e2e-history-photo-987654321",
       likes: 560,
       points: 50,
       submittedNickname: member.nickname,

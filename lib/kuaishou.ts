@@ -1,4 +1,5 @@
 import { DEFAULT_VIDEO_POINT_RULE, VideoPointRuleConfig } from "./point-rules";
+import { canonicalKuaishouVideoUrl } from "./kuaishou-url";
 
 export type KuaishouSourceKind = "short-link" | "long-link" | "share-text";
 
@@ -11,8 +12,6 @@ export type NormalizedKuaishouLink = {
 
 const SHORT_LINK_PATTERN = /https?:\/\/v\.kuaishou\.com\/([A-Za-z0-9_-]+)/i;
 const LONG_LINK_PATTERN = /https?:\/\/(?:www\.)?kuaishou\.com\/short-video\/([A-Za-z0-9_-]+)/i;
-const PHOTO_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
-
 function asUrl(value: string) {
   try {
     return new URL(value);
@@ -68,16 +67,7 @@ export function normalizeKuaishouLink(input: string): NormalizedKuaishouLink {
   throw new Error("没有识别到有效的快手链接，请检查分享内容后重试");
 }
 
-/**
- * Builds the stable public URL for the video that was actually fetched and
- * reviewed. Never use the submitted short/share URL for history links: it can
- * redirect somewhere else after the submission has been processed.
- */
-export function canonicalKuaishouVideoUrl(photoId: string | null | undefined) {
-  const normalizedPhotoId = photoId?.trim();
-  if (!normalizedPhotoId || !PHOTO_ID_PATTERN.test(normalizedPhotoId)) return null;
-  return `https://www.kuaishou.com/short-video/${normalizedPhotoId}`;
-}
+export { canonicalKuaishouVideoUrl };
 
 export function calculateVideoPoints(likes: number, rule: VideoPointRuleConfig = DEFAULT_VIDEO_POINT_RULE) {
   if (!Number.isFinite(likes) || likes < rule.minimumLikes) return 0;

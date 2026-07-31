@@ -28,9 +28,10 @@ export async function GET() {
   try {
     await requireAdmin();
     const trendStart = new Date(Date.now() - 6 * 86_400_000);
-    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts, recentVideos, memberGrowth] = await Promise.all([
+    const [users, pendingAppeals, pendingSecondaryReviews, gifts, pendingOrders, recentAudit, accounts, recentVideos, memberGrowth] = await Promise.all([
       db.user.count(),
       db.videoAppeal.count({ where: { status: "PENDING" } }),
+      db.videoSecondaryReview.count({ where: { status: "PENDING" } }),
       db.gift.count({ where: { active: true } }),
       db.redemptionOrder.count({ where: { status: { in: ["PENDING", "APPROVED"] } } }),
       db.auditLog.findMany({
@@ -66,8 +67,9 @@ export async function GET() {
     return NextResponse.json({
       metrics: {
         users,
-        pendingVideos: pendingAppeals,
+        pendingVideos: pendingAppeals + pendingSecondaryReviews,
         pendingAppeals,
+        pendingSecondaryReviews,
         activeGifts: gifts,
         pendingOrders,
         totalBalance: accounts._sum.balance ?? 0,

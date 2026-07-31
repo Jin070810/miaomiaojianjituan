@@ -9,3 +9,7 @@ export function isMemberParticipantRole(role: Role | string) {
 export function isPasswordResetApproverRole(role: Role | string) {
   return role === "REVIEWER" || role === "ADMIN";
 }
+
+export function isVideoReviewOperatorRole(role: Role | string) {
+  return role === "REVIEWER" || role === "ADMIN";
+}

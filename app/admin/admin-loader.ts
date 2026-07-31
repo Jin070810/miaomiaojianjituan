@@ -33,11 +33,12 @@ export async function loadAdminSection(section: AdminSection, fetcher: Fetcher =
   if (section === "overview") return { dashboard: await fetchJson("/api/admin/dashboard", "后台概览加载失败", fetcher) };
   if (section === "settings") return {};
   if (section === "videos") {
-    const [videos, appeals] = await Promise.all([
+    const [reviews, videos, appeals] = await Promise.all([
+      fetchJson("/api/reviewer/video-reviews?take=50", "二次审核池加载失败", fetcher),
       fetchJson("/api/admin/videos?take=50", "视频记录加载失败", fetcher),
       fetchJson("/api/admin/video-appeals?take=50", "申诉记录加载失败", fetcher),
     ]);
-    return { videos, appeals };
+    return { reviews, appeals, videos };
   }
   if (section === "users") return { users: await fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher) };
   if (section === "points") {

@@ -5,6 +5,7 @@ const dbMocks = vi.hoisted(() => ({
   pointLedger: { findMany: vi.fn() },
   videoSubmission: { groupBy: vi.fn(), count: vi.fn() },
   pointAccount: { count: vi.fn() },
+  memberEligibility: { findUnique: vi.fn() },
 }));
 
 vi.mock("@/lib/auth", () => authMocks);
@@ -33,6 +34,7 @@ describe("member home route", () => {
     dbMocks.videoSubmission.groupBy.mockResolvedValue([{ status: "APPROVED", _count: { id: 2 } }, { status: "REJECTED", _count: { id: 1 } }]);
     dbMocks.pointAccount.count.mockResolvedValue(4);
     dbMocks.videoSubmission.count.mockResolvedValue(12);
+    dbMocks.memberEligibility.findUnique.mockResolvedValue(null);
 
     const response = await GET();
     const body = await response.json();

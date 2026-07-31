@@ -6,6 +6,7 @@ import { assertSameOrigin, encryptPhone, getClientIp, rateLimitResponse, hashPas
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { createSession } from "@/lib/auth";
 import { writeAuditLog } from "@/lib/audit";
+import { ensureNewMemberEligibility } from "@/lib/member-clearance";
 
 const schema = z.object({
   kuaishouId: z.string().trim().min(2).max(80),
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
       await tx.guildStatusHistory.create({
         data: { userId: created.id, status: input.guildStatus ?? "未设置", reason: "注册" },
       });
+      await ensureNewMemberEligibility(tx, created);
       await writeAuditLog(tx, {
           actorId: created.id,
           action: "USER_REGISTERED",

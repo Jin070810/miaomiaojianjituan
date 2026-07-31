@@ -1345,7 +1345,7 @@ function auditJson(value: unknown) {
 }
 
 type OperationSwitchRow = {
-  key: "VIDEO_SUBMISSIONS" | "POINT_TRANSFERS" | "REDEMPTIONS" | "WEEKLY_CHALLENGES";
+  key: "VIDEO_SUBMISSIONS" | "POINT_TRANSFERS" | "REDEMPTIONS" | "WEEKLY_CHALLENGES" | "MEMBER_CLEARANCE";
   label: string;
   description: string;
   enabled: boolean;
@@ -1482,6 +1482,68 @@ function WeeklyChallengesAdmin({
   );
 }
 
+type ClearanceAdminData = {
+  policy: { version: number; inactivityDays: number; warningDays: number[]; cooldownDays: number };
+  program: { firstEnabledAt: string | null } | null;
+  eligibilities: Array<{ id: string; status: string; cycleStartedAt: string; lastOutputAt: string | null; cooldownEndsAt: string | null; user: { nickname: string; kuaishouId: string; active: boolean }; policyVersion: { version: number } }>;
+  requests: Array<{ id: string; requestedAt: string; user: { nickname: string; kuaishouId: string } }>;
+};
+
+function MemberClearanceSettings() {
+  const [data, setData] = useState<ClearanceAdminData | null>(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ inactivityDays: 30, warning14: 7, warning3: 3, cooldownDays: 15 });
+  const load = async () => {
+    try {
+      const response = await fetch("/api/admin/member-clearance", { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "清退数据加载失败");
+      setData(result);
+      setForm({ inactivityDays: result.policy.inactivityDays, warning14: result.policy.warningDays[0], warning3: result.policy.warningDays[1], cooldownDays: result.policy.cooldownDays });
+    } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "清退数据加载失败"); }
+  };
+  useEffect(() => { void load(); }, []);
+  async function save() {
+    setSaving(true); setError("");
+    try {
+      const response = await fetch("/api/admin/member-clearance", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ inactivityDays: form.inactivityDays, warningDays: [form.warning14, form.warning3], cooldownDays: form.cooldownDays }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "规则保存失败");
+      await load();
+    } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "规则保存失败"); } finally { setSaving(false); }
+  }
+  async function review(id: string, action: "APPROVE" | "REJECT") {
+    setSaving(true); setError("");
+    try {
+      const response = await fetch(`/api/admin/member-clearance/requests/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ action }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "申请审核失败");
+      await load();
+    } catch (reviewError) { setError(reviewError instanceof Error ? reviewError.message : "申请审核失败"); } finally { setSaving(false); }
+  }
+  return <section className="admin-panel operation-settings-panel">
+    <div className="admin-panel-head"><div><h2>成员自动清退</h2><p>规则修改仅应用于新周期；关闭开关不会暂停倒计时，重新开启会立即执行到期清退。</p></div></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {!data ? <p className="empty-copy">正在加载成员资格...</p> : <>
+      <div className="member-growth-admin-grid">
+        <div><span>当前规则版本</span><strong>v{data.policy.version}</strong><small>{data.program?.firstEnabledAt ? `首次启用：${formatAdminDate(data.program.firstEnabledAt)}` : "尚未启用"}</small></div>
+        <div><span>正在预警/计时</span><strong>{data.eligibilities.filter((row) => row.status === "ACTIVE").length}</strong><small>活跃普通成员资格周期</small></div>
+        <div><span>待审核恢复</span><strong>{data.requests.length}</strong><small>冷却结束后的申请</small></div>
+      </div>
+      <div className="admin-form-grid">
+        <label>无产出清退天数<input type="number" min={1} value={form.inactivityDays} onChange={(event) => setForm({ ...form, inactivityDays: Number(event.target.value) })} /></label>
+        <label>首次预警（剩余天数）<input type="number" min={1} value={form.warning14} onChange={(event) => setForm({ ...form, warning14: Number(event.target.value) })} /></label>
+        <label>二次预警（剩余天数）<input type="number" min={1} value={form.warning3} onChange={(event) => setForm({ ...form, warning3: Number(event.target.value) })} /></label>
+        <label>冷却天数<input type="number" min={1} value={form.cooldownDays} onChange={(event) => setForm({ ...form, cooldownDays: Number(event.target.value) })} /></label>
+      </div>
+      <div className="admin-panel-actions"><button className="secondary-button" disabled={saving} onClick={() => void save()}>{saving ? "保存中..." : "创建后续周期规则"}</button></div>
+      <h3>重新加入申请</h3>
+      {data.requests.length === 0 ? <p className="empty-copy">暂无待审核申请。</p> : <div className="journal-menu">{data.requests.map((row) => <article className="password-support-request" key={row.id}><div><strong>{row.user.nickname}</strong><small>{row.user.kuaishouId} · 申请于 {formatAdminDate(row.requestedAt)}</small></div><div className="table-actions-inline"><button className="secondary-button compact-button" disabled={saving} onClick={() => void review(row.id, "REJECT")}>驳回</button><button className="primary-button compact-button" disabled={saving} onClick={() => void review(row.id, "APPROVE")}>恢复资格</button></div></article>)}</div>}
+    </>}
+  </section>;
+}
+
 function SettingsAdmin() {
   const [rows, setRows] = useState<OperationSwitchRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1536,6 +1598,7 @@ function SettingsAdmin() {
           </div>
         ))}</div>}
       </section>
+      <MemberClearanceSettings />
       <section className="admin-panel operation-settings-panel">
         <div className="admin-panel-head"><div><h2>脱敏数据导出</h2><p>导出文件不包含手机号、地址、收款码、密码或原始抓取数据。</p></div></div>
         <div className="export-link-grid">

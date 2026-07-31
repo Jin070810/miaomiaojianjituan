@@ -9,6 +9,7 @@ import {
   runWeeklyChallengeMaintenance,
 } from "./lib/weekly-challenge-generation";
 import { closeWeeklyChallengeQueue } from "./lib/weekly-challenge-jobs";
+import { runMemberClearanceMaintenance } from "./lib/member-clearance";
 
 const worker = new Worker("kuaishou-video", async (job) => {
   await processVideoSubmission(job.data.videoId);
@@ -64,6 +65,7 @@ async function maintenance() {
       recoverStaleVideoSubmissions(),
       db.session.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
       runWeeklyChallengeMaintenance(),
+      runMemberClearanceMaintenance(),
     ]);
     if (recovery.found > 0) {
       console.log(`[video-worker] recovery scanned=${recovery.found} enqueued=${recovery.enqueued}`);

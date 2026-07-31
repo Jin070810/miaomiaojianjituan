@@ -81,6 +81,7 @@ type DashboardData = {
     rank: number | null;
     videoCounts: { all: number; approved: number; processing: number; exception: number };
   };
+  eligibility?: { status: string; deadlineAt: string; warningDays: number[]; inactivityDays: number; cooldownDays: number; onboardingSeenAt: string | null } | null;
   ledger: Array<{
     id: string;
     type: string;
@@ -686,6 +687,10 @@ function HomeView({
           </button>
         </div>
       </section>
+
+      {data.eligibility?.status === "ACTIVE" && <section className="rule-notice" aria-label="成员资格周期">
+        <ShieldCheck size={18} /><span>成员资格有效期至 {new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(data.eligibility.deadlineAt))}；审核通过一条视频即可重置当前周期。</span>
+      </section>}
 
       <GrowthSummaryCard
         growth={growth}
@@ -1771,6 +1776,20 @@ function DeferredPage({
   );
 }
 
+function ClearanceOnboardingDialog({ eligibility, onClose, onConfirm }: { eligibility: NonNullable<DashboardData["eligibility"]>; onClose: () => void; onConfirm: () => void }) {
+  const warnings = [...eligibility.warningDays].sort((a, b) => b - a);
+  return <ModalShell title="成员资格机制说明" eyebrow="NEW MEMBER RULES" onClose={onClose}>
+    <div className="rule-notice"><ShieldCheck size={18} /><span>为了让每位成员都有稳定的创作节奏，剪辑团已启用常态化成员资格机制。</span></div>
+    <div className="journal-menu">
+      <div><strong>什么算有效产出？</strong><small>只有审核通过的视频会重置资格周期；处理中、驳回和申诉中的视频不计入。</small></div>
+      <div><strong>多久会收到提醒？</strong><small>连续 {eligibility.inactivityDays} 天没有有效产出会清退；剩余 {warnings.join(" 天、")} 天时会发送站内预警。</small></div>
+      <div><strong>清退会发生什么？</strong><small>账号将无法继续登录和参与成员权益；未完成兑换订单取消，积分按规则清零，已履约订单和历史记录保留。</small></div>
+      <div><strong>之后还能回来吗？</strong><small>清退后冷却 {eligibility.cooldownDays} 天，可用原账号申请重新加入；审核通过后重新获得完整周期。</small></div>
+    </div>
+    <div className="admin-panel-actions"><button className="secondary-button" onClick={onClose}>稍后再看</button><button className="primary-button" onClick={onConfirm}>我已了解</button></div>
+  </ModalShell>;
+}
+
 function RedeemDialog({
   gift,
   onClose,
@@ -1931,14 +1950,15 @@ export default function MemberApp() {
   const [sectionErrors, setSectionErrors] = useState<Record<DeferredSection, string>>({ videos: "", gifts: "", ledger: "", transfers: "", orders: "" });
   const [historyMore, setHistoryMore] = useState({ ledger: false, videos: false, transfers: false, orders: false });
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [clearanceOnboardingOpen, setClearanceOnboardingOpen] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     let active = true;
-    fetchMemberJson<Pick<DashboardData, "user" | "ledger"> & { summary: Pick<DashboardData["summary"], "approvedVideos" | "rank" | "videoCounts"> }>("/api/member/home", "首页加载失败")
+    fetchMemberJson<Pick<DashboardData, "user" | "ledger" | "eligibility"> & { summary: Pick<DashboardData["summary"], "approvedVideos" | "rank" | "videoCounts"> }>("/api/member/home", "首页加载失败")
       .then((result) => {
         if (!active) return;
-        setDashboard({
+        const nextDashboard: DashboardData = {
           ...result,
           summary: {
             monthlyIncome: 0,
@@ -1955,7 +1975,9 @@ export default function MemberApp() {
           orders: [],
           transfers: [],
           leaderboard: [],
-        });
+        };
+        setDashboard(nextDashboard);
+        setClearanceOnboardingOpen(nextDashboard.eligibility?.status === "ACTIVE" && !nextDashboard.eligibility.onboardingSeenAt);
         setLoadError("");
       })
       .catch((error) => {
@@ -2158,6 +2180,15 @@ export default function MemberApp() {
   const closeDialog = () => {
     setDialog(null);
   };
+  const acknowledgeClearanceOnboarding = async () => {
+    try {
+      const response = await fetch("/api/member/clearance-onboarding", { method: "PATCH" });
+      if (!response.ok) throw new Error("确认失败");
+      setDashboard((current) => current?.eligibility ? { ...current, eligibility: { ...current.eligibility, onboardingSeenAt: new Date().toISOString() } } : current);
+    } finally {
+      setClearanceOnboardingOpen(false);
+    }
+  };
   const secondaryView = ["challenge", "growth", "ledger", "transfers", "orders"].includes(view);
   const navigationView: MemberView = view === "challenge" || view === "growth" || view === "ledger"
     ? "home"
@@ -2190,6 +2221,7 @@ export default function MemberApp() {
       {dialog === "profile" && <ProfileEditDialog user={dashboard.user} onClose={closeDialog} />}
       {dialog === "recipient" && <RecipientProfileDialog onClose={closeDialog} />}
       {dialog === "password" && <PasswordDialog onClose={closeDialog} />}
+      {clearanceOnboardingOpen && dashboard.eligibility && <ClearanceOnboardingDialog eligibility={dashboard.eligibility} onClose={() => setClearanceOnboardingOpen(false)} onConfirm={() => void acknowledgeClearanceOnboarding()} />}
     </main>
   );
 }

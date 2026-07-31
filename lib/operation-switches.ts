@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { writeAuditLog } from "./audit";
+import { initialiseMemberClearanceProgram, MEMBER_CLEARANCE_SWITCH } from "./member-clearance";
 
 export const operationSwitchDefinitions = {
   VIDEO_SUBMISSIONS: {
@@ -24,6 +25,12 @@ export const operationSwitchDefinitions = {
     label: "周挑战积分发放",
     description: "默认关闭。关闭后不激活新周期、不领取个人奖励，也不发放竞速奖励；历史任务仍可查询。",
     disabledMessage: "周挑战积分发放当前暂停，请稍后再试",
+    defaultEnabled: false,
+  },
+  MEMBER_CLEARANCE: {
+    label: "成员自动清退",
+    description: "默认关闭。关闭时不发送预警或清退；重新开启后会立即处理已到期的普通成员。",
+    disabledMessage: "成员自动清退当前暂停",
     defaultEnabled: false,
   },
 } as const;
@@ -61,7 +68,7 @@ export async function updateOperationSwitch(input: {
   ip?: string;
   requestId?: string;
 }) {
-  return db.$transaction(async (tx) => {
+  const updated = await db.$transaction(async (tx) => {
     const existing = await tx.systemSetting.findUnique({ where: { key: input.key } });
     if (existing?.enabled === input.enabled) return existing;
     const definition = operationSwitchDefinitions[input.key];
@@ -91,4 +98,6 @@ export async function updateOperationSwitch(input: {
     });
     return updated;
   });
+  if (input.key === MEMBER_CLEARANCE_SWITCH && input.enabled) await initialiseMemberClearanceProgram();
+  return updated;
 }

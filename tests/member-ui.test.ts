@@ -64,6 +64,14 @@ describe("成员端品牌视觉库", () => {
     expect(source).toContain('invalidateSections(["gifts", "ledger", "orders"]); closeDialog(); handleNavigate("orders");');
   });
 
+  it("登录后先确认会话，再用完整页面跳转", () => {
+    const source = readFileSync(path.resolve(__dirname, "..", "app", "login", "page.tsx"), "utf8");
+
+    expect(source).toContain('fetch("/api/me", { cache: "no-store" })');
+    expect(source).toContain('window.location.assign(result.user?.role === "ADMIN" ? "/admin" : "/")');
+    expect(source).not.toContain("router.push(");
+  });
+
   it("商城提供综合、销量和价格排序入口", () => {
     const source = readFileSync(path.resolve(__dirname, "..", "app", "page.tsx"), "utf8");
 

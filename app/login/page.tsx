@@ -10,7 +10,6 @@ import {
 } from "@phosphor-icons/react";
 import Image from "next/image";
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import { BrandIcon } from "../member/brand";
 import { miaoAssets } from "../member/visual-assets";
 
@@ -29,7 +28,6 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   function switchMode(nextMode: "login" | "register" | "reset") {
     setMode(nextMode);
@@ -57,7 +55,14 @@ export default function LoginPage() {
         setConfirmPassword("");
         return;
       }
-      router.push(result.user?.role === "ADMIN" ? "/admin" : "/");
+      // Verify that the WebView has committed the session cookie before a
+      // document navigation. Some embedded browsers can race a client-side
+      // router transition and send the first member request without it.
+      const sessionCheck = await fetch("/api/me", { cache: "no-store" });
+      if (!sessionCheck.ok) {
+        throw new Error("登录状态没有保存。请清理微信网页缓存后重试，或使用系统浏览器打开。");
+      }
+      window.location.assign(result.user?.role === "ADMIN" ? "/admin" : "/");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "操作失败");
     } finally {

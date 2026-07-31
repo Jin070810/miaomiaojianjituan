@@ -124,6 +124,13 @@ v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新
 - 成员端只读请求统一在 10 秒后取消并显示可重试提示；`GET /api/dashboard` 保持兼容，`GET /api/videos` 新增可选统计摘要字段。
 - 未登录访问根路径时由服务端直接跳转到登录页；根路径和登录页的 HTML 禁止缓存，避免微信 WebView 保留旧页面壳而无法加载新脚本。版本化 `/_next` 静态资源仍保留不可变缓存。
 - 登录成功后会先校验会话 Cookie，再以完整页面跳转成员端；若微信 WebView 没有保存会话，会在登录页提示清理网页缓存或改用系统浏览器，而不是循环回到登录页。
+
+## v1.8 成员成长与成就
+
+- 成员首页异步加载私有成长摘要；“我的”页可进入完整成长档案。成长接口的局部失败不会阻塞投稿、兑换或资料入口。
+- 成长经验、等级、勋章和月度目标均为独立整数指标，不参与积分余额、转账、兑换、榜单或周挑战结算；视频通过、申诉改判与撤销会在原积分事务内重算。
+- `GET /api/member/achievements` 只返回当前会话成员的成长档案、锁定月目标、勋章、高光作品和月度复盘；视频标题、封面、评论数与抓取时间为可选公开元数据，缺失不会影响原审核或积分流程。
+- Worker 会幂等封存上月复盘；成员进入成长档案时也会补齐当月档案。验收与 staging 清单见 `docs/ACCEPTANCE-V1.8-MEMBER-ACHIEVEMENTS.md`。
 - 完整验收与回滚步骤见 [`docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md`](docs/ACCEPTANCE-V1.7-RELIABLE-MEMBER-HOME.md)。
 
 ## 管理后台运营工作台 v2

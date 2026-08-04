@@ -70,7 +70,7 @@ PR 必须填写 `.github/pull_request_template.md`，并包含：
 
 1. 进入维护或限制高风险写操作；
 2. 备份数据库并校验 `.sha256`；
-3. 拉取已批准 commit，构建并扫描镜像；
+3. GitHub Actions 拉取已批准 commit，构建并扫描镜像，生产按 digest 拉取并校验 revision；
 4. 执行 `prisma migrate deploy`；
 5. 启动/滚动更新 Web 和 Worker；
 6. 检查 `/api/health`、登录、视频队列、积分账户和订单；
@@ -79,14 +79,7 @@ PR 必须填写 `.github/pull_request_template.md`，并包含：
 
 ## 6. 回滚与事故
 
-应用回滚：
-
-```powershell
-git fetch origin
-git checkout <已批准的旧 release tag>
-docker compose build app
-docker compose up -d app worker
-```
+应用回滚通过 `Deploy Production` workflow 重新发布已批准的旧 release commit，App 与 Worker 必须使用同一完整 SHA。生产主机不得为回滚执行 Docker 构建；workflow 仍需完成镜像构建、digest 拉取、revision 校验、发布前备份和健康检查。
 
 数据库恢复前必须停止 Web 和 Worker、核对备份校验值，并由维护者确认恢复时间点。若 migration 不可逆，不回退数据库，改用前向修复 migration。
 

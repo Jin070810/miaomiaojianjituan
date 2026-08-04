@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: production
@@ -76,6 +77,94 @@ jobs:
             echo "release_commit 不是 origin/main 的祖先，拒绝部署未合并版本"
             exit 1
           fi
+          git checkout --detach "$RELEASE_COMMIT"
+
+      - name: Prepare immutable image metadata
+        id: release
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          repository_name="${repository_name,,}"
+          {
+            echo "app_image=ghcr.io/$owner/$repository_name-app"
+            echo "worker_image=ghcr.io/$owner/$repository_name-worker"
+            echo "build_time=$(date -u --iso-8601=seconds)"
+            echo "release_commit=$RELEASE_COMMIT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate to GHCR for publishing
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and publish App image
+        id: build_app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.release.outputs.app_image }}:${{ steps.release.outputs.release_commit }}
+          build-args: |
+            APP_COMMIT_SHA=${{ steps.release.outputs.release_commit }}
+            APP_BUILD_TIME=${{ steps.release.outputs.build_time }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.release.outputs.release_commit }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=production-app
+          cache-to: type=gha,mode=max,scope=production-app
+
+      - name: Build and publish Worker image
+        id: build_worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.release.outputs.worker_image }}:${{ steps.release.outputs.release_commit }}
+          build-args: |
+            APP_COMMIT_SHA=${{ steps.release.outputs.release_commit }}
+            APP_BUILD_TIME=${{ steps.release.outputs.build_time }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.release.outputs.release_commit }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=production-worker
+          cache-to: type=gha,mode=max,scope=production-worker
+
+      - name: Verify current production health before switching
+        env:
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+        run: |
+          test -n "$PRODUCTION_DOMAIN"
+          for _ in {1..3}; do
+            if health_json="$(curl --fail --silent --show-error \
+              --connect-timeout 5 --max-time 15 \
+              "https://$PRODUCTION_DOMAIN/api/health")"; then
+              printf '%s\n' "$health_json"
+              if jq -e '
+                .ok == true
+                and .database == "ok"
+                and .redis == "ok"
+                and .worker == "ok"
+                and .workerVersion.status == "ok"
+                and .app.commit == .workerVersion.commit
+              ' <<<"$health_json" >/dev/null; then
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "当前生产环境未通过切换前健康检查，拒绝发布" >&2
+          exit 1
 
       - name: Configure SSH
         env:
@@ -201,18 +290,32 @@ jobs:
           } | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
             "bash -s -- $(printf '%q' "$PRODUCTION_PATH/.env.production")"
 
-      - name: Build approved commit on production host
-        timeout-minutes: 30
+      - name: Pull and verify immutable release images
+        timeout-minutes: 15
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_ACTOR: ${{ github.actor }}
+          APP_IMAGE: ${{ steps.release.outputs.app_image }}
+          APP_DIGEST: ${{ steps.build_app.outputs.digest }}
+          WORKER_IMAGE: ${{ steps.release.outputs.worker_image }}
+          WORKER_DIGEST: ${{ steps.build_worker.outputs.digest }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
         run: |
-          # shellcheck disable=SC2016
-          remote_script="$(printf 'set -euo pipefail\ncd %q\nrelease_commit=%q\nbuild_time="$(date -u --iso-8601=seconds)"\ngit fetch --no-tags origin main\ngit cat-file -e "$release_commit^{commit}"\ngit checkout --detach "$release_commit"\nexport DOCKER_BUILDKIT=1\ndocker build --target runner --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-app:$release_commit" --tag miaomiao-points-app:production .\ndocker build --target worker --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-worker:$release_commit" --tag miaomiao-points-worker:production .\ndocker image inspect miaomiao-points-app:production miaomiao-points-worker:production --format "size={{.Size}} id={{.Id}} revision={{index .Config.Labels \\"org.opencontainers.image.revision\\"}}"\n' \
-            "$PRODUCTION_PATH" "$RELEASE_COMMIT")"
-          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
+          test -n "$GHCR_TOKEN"
+          test -n "$GHCR_ACTOR"
+          test -n "$PRODUCTION_PATH"
+          [[ "$APP_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$WORKER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          remote_script="$(printf 'set -euo pipefail\nexport GIT_TERMINAL_PROMPT=0\ncd %q\ngit fetch --no-tags origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\nexec bash scripts/pull-release-images.sh %q %q %q %q %q %q\n' \
+            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RELEASE_COMMIT" \
+            "$GHCR_ACTOR" "$APP_IMAGE" "$APP_DIGEST" "$WORKER_IMAGE" \
+            "$WORKER_DIGEST" "$RELEASE_COMMIT")"
+          # shellcheck disable=SC2029
+          printf '%s' "$GHCR_TOKEN" | \
+            ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote_script"
 
       - name: Deploy approved commit
         timeout-minutes: 10

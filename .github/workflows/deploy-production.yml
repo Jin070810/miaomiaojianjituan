@@ -210,7 +210,7 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.release_commit }}
         run: |
           # shellcheck disable=SC2016
-          remote_script="$(printf 'set -euo pipefail\ncd %q\nrelease_commit=%q\nbuild_time="$(date -u --iso-8601=seconds)"\ngit fetch --no-tags origin main\ngit cat-file -e "$release_commit^{commit}"\ngit checkout --detach "$release_commit"\nexport DOCKER_BUILDKIT=1\ndocker build --target runner --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-app:$release_commit" --tag miaomiao-points-app:production .\ndocker build --target worker --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-worker:$release_commit" --tag miaomiao-points-worker:production .\ndocker image inspect miaomiao-points-app:production miaomiao-points-worker:production --format "size={{.Size}} id={{.Id}} revision={{index .Config.Labels \\"org.opencontainers.image.revision\\"}}"\n' \
+          remote_script="$(printf 'set -euo pipefail\ncd %q\nrelease_commit=%q\nbuild_time="$(date -u --iso-8601=seconds)"\ngit fetch --no-tags origin main\ngit cat-file -e "$release_commit^{commit}"\ngit checkout --detach "$release_commit"\nkeep_running_image() { service="$1"; repository="$2"; container_id="$(docker compose --env-file .env.production ps -q "$service" || true)"; if [ -n "$container_id" ]; then image_id="$(docker inspect --format "{{.Image}}" "$container_id")"; docker tag "$image_id" "$repository:rollback"; fi; }\nkeep_running_image app miaomiao-points-app\nkeep_running_image worker miaomiao-points-worker\nbash scripts/cleanup-production-docker.sh --ensure-free-gb 8\nexport DOCKER_BUILDKIT=1\ndocker build --target runner --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-app:$release_commit" --tag miaomiao-points-app:production .\ndocker build --target worker --build-arg APP_COMMIT_SHA="$release_commit" --build-arg APP_BUILD_TIME="$build_time" --label org.opencontainers.image.revision="$release_commit" --tag "miaomiao-points-worker:$release_commit" --tag miaomiao-points-worker:production .\ndocker image inspect miaomiao-points-app:production miaomiao-points-worker:production --format "size={{.Size}} id={{.Id}} revision={{index .Config.Labels \\"org.opencontainers.image.revision\\"}}"\n' \
             "$PRODUCTION_PATH" "$RELEASE_COMMIT")"
           printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
 
@@ -275,3 +275,13 @@ jobs:
             sleep 10
           done
           exit 1
+
+      - name: Retain rollback image and clean Docker storage
+        if: success()
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+        run: |
+          remote_script="$(printf 'set -euo pipefail\ncd %q\nbash scripts/cleanup-production-docker.sh --retention-hours 168\n' "$PRODUCTION_PATH")"
+          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"

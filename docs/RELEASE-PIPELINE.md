@@ -12,6 +12,19 @@
 
 常规目标是 PR CI 不重复运行、缓存命中的生产构建在 5 分钟内完成、容器切换和健康检查在 3 分钟内完成。首次安装依赖或基础镜像变化允许更久，但必须能从步骤耗时中直接识别。
 
+## 磁盘空间保护
+
+生产构建会在切换到已批准 commit 后，先将正在运行的 Web 和 Worker 镜像标记为 `:rollback`，再执行磁盘预检。构建需要至少 8GB 可用空间；低于阈值时只会清理未使用的应用/Worker 历史镜像、悬空层和 BuildKit 缓存，绝不清理 Docker volume、数据库备份或正在运行容器使用的镜像。清理后仍不足 8GB 时发布会在构建前失败。
+
+健康检查成功后，发布流程再次执行保守清理：只保留当前 `:production` 和单个 `:rollback` 镜像，其他未使用的应用/Worker 历史镜像立即回收；BuildKit 缓存保留 7 天。紧急清理会移除所有未使用的 BuildKit 缓存，下一次构建可能变慢，但不会影响线上服务。
+
+可在生产机手动执行（只用于排障或发布前检查）：
+
+```bash
+cd /opt/miaomiaojianjituan
+bash scripts/cleanup-production-docker.sh --ensure-free-gb 8
+```
+
 ## 流程
 
 1. PR 的 `pull_request` 事件执行完整 CI；功能分支的普通 `push` 不再重复触发同一套检查。
@@ -19,10 +32,10 @@
 3. 发布人输入完整 SHA，并确认 staging、备份、证书和回滚点。
 4. workflow 验证 SHA 是 `origin/main` 的祖先。
 5. workflow 通过专用 `deploy` SSH 账号进入生产服务器，检出该 SHA。
-6. 服务器用本机 Docker/BuildKit 缓存构建带 SHA 标签和 OCI revision 标签的 App/Worker 镜像。
+6. 服务器先保护当前回滚镜像并检查磁盘余量，再用本机 Docker/BuildKit 缓存构建带 SHA 标签和 OCI revision 标签的 App/Worker 镜像。
 7. 生产前置检查通过后备份数据库并校验 SHA-256。
 8. Compose 执行 migration，切换 App/Worker，刷新 Nginx。
-9. 外部 HTTPS `/api/health` 必须确认 Database、Redis、Worker 和 Queue 正常。
+9. 外部 HTTPS `/api/health` 必须确认 Database、Redis、Worker 和 Queue 正常，随后回收超过保留期的 Docker 构建缓存和历史应用镜像。
 
 ## 周挑战开关
 

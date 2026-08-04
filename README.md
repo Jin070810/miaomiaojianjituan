@@ -76,17 +76,17 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 ## v1.3 AI 个性化周挑战
 
-- 周日 18:00 起按 `Asia/Shanghai` 为下一周冻结有效普通成员并生成匿名任务，23:00 仍未完整生成则整周失败，不发布规则兜底任务。
-- 只有上周提交过非失败视频的成员才进入任务 audience。DeepSeek 每批最多处理 25 名匿名成员，只接收匿名引用和最近两周逐周的发布量、总点赞、平均点赞、最高点赞、最低点赞；昵称、快手 ID、手机号、地址、余额和视频链接不会进入提示词。
-- 所有任务都同时考核通过视频数和点赞总量。模型自行判断参考基线，服务端校验成员覆盖、唯一性和整数约束，再生成“够一够、努努力、很难但可试”三个累计阶段；个人最终累计奖励为 `300–1000` 分，周期预算按 audience 每人最高 `1,000` 分计算。
-- 生成提示词版本为 `weekly-challenge-v4-hard-combined-two-week`：模型依据最近两周逐周数据自行判断参考基线，所有任务必须同时包含发布量和点赞量；每次解析、覆盖或业务校验失败都会把脱敏校验错误反馈给同一批次的下一次尝试，并记录对应提示词哈希。
+- Worker 使用 BullMQ 持久调度器在周日 18:00（`Asia/Shanghai`）冻结下一周 audience，并由周期巡检补齐丢失、失败或租约过期的生成任务；队列任务三次指数退避，重复入队按周期去重。
+- 只有上周提交过非失败视频的成员才进入 audience。每批最多处理 8 名匿名成员；DeepSeek 只接收匿名引用、最近两周聚合数据和服务端确定的目标，不接收昵称、快手 ID、手机号、地址、余额或视频链接。
+- 视频数、点赞数、基线、难度和三档整数奖励全部由服务端确定并校验，模型只返回 `memberRef`、标题、说明和原因。提示词版本为 `weekly-challenge-v5-deterministic-targets`，严格拒绝模型提供数值业务字段。
+- 每批 AI 文案最多尝试三次；连续失败后改用已审核的稳定模板，仍在事务中完整发布并记录 `AI`、`HYBRID` 或 `DETERMINISTIC` 模式。已校验批次按输入哈希保存，Worker 重启或人工重试不会重复调用已完成批次。
 - 周一自动激活；成员只查看自己的基线、进度、说明和奖励。个人奖励达标后主动领取，截止到下一周周三 23:59；固定 `2,000` 分竞速奖励在达标视频通过事务中抢占。
 - 视频撤销会在同一事务内重新计算任务，必要时冲正个人与竞速积分，并把竞速奖励改发给仍达标且最早完成的成员。
 - 管理后台可查看周期覆盖、预算、任务分布、模型批次和失败原因；“周挑战积分发放”开关默认关闭，关闭时保留只读查询。
 
 本地或 staging 配置 `DEEPSEEK_BASE_URL`、`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`，并配置 Webhook 或完整 SMTP 邮件告警后再启用周挑战。测试使用本地模拟服务，不读取真实密钥。生产镜像还必须在构建时注入 `APP_COMMIT_SHA` 与 `APP_BUILD_TIME`；健康接口会返回 App/Worker 版本并拒绝版本不一致的部署。
 
-真实 DeepSeek 上线验收必须使用全新的独立 PostgreSQL schema，名称以 `shadow_` 或 `staging_` 开头。先执行 migration，再设置 `WEEKLY_CHALLENGE_SHADOW_CONFIRM=I_UNDERSTAND_PAID_DEEPSEEK_SHADOW` 并运行 `npm run weekly:shadow`；脚本会生成 300 名纯合成匿名成员、回放五周聚合数据并连续生成两个挑战周期。生成器使用 OpenAI 兼容 SSE 流式响应，默认单批超时为 75 秒，并在每次模型尝试前刷新生成租约。标准错误流只记录不含任务正文的批次号、尝试次数、耗时、事件数和 Token 聚合；服务端仍兼容普通 JSON 响应。脚本拒绝非空 schema 和 `public`，始终保持积分发放开关关闭；成功或失败都会输出并上传匿名覆盖、预算、重试、最终失败批次和 Token 聚合报告，成功后还必须发送一次 Webhook 或 SMTP 邮件告警。
+真实 DeepSeek 上线验收必须使用全新的独立 PostgreSQL schema，名称以 `shadow_` 或 `staging_` 开头。先执行 migration，再设置 `WEEKLY_CHALLENGE_SHADOW_CONFIRM=I_UNDERSTAND_PAID_DEEPSEEK_SHADOW` 并运行 `npm run weekly:shadow`；脚本会生成 300 名纯合成匿名成员、回放五周聚合数据并连续生成两个挑战周期。SSE 默认使用 180 秒总时限、60 秒首字节时限、45 秒流空闲时限和 6,000 Token 输出上限；收到流进度会刷新空闲计时。影子验收要求两个周期均为纯 `AI`、零降级批次，报告记录 AI/模板尝试数、覆盖、预算、失败分类、延迟和 Token 聚合。脚本拒绝非空 schema 和 `public`，始终保持积分发放开关关闭。
 
 合并到 `main` 后也可以手动运行 GitHub Actions 的 `Weekly Challenge DeepSeek Shadow` workflow。该任务只使用 Actions 临时 PostgreSQL 服务，不连接生产数据库；DeepSeek 与告警配置从 `production` Environment 注入，聚合报告作为 30 天 artifact 留存。
 
@@ -94,7 +94,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 告警尚未配置时只允许使用部署 workflow 的 `confirm_alert_deferred` 显式受控灰度；workflow 会写入 `ALERTS_DEFERRED=true`，并把 `weeklyChallenges.enabled == false` 作为发布成功条件。该模式只能部署代码，不能启用周挑战或运行付费影子任务；补齐并验证告警后应恢复 `ALERTS_DEFERRED=false`。
 
-v1.3 migration 为 `prisma/migrations/20260725120000_weekly_challenges`，只新增枚举、表、关系和索引。应用回滚时关闭周挑战开关并回退 Web/Worker，保留新增表和积分审计历史，不回退已执行 migration。完整验收与影子运行要求见 [`docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md`](docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md)。
+韧性修复 migration 为 `prisma/migrations/20260804170000_weekly_challenge_resilience`，只新增生成来源/模式和检查点字段及索引。应用回滚时先关闭周挑战开关，再同时回退 Web/Worker；保留新增字段、任务和积分审计历史，不回退已执行 migration。完整验收见 [`docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md`](docs/ACCEPTANCE-V1.3-WEEKLY-CHALLENGES.md)，事故分析见 [`docs/INCIDENT-20260802-WEEKLY-CHALLENGE.md`](docs/INCIDENT-20260802-WEEKLY-CHALLENGE.md)。
 
 ## 批量积分
 

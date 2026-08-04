@@ -44,3 +44,15 @@ test("admin workbench navigation stays usable at 390x844", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/admin-workbench-390x844.png", fullPage: true });
 });
+
+test("weekly challenge fallback status stays readable at 390x844", async ({ page }) => {
+  await login(page, e2eIds.admin);
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  const navigation = page.getByRole("navigation", { name: "管理后台导航" });
+  await navigation.getByRole("button", { name: "AI 周挑战" }).click();
+  await expect(page.getByRole("heading", { name: "AI 周挑战" })).toBeVisible();
+  await expect(page.getByText("AI + 稳定模板")).toBeVisible();
+  await expect(page.getByText("1 个批次使用稳定模板")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: "output/playwright/admin-weekly-fallback-390x844.png", fullPage: true });
+});

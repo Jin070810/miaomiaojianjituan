@@ -6,6 +6,7 @@ import { checkRateLimitStore } from "@/lib/rate-limit";
 import { getWorkerHeartbeat } from "@/lib/worker-health";
 import { getVideoQueueMetrics } from "@/lib/video-jobs";
 import { weeklyChallengeSchedulerStatus } from "@/lib/weekly-challenges";
+import { getWeeklyChallengeQueueStatus } from "@/lib/weekly-challenge-jobs";
 
 export async function GET() {
   const configIssues = runtimeConfigIssues();
@@ -14,7 +15,7 @@ export async function GET() {
     buildTime: process.env.APP_BUILD_TIME?.trim() || null,
   };
   try {
-    const [, redis, workerVersion, queue, weeklyChallenges] = await Promise.all([
+    const [, redis, workerVersion, queue, weeklyChallenges, weeklyChallengeQueue] = await Promise.all([
       db.$queryRaw`SELECT 1`,
       checkRateLimitStore().catch(() => "unavailable" as const),
       getWorkerHeartbeat().catch(() => ({
@@ -25,6 +26,7 @@ export async function GET() {
       })),
       getVideoQueueMetrics().catch(() => null),
       weeklyChallengeSchedulerStatus().catch(() => null),
+      getWeeklyChallengeQueueStatus().catch(() => null),
     ]);
     const worker = workerVersion.status;
     const admins = await db.user.count({ where: { role: "ADMIN", active: true } });
@@ -44,6 +46,9 @@ export async function GET() {
       ? ["周挑战调度状态不可用"] : [];
     const queueIssue = process.env.NODE_ENV === "production" && queue && queue.waiting > Number(process.env.QUEUE_WAITING_ALERT_THRESHOLD ?? 1000)
       ? ["视频队列等待任务过多"] : [];
+    const weeklyQueueIssue = process.env.NODE_ENV === "production" && weeklyChallenges?.enabled
+      && (!weeklyChallengeQueue || !weeklyChallengeQueue.schedulerConfigured)
+      ? ["周挑战持久化调度器不可用"] : [];
     const issues = [
       ...configIssues,
       ...adminIssue,
@@ -53,9 +58,12 @@ export async function GET() {
       ...weeklyChallengeIssue,
       ...weeklyChallengeStatusIssue,
       ...queueIssue,
+      ...weeklyQueueIssue,
     ];
+    const operationalIssues = weeklyChallenges?.operationalIssues ?? [];
     return NextResponse.json({
       ok: issues.length === 0,
+      degraded: operationalIssues.length > 0,
       app,
       database: "ok",
       redis,
@@ -63,6 +71,8 @@ export async function GET() {
       workerVersion,
       queue,
       weeklyChallenges,
+      weeklyChallengeQueue,
+      operationalIssues,
       admins,
       issues,
       time: new Date().toISOString(),
@@ -82,6 +92,9 @@ export async function GET() {
       worker: workerVersion.status,
       workerVersion,
       weeklyChallenges: null,
+      weeklyChallengeQueue: null,
+      degraded: true,
+      operationalIssues: ["周挑战运行状态不可用"],
       issues: configIssues,
       time: new Date().toISOString(),
     }, { status: 503 });

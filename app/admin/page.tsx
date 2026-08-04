@@ -230,6 +230,9 @@ type AdminWeeklyChallengePeriod = {
   rewardPolicyVersion: string;
   model: string;
   promptVersion: string;
+  generationMode: "AI" | "HYBRID" | "DETERMINISTIC";
+  fallbackBatchCount: number;
+  generationWarning: string | null;
   generatedAt: string | null;
   failureReason: string | null;
   _count: { assignments: number; attempts: number };
@@ -272,6 +275,8 @@ type AdminWeeklyChallengeDetail = AdminWeeklyChallengePeriod & {
     batchNumber: number;
     attemptNumber: number;
     status: string;
+    source: "AI" | "DETERMINISTIC";
+    generationRunId: string | null;
     model: string;
     latencyMs: number | null;
     inputTokens: number | null;
@@ -1510,11 +1515,11 @@ function WeeklyChallengesAdmin({
                 return (
                   <tr key={period.id}>
                     <td><strong>{formatAdminDate(period.periodStart)} 起</strong><small>至 {formatAdminDate(period.periodEnd)}</small></td>
-                    <td><span className={`status-chip ${period.status === "FAILED" ? "danger" : period.status === "ACTIVE" ? "success" : "warning"}`}>{statusLabel[period.status]}</span>{period.failureReason && <small className="challenge-failure">{period.failureReason}</small>}</td>
+                    <td><span className={`status-chip ${period.status === "FAILED" ? "danger" : period.status === "ACTIVE" ? "success" : "warning"}`}>{statusLabel[period.status]}</span>{period.failureReason && <small className="challenge-failure">{period.failureReason}</small>}{period.fallbackBatchCount > 0 && <small className="challenge-failure">{period.fallbackBatchCount} 个批次使用稳定模板</small>}</td>
                     <td><strong>{period._count.assignments} / {period.audienceCount}</strong><small>{period._count.attempts} 次模型调用</small></td>
                     <td><strong>数量 {distribution.get("VIDEO_COUNT") ?? 0}</strong><small>点赞 {distribution.get("LIKE_SUM") ?? 0} · 组合 {distribution.get("COMBINED") ?? 0}</small></td>
                     <td><strong>{rewardTotal.toLocaleString()} 分</strong><small>上限 {period.personalRewardBudget.toLocaleString()}</small></td>
-                    <td><strong>{period.model}</strong><small>{period.promptVersion} · {period.rewardPolicyVersion}</small></td>
+                    <td><strong>{period.generationMode === "AI" ? period.model : period.generationMode === "HYBRID" ? "AI + 稳定模板" : "稳定模板"}</strong><small>{period.promptVersion} · {period.rewardPolicyVersion}</small></td>
                     <td>{period.raceWinner && !period.raceWinner.reversedAt ? <><strong>{period.raceWinner.user.nickname}</strong><small>{period.raceWinner.rewardPoints.toLocaleString()} 分</small></> : <span>尚未产生</span>}</td>
                     <td><div className="table-actions-inline"><button className="secondary-button mini-button" disabled={loadingId === period.id} onClick={() => void loadDetail(period)}>{loadingId === period.id ? "加载中" : "查看"}</button>{period.status === "FAILED" && <button className="secondary-button mini-button" onClick={() => void onRetry(period)}>重试</button>}{period.status === "READY" && period.rewardPolicyVersion !== "tiered-v2-hard-combined" && <button className="secondary-button mini-button" disabled={upgradingId === period.id} onClick={() => void upgradePeriod(period)}>{upgradingId === period.id ? "提交中" : "按两周数据重新生成"}</button>}</div></td>
                   </tr>
@@ -1537,7 +1542,7 @@ function WeeklyChallengesAdmin({
             </div>
             <div className="data-table-wrap challenge-detail-table">
               <table className="data-table weekly-assignment-table">
-                <thead><tr><th>成员</th><th>AI 任务</th><th>基线 → 目标</th><th>当前进度</th><th>奖励</th><th>状态</th></tr></thead>
+                <thead><tr><th>成员</th><th>任务</th><th>基线 → 目标</th><th>当前进度</th><th>奖励</th><th>状态</th></tr></thead>
                 <tbody>{detail.assignments.map((assignment) => (
                   <tr key={assignment.id}>
                     <td><strong>{assignment.user.nickname}</strong><small>{assignment.user.kuaishouId}</small></td>
@@ -1552,7 +1557,7 @@ function WeeklyChallengesAdmin({
             </div>
             <div className="challenge-attempt-list">
               <h3>模型生成记录</h3>
-              {detail.attempts.map((attempt) => <div key={attempt.id}><span>批次 {attempt.batchNumber + 1} / 尝试 {attempt.attemptNumber}</span><b>{attemptStatusLabel[attempt.status] ?? attempt.status}</b><span>{attempt.latencyMs ?? "—"} ms</span><span>{(attempt.inputTokens ?? 0) + (attempt.outputTokens ?? 0)} tokens</span>{attempt.error && <small>{attempt.error}</small>}</div>)}
+              {detail.attempts.map((attempt) => <div key={attempt.id}><span>批次 {attempt.batchNumber + 1} / 尝试 {attempt.attemptNumber}</span><b>{attempt.source === "DETERMINISTIC" ? "稳定模板" : attemptStatusLabel[attempt.status] ?? attempt.status}</b><span>{attempt.latencyMs ?? "—"} ms</span><span>{(attempt.inputTokens ?? 0) + (attempt.outputTokens ?? 0)} tokens</span>{attempt.error && <small>{attempt.error}</small>}</div>)}
             </div>
           </section>
         </div>

@@ -113,10 +113,12 @@ jobs:
             status="$(jq -r '.period.status' "$work_dir/detail.json")"
             policy="$(jq -r '.period.rewardPolicyVersion' "$work_dir/detail.json")"
             prompt="$(jq -r '.period.promptVersion' "$work_dir/detail.json")"
+            mode="$(jq -r '.period.generationMode' "$work_dir/detail.json")"
+            fallback_batches="$(jq -r '.period.fallbackBatchCount' "$work_dir/detail.json")"
             audience="$(jq -r '.period.audienceCount' "$work_dir/detail.json")"
             assignments="$(jq '.period.assignments | length' "$work_dir/detail.json")"
-            printf 'status=%s policy=%s prompt=%s audience=%s assignments=%s\n' "$status" "$policy" "$prompt" "$audience" "$assignments"
-            if [[ "$status" == "READY" && "$policy" == "tiered-v2-hard-combined" && "$prompt" == "weekly-challenge-v4-hard-combined-two-week" && "$audience" == "$assignments" ]]; then
+            printf 'status=%s policy=%s prompt=%s mode=%s fallback_batches=%s audience=%s assignments=%s\n' "$status" "$policy" "$prompt" "$mode" "$fallback_batches" "$audience" "$assignments"
+            if [[ "$status" == "READY" && "$policy" == "tiered-v2-hard-combined" && "$prompt" == "weekly-challenge-v5-deterministic-targets" && "$audience" == "$assignments" ]]; then
               exit 0
             fi
             if [[ "$status" == "FAILED" ]]; then

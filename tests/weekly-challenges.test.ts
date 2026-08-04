@@ -65,17 +65,23 @@ describe("AI 周挑战核心规则", () => {
     expect(task.rewardTiers[2].rewardPoints).toBeLessThanOrEqual(1000);
   });
 
-  it("rejects single-metric tasks and a model baseline above the observed peak", () => {
+  it("keeps numeric business validation on the server and rejects model-supplied numeric fields", () => {
     expect(() => weeklyChallengeGenerationInternals.validateGeneratedTask(
       combinedTask({ baselineVideoCount: 6 }),
       profile(),
     )).toThrow("基线判断超过历史峰值");
     expect(() => weeklyChallengeGenerationInternals.parseModelOutput(JSON.stringify({
-      tasks: [{ ...combinedTask(), type: "VIDEO_COUNT" }],
+      tasks: [{
+        memberRef,
+        title: "综合提升挑战",
+        description: "同时完成视频发布和累计点赞目标",
+        reason: "依据最近两周逐周数据判断",
+        targetLikes: 999_999,
+      }],
     }))).toThrow();
   });
 
-  it("gives the model two weekly metric snapshots instead of a server median", () => {
+  it("gives the model fixed targets for copywriting without exposing internal business inputs", () => {
     const opaque = opaqueMemberRef(new Date("2026-07-26T16:00:00.000Z"), "sensitive-internal-user-id");
     const payload = JSON.parse(weeklyChallengeGenerationInternals.buildPrompt([profile({
       userId: "sensitive-internal-user-id",
@@ -89,15 +95,34 @@ describe("AI 周挑战核心规则", () => {
     expect(payload.members[0]).not.toHaveProperty("tenureDays");
     expect(payload.members[0]).not.toHaveProperty("previousChallengeCompletionRate");
     expect(payload.members[0]).not.toHaveProperty("newMember");
-    expect(Object.keys(payload.members[0]).sort()).toEqual(["memberRef", "referenceWeeks"]);
-    expect(payload.policies.baselineRules).toContain("最近两周");
-    expect(payload.policies.targetRules.COMBINED).toContain("只完成单项");
-    expect(payload.policies.output).toContain("baselineVideoCount");
-    expect(payload.policies.output).toContain("baselineLikes");
+    expect(Object.keys(payload.members[0]).sort()).toEqual(["assignedTargets", "memberRef", "referenceWeeks"]);
+    expect(payload.members[0].assignedTargets.targetVideoCount).toBeGreaterThan(0);
+    expect(payload.members[0].assignedTargets.targetLikes).toBeGreaterThan(0);
+    expect(payload.policies.numericPolicy).toContain("服务端计算");
+    expect(payload.policies.output).not.toContain("baselineVideoCount");
+    expect(payload.policies.output).not.toContain("rewardPoints");
+  });
+
+  it("builds deterministic integer targets and three reward tiers without AI", () => {
+    const task = weeklyChallengeGenerationInternals.deterministicTask(profile());
+    expect(task).toMatchObject({ type: "COMBINED", memberRef });
+    expect(Number.isInteger(task.baselineVideoCount)).toBe(true);
+    expect(Number.isInteger(task.baselineLikes)).toBe(true);
+    expect(Number.isInteger(task.targetVideoCount)).toBe(true);
+    expect(Number.isInteger(task.targetLikes)).toBe(true);
+    expect(task.rewardTiers).toHaveLength(3);
+    expect(task.rewardTiers[0].rewardPoints).toBe(100);
+    expect(task.rewardPoints).toBeGreaterThanOrEqual(300);
+    expect(task.rewardPoints).toBeLessThanOrEqual(1000);
   });
 
   it("keeps opaque references and accepts streamed JSON", async () => {
-    const task = combinedTask();
+    const task = {
+      memberRef,
+      title: "综合提升挑战",
+      description: "同时完成视频发布和累计点赞目标",
+      reason: "依据最近两周逐周数据判断",
+    };
     const content = JSON.stringify({ tasks: [task] });
     const streamResponse = new Response([
       `data: ${JSON.stringify({ choices: [{ delta: { content: content.slice(0, 30) } }] })}\n\n`,
@@ -108,6 +133,59 @@ describe("AI 周挑战核心规则", () => {
     const streamed = await weeklyChallengeGenerationInternals.readDeepSeekCompletion(streamResponse);
     expect(streamed.content).toBe(content);
     expect(streamed.streamEvents).toBe(3);
-    expect(weeklyChallengeGenerationInternals.parseModelOutput(streamed.content).tasks[0].type).toBe("COMBINED");
+    expect(weeklyChallengeGenerationInternals.parseModelOutput(streamed.content).tasks[0].title).toBe("综合提升挑战");
+  });
+
+  it("keeps a slow SSE response alive while stream progress continues", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalHardTimeout = process.env.DEEPSEEK_HARD_TIMEOUT_MS;
+    const originalFirstByteTimeout = process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS;
+    const originalIdleTimeout = process.env.DEEPSEEK_IDLE_TIMEOUT_MS;
+    process.env.DEEPSEEK_HARD_TIMEOUT_MS = "200";
+    process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS = "30";
+    process.env.DEEPSEEK_IDLE_TIMEOUT_MS = "30";
+    const content = JSON.stringify({
+      tasks: [{
+        memberRef,
+        title: "综合提升挑战",
+        description: "同时完成视频发布和累计点赞目标",
+        reason: "依据最近两周逐周数据判断",
+      }],
+    });
+    const chunks = [content.slice(0, 25), content.slice(25, 55), content.slice(55)];
+    globalThis.fetch = async () => new Response(new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk, index) => {
+          setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`,
+            ));
+            if (index === chunks.length - 1) {
+              controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+              controller.close();
+            }
+          }, 20 + index * 20);
+        });
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
+
+    try {
+      const completion = await weeklyChallengeGenerationInternals.requestDeepSeekCompletion({
+        config: { baseUrl: "https://provider.invalid", apiKey: "test-key", model: "test-model" },
+        prompt: "test",
+        requestId: "slow-stream-test",
+        deadline: new Date(Date.now() + 1_000),
+      });
+      expect(completion.content).toBe(content);
+      expect(completion.streamEvents).toBe(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalHardTimeout === undefined) delete process.env.DEEPSEEK_HARD_TIMEOUT_MS;
+      else process.env.DEEPSEEK_HARD_TIMEOUT_MS = originalHardTimeout;
+      if (originalFirstByteTimeout === undefined) delete process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS;
+      else process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS = originalFirstByteTimeout;
+      if (originalIdleTimeout === undefined) delete process.env.DEEPSEEK_IDLE_TIMEOUT_MS;
+      else process.env.DEEPSEEK_IDLE_TIMEOUT_MS = originalIdleTimeout;
+    }
   });
 });

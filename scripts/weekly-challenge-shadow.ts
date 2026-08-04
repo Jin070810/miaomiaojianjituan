@@ -136,6 +136,7 @@ async function periodReport(periodId: string) {
         select: {
           batchNumber: true,
           status: true,
+          source: true,
           latencyMs: true,
           inputTokens: true,
           outputTokens: true,
@@ -159,6 +160,9 @@ async function periodReport(periodId: string) {
   if (totalRewards > period.personalRewardBudget) throw new Error("影子周期个人奖励超出预算");
   if (period.rewardPolicyVersion !== REWARD_POLICY_VERSION) {
     throw new Error(`影子周期奖励策略错误：${period.rewardPolicyVersion}`);
+  }
+  if (period.generationMode !== "AI" || period.fallbackBatchCount !== 0) {
+    throw new Error(`影子周期使用了确定性降级：${period.fallbackBatchCount} 个批次`);
   }
   if (rewards.some((reward) => !Number.isInteger(reward) || reward < 300 || reward > 1000)) {
     throw new Error("影子周期存在非法个人奖励");
@@ -187,6 +191,8 @@ async function periodReport(periodId: string) {
     model: period.model,
     promptVersion: period.promptVersion,
     rewardPolicyVersion: period.rewardPolicyVersion,
+    generationMode: period.generationMode,
+    fallbackBatchCount: period.fallbackBatchCount,
   };
 }
 
@@ -199,6 +205,7 @@ async function failureReport(error: unknown) {
         select: {
           batchNumber: true,
           status: true,
+          source: true,
           latencyMs: true,
           inputTokens: true,
           outputTokens: true,
@@ -223,6 +230,8 @@ async function failureReport(error: unknown) {
       model: period.model,
       promptVersion: period.promptVersion,
       rewardPolicyVersion: period.rewardPolicyVersion,
+      generationMode: period.generationMode,
+      fallbackBatchCount: period.fallbackBatchCount,
       ...summarizeGenerationAttempts(period.attempts),
     })),
     rewardsEnabled: switchState?.enabled ?? null,

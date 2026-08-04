@@ -731,23 +731,57 @@ export async function getCurrentWeeklyChallenge(userId: string, now = new Date()
   };
 }
 
-export async function weeklyChallengeSchedulerStatus() {
-  const latest = await db.weeklyChallengePeriod.findFirst({
-    orderBy: { periodStart: "desc" },
-    select: {
-      periodStart: true,
-      periodEnd: true,
-      status: true,
-      generatedAt: true,
-      activatedAt: true,
-      failureReason: true,
-      _count: { select: { assignments: true, attempts: true } },
-    },
-  });
+export async function weeklyChallengeSchedulerStatus(now = new Date()) {
+  const currentBounds = shanghaiWeekBounds(now);
+  const [latest, current, enabled] = await Promise.all([
+    db.weeklyChallengePeriod.findFirst({
+      orderBy: { periodStart: "desc" },
+      select: {
+        periodStart: true,
+        periodEnd: true,
+        status: true,
+        generationMode: true,
+        fallbackBatchCount: true,
+        generationWarning: true,
+        generatedAt: true,
+        activatedAt: true,
+        failureReason: true,
+        _count: { select: { assignments: true, attempts: true } },
+      },
+    }),
+    db.weeklyChallengePeriod.findUnique({
+      where: { periodStart: currentBounds.start },
+      select: {
+        periodStart: true,
+        periodEnd: true,
+        status: true,
+        generationMode: true,
+        fallbackBatchCount: true,
+        generationWarning: true,
+        generatedAt: true,
+        activatedAt: true,
+        failureReason: true,
+        _count: { select: { assignments: true, attempts: true } },
+      },
+    }),
+    weeklyRewardsEnabled(db),
+  ]);
+  const operationalIssues = enabled
+    ? [
+        ...(!current ? ["当前周挑战周期缺失"] : []),
+        ...(current && ["FAILED", "CANCELLED"].includes(current.status)
+          ? [`当前周挑战周期状态异常：${current.status}`] : []),
+        ...(current && current.fallbackBatchCount > 0
+          ? [`当前周挑战有 ${current.fallbackBatchCount} 个批次使用确定性降级`] : []),
+      ]
+    : [];
   return {
-    enabled: await weeklyRewardsEnabled(db),
+    enabled,
     providerConfigured: Boolean(process.env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_BASE_URL && process.env.DEEPSEEK_MODEL),
     latest,
+    current,
+    degraded: operationalIssues.length > 0,
+    operationalIssues,
   };
 }
 

@@ -36,6 +36,8 @@ describe("周挑战匿名生成诊断", () => {
     ]);
     expect(summary).toMatchObject({
       attempts: 3,
+      aiAttempts: 3,
+      deterministicAttempts: 0,
       succeededAttempts: 1,
       failedAttempts: 2,
       runningAttempts: 0,

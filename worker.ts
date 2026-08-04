@@ -8,7 +8,11 @@ import {
   generateWeeklyChallengePeriod,
   runWeeklyChallengeMaintenance,
 } from "./lib/weekly-challenge-generation";
-import { closeWeeklyChallengeQueue } from "./lib/weekly-challenge-jobs";
+import {
+  closeWeeklyChallengeQueue,
+  enqueueWeeklyChallengeGeneration,
+  ensureWeeklyChallengeScheduler,
+} from "./lib/weekly-challenge-jobs";
 import { runMemberClearanceMaintenance } from "./lib/member-clearance";
 import { runMemberGrowthMonthlyMaintenance } from "./lib/member-achievements";
 
@@ -20,6 +24,15 @@ const worker = new Worker("kuaishou-video", async (job) => {
 });
 
 const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
+  if (job.name === "scheduled-generate") {
+    const maintenance = await runWeeklyChallengeMaintenance();
+    if (!maintenance.generationDue || !maintenance.periodStart) return;
+    await generateWeeklyChallengePeriod({
+      periodStart: maintenance.periodStart,
+      retryFailed: true,
+    });
+    return;
+  }
   await generateWeeklyChallengePeriod({
     periodStart: new Date(job.data.periodStart),
     retryFailed: Boolean(job.data.retryFailed),
@@ -62,13 +75,16 @@ async function maintenance() {
   if (closing || maintenanceRunning) return;
   maintenanceRunning = true;
   try {
-    const [recovery] = await Promise.all([
+    const [recovery, , challengeMaintenance] = await Promise.all([
       recoverStaleVideoSubmissions(),
       db.session.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
       runWeeklyChallengeMaintenance(),
       runMemberClearanceMaintenance(),
       runMemberGrowthMonthlyMaintenance(),
     ]);
+    if (challengeMaintenance.generationDue && challengeMaintenance.periodStart) {
+      await enqueueWeeklyChallengeGeneration(challengeMaintenance.periodStart, true, false);
+    }
     if (recovery.found > 0) {
       console.log(`[video-worker] recovery scanned=${recovery.found} enqueued=${recovery.enqueued}`);
     }
@@ -90,6 +106,7 @@ async function heartbeat() {
 }
 
 async function start() {
+  await ensureWeeklyChallengeScheduler();
   await Promise.all([worker.waitUntilReady(), weeklyChallengeWorker.waitUntilReady()]);
   console.log("[video-worker] listening");
   await Promise.all([maintenance(), heartbeat()]);

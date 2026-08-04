@@ -21,9 +21,10 @@ import { memberParticipantRoles } from "./member-roles";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 8;
 const RACE_REWARD = 2_000;
-const PROMPT_VERSION = "weekly-challenge-v4-hard-combined-two-week";
+const PROMPT_VERSION = "weekly-challenge-v5-deterministic-targets";
+const DETERMINISTIC_MODEL = "deterministic-weekly-v1";
 
 type MemberProfile = {
   userId: string;
@@ -47,7 +48,14 @@ type MemberProfile = {
   newMember: boolean;
 };
 
-const modelTaskSchema = z.object({
+const modelCopySchema = z.object({
+  memberRef: z.string().length(20),
+  title: z.string().trim().min(2).max(40),
+  description: z.string().trim().min(5).max(240),
+  reason: z.string().trim().min(5).max(240),
+}).strict();
+
+const businessTaskSchema = z.object({
   memberRef: z.string().length(20),
   type: z.literal("COMBINED"),
   baselineVideoCount: z.number().int().nonnegative(),
@@ -60,13 +68,11 @@ const modelTaskSchema = z.object({
   rewardPoints: z.number().int().min(100).max(1000),
 });
 
-const taskSchema = modelTaskSchema;
-
 const responseSchema = z.object({
-  tasks: z.array(taskSchema).min(1).max(BATCH_SIZE),
+  tasks: z.array(modelCopySchema).min(1).max(BATCH_SIZE),
 });
 
-type GeneratedTask = z.infer<typeof taskSchema> & {
+type GeneratedTask = z.infer<typeof businessTaskSchema> & {
   userId: string;
   difficultyScore: number;
   rewardTiers: RewardTier[];
@@ -150,7 +156,7 @@ async function buildProfiles(periodStart: Date, userIds: string[]) {
   return raw;
 }
 
-function validateGeneratedTask(task: z.infer<typeof taskSchema>, profile: MemberProfile): GeneratedTask {
+function validateGeneratedTask(task: z.infer<typeof businessTaskSchema>, profile: MemberProfile): GeneratedTask {
   if (task.type !== "COMBINED") {
     throw new Error(`成员 ${profile.memberRef} 必须同时包含视频和点赞目标`);
   }
@@ -181,37 +187,65 @@ function validateGeneratedTask(task: z.infer<typeof taskSchema>, profile: Member
   };
 }
 
-function buildPrompt(profiles: MemberProfile[], previousValidationError?: string) {
-  const members = profiles.map((profile) => ({
+function weightedRecentBaseline(older: number, recent: number) {
+  return Math.max(0, Math.floor((older + recent * 2) / 3));
+}
+
+function deterministicTask(profile: MemberProfile): GeneratedTask {
+  const baselineVideoCount = Math.min(
+    profile.bestVideoCount,
+    weightedRecentBaseline(profile.referenceWeeks[0].videoCount, profile.referenceWeeks[1].videoCount),
+  );
+  const baselineLikes = Math.min(
+    profile.bestLikes,
+    weightedRecentBaseline(profile.referenceWeeks[0].likesTotal, profile.referenceWeeks[1].likesTotal),
+  );
+  const judgedProfile = { ...profile, baselineVideoCount, baselineLikes };
+  const bounds = targetBounds(judgedProfile);
+  return validateGeneratedTask({
     memberRef: profile.memberRef,
-    referenceWeeks: profile.referenceWeeks,
-  }));
+    type: "COMBINED",
+    baselineVideoCount,
+    baselineLikes,
+    title: "双目标进阶挑战",
+    description: `本周同时完成视频发布和累计点赞目标`,
+    reason: "根据最近两周的发布和点赞表现生成稳定目标",
+    targetVideoCount: bounds.minimumVideos,
+    targetLikes: bounds.minimumLikes,
+    rewardPoints: MAX_PERSONAL_REWARD,
+  }, profile);
+}
+
+function buildPrompt(profiles: MemberProfile[], previousValidationError?: string) {
+  const members = profiles.map((profile) => {
+    const task = deterministicTask(profile);
+    return {
+      memberRef: profile.memberRef,
+      referenceWeeks: profile.referenceWeeks,
+      assignedTargets: {
+        targetVideoCount: task.targetVideoCount,
+        targetLikes: task.targetLikes,
+      },
+    };
+  });
   return JSON.stringify({
-    objective: "为每位剪辑团成员生成一个困难但值得尝试的综合周任务。每位成员必须且只能出现一次。",
+    objective: "为每位剪辑团成员润色一个综合周任务的短文案。数值目标已由服务端确定，不得修改。每位成员必须且只能出现一次。",
     policies: {
       coverage: `必须返回 ${profiles.length} 条任务，每个输入 memberRef 必须且只能出现一次`,
-      typeSelection: "每名成员的 type 必须为 COMBINED，必须同时完成视频发布数量和累计点赞目标",
-      targetRules: {
-        COMBINED: "必须同时给出正整数 targetVideoCount 和 targetLikes；目标应明显高于模型判断的基线，不能选择只完成单项的任务；服务端会按困难度规则抬高或限幅最终三阶段目标",
-      },
-      baselineRules: "baselineVideoCount 和 baselineLikes 必须根据输入的最近两周逐周数据自行判断，不能机械取中位数；只能返回非负整数且不得超过对应两周历史峰值",
-      integerOnly: true,
-      rewardRange: [100, 1000],
-      rewardPolicy: "服务端会根据最终难度生成 3 个累计阶梯奖励：够一够、努努力、很难但可试。第一阶段 100 分，最终累计奖励 300-1000 分；模型返回的 rewardPoints 仅作兼容字段，不决定实际发放",
-      preferHighChallengeLowReward: true,
+      numericPolicy: "不得返回、改写或推断基线、目标、奖励和任务类型；这些字段完全由服务端计算",
       privacy: "不得推断或输出成员身份，不得在文案中比较或点名其他成员",
       copyLength: {
         title: "6-12 个中文字符",
         description: "18-40 个中文字符，只写本周行动要求",
         reason: "18-40 个中文字符，只说明匿名基线依据",
       },
-      output: "只返回 JSON：{tasks:[{memberRef,type:\"COMBINED\",baselineVideoCount,baselineLikes,title,description,reason,targetVideoCount,targetLikes,rewardPoints}]}",
+      output: "只返回 JSON：{tasks:[{memberRef,title,description,reason}]}，不得包含其他字段",
     },
     ...(previousValidationError
       ? {
           retryCorrection: {
             previousValidationError,
-            instruction: "修正上一版输出，重新返回本批全部成员并严格遵守 COMBINED 类型、基线与字段约束",
+            instruction: "修正上一版输出，重新返回本批全部成员，只返回 memberRef、title、description、reason",
           },
         }
       : {}),
@@ -223,7 +257,7 @@ function deepSeekConfig() {
   const baseUrl = process.env.DEEPSEEK_BASE_URL?.trim().replace(/\/$/, "");
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
   const model = process.env.DEEPSEEK_MODEL?.trim();
-  if (!baseUrl || !apiKey || !model) throw new Error("DeepSeek 周挑战配置不完整");
+  if (!baseUrl || !apiKey || !model) return null;
   return { baseUrl, apiKey, model };
 }
 
@@ -244,8 +278,9 @@ function parseModelOutput(content: string) {
   return responseSchema.parse(JSON.parse(content));
 }
 
-async function readDeepSeekCompletion(response: Response): Promise<DeepSeekCompletion> {
+async function readDeepSeekCompletion(response: Response, onProgress: () => void = () => undefined): Promise<DeepSeekCompletion> {
   if (!response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
+    onProgress();
     const payload = await response.json() as {
       choices?: Array<{ message?: { content?: string } }>;
       usage?: DeepSeekUsage;
@@ -300,6 +335,7 @@ async function readDeepSeekCompletion(response: Response): Promise<DeepSeekCompl
 
   while (true) {
     const { done, value } = await reader.read();
+    if (!done && value?.length) onProgress();
     buffer += decoder.decode(value, { stream: !done });
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
@@ -314,8 +350,23 @@ async function readDeepSeekCompletion(response: Response): Promise<DeepSeekCompl
   return { content, usage, streamEvents };
 }
 
-function deepSeekTimeoutMs() {
-  return positiveIntegerEnv("DEEPSEEK_TIMEOUT_MS", 75_000);
+function deepSeekHardTimeoutMs() {
+  return positiveIntegerEnv(
+    "DEEPSEEK_HARD_TIMEOUT_MS",
+    positiveIntegerEnv("DEEPSEEK_TIMEOUT_MS", 180_000),
+  );
+}
+
+function deepSeekFirstByteTimeoutMs() {
+  return positiveIntegerEnv("DEEPSEEK_FIRST_BYTE_TIMEOUT_MS", 60_000);
+}
+
+function deepSeekIdleTimeoutMs() {
+  return positiveIntegerEnv("DEEPSEEK_IDLE_TIMEOUT_MS", 45_000);
+}
+
+function deepSeekMaxOutputTokens() {
+  return positiveIntegerEnv("DEEPSEEK_MAX_OUTPUT_TOKENS", 6_000);
 }
 
 function logBatchProgress(details: Record<string, string | number>) {
@@ -339,6 +390,95 @@ async function refreshGenerationLease(periodId: string, generationRunId: string)
   return heartbeatAt;
 }
 
+function applyGeneratedCopy(profiles: MemberProfile[], copies: z.infer<typeof modelCopySchema>[]) {
+  const expectedRefs = new Set(profiles.map((profile) => profile.memberRef));
+  const returnedRefs = new Set(copies.map((task) => task.memberRef));
+  if (returnedRefs.size !== copies.length || returnedRefs.size !== expectedRefs.size) {
+    throw new Error("DeepSeek 返回了重复或缺失的成员任务");
+  }
+  for (const memberRef of expectedRefs) {
+    if (!returnedRefs.has(memberRef)) throw new Error(`DeepSeek 缺少成员 ${memberRef} 的任务`);
+  }
+  const deterministicByRef = new Map(profiles.map((profile) => {
+    const task = deterministicTask(profile);
+    return [profile.memberRef, task] as const;
+  }));
+  return copies.map((copy) => {
+    const task = deterministicByRef.get(copy.memberRef);
+    if (!task) throw new Error(`DeepSeek 返回未知成员 ${copy.memberRef}`);
+    return { ...task, title: copy.title, description: copy.description, reason: copy.reason };
+  });
+}
+
+async function requestDeepSeekCompletion(input: {
+  config: NonNullable<ReturnType<typeof deepSeekConfig>>;
+  prompt: string;
+  requestId: string;
+  deadline: Date;
+}) {
+  const controller = new AbortController();
+  const remainingMs = input.deadline.getTime() - Date.now();
+  if (remainingMs <= 0) throw new Error("已超过周日 23:00 AI 生成截止时间");
+  let timeoutKind = "";
+  let phaseTimer: NodeJS.Timeout | null = null;
+  const abortFor = (kind: string) => {
+    if (controller.signal.aborted) return;
+    timeoutKind = kind;
+    controller.abort();
+  };
+  const hardTimeout = Math.min(deepSeekHardTimeoutMs(), remainingMs);
+  const hardTimer = setTimeout(
+    () => abortFor(hardTimeout === remainingMs ? "生成截止" : "总时限"),
+    hardTimeout,
+  );
+  phaseTimer = setTimeout(
+    () => abortFor("首字节"),
+    Math.min(deepSeekFirstByteTimeoutMs(), remainingMs),
+  );
+  const resetIdleTimeout = () => {
+    if (phaseTimer) clearTimeout(phaseTimer);
+    phaseTimer = setTimeout(() => abortFor("流空闲"), deepSeekIdleTimeoutMs());
+  };
+  try {
+    const response = await fetch(`${input.config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.config.apiKey}`,
+        "content-type": "application/json",
+        "x-request-id": input.requestId,
+      },
+      body: JSON.stringify({
+        model: input.config.model,
+        temperature: 0.4,
+        max_tokens: deepSeekMaxOutputTokens(),
+        response_format: { type: "json_object" },
+        stream: true,
+        messages: [
+          {
+            role: "system",
+            content: "你是积分活动文案编辑。数值规则由服务端决定，只润色简洁文案，只输出合法 JSON，不输出 Markdown。",
+          },
+          { role: "user", content: input.prompt },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`DeepSeek HTTP ${response.status}`);
+    resetIdleTimeout();
+    return await readDeepSeekCompletion(response, resetIdleTimeout);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      const timeout = new Error(`DeepSeek ${timeoutKind || "请求"}超时`);
+      timeout.name = "TimeoutError";
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    clearTimeout(hardTimer);
+    if (phaseTimer) clearTimeout(phaseTimer);
+  }
+}
+
 async function requestBatch(
   periodId: string,
   generationRunId: string,
@@ -347,11 +487,29 @@ async function requestBatch(
   deadline: Date,
 ) {
   const config = deepSeekConfig();
-  let lastError: unknown;
+  let lastError: unknown = config ? undefined : new Error("DeepSeek 周挑战配置不完整");
   let previousValidationError: string | undefined;
+  const inputHash = crypto.createHash("sha256")
+    .update(JSON.stringify({ promptVersion: PROMPT_VERSION, profiles }))
+    .digest("hex");
+  const cached = await db.weeklyChallengeGenerationAttempt.findFirst({
+    where: { periodId, batchNumber, inputHash, status: "SUCCEEDED" },
+    orderBy: { attemptNumber: "desc" },
+    select: { source: true, validatedOutput: true, error: true },
+  });
+  if (cached?.validatedOutput) {
+    const parsed = responseSchema.parse(cached.validatedOutput);
+    return {
+      tasks: applyGeneratedCopy(profiles, parsed.tasks),
+      source: cached.source,
+      reused: true,
+      warning: cached.error,
+    };
+  }
   const previousAttempts = await db.weeklyChallengeGenerationAttempt.count({ where: { periodId, batchNumber } });
-  for (let offset = 1; offset <= 3; offset += 1) {
-    assertBeforeGenerationDeadline(deadline);
+  let attempted = 0;
+  for (let offset = 1; config && offset <= 3; offset += 1) {
+    if (Date.now() >= deadline.getTime()) break;
     await refreshGenerationLease(periodId, generationRunId);
     const prompt = buildPrompt(profiles, previousValidationError);
     const promptHash = crypto.createHash("sha256").update(prompt).digest("hex");
@@ -364,6 +522,9 @@ async function requestBatch(
         batchNumber,
         attemptNumber,
         status: "RUNNING",
+        source: "AI",
+        generationRunId,
+        inputHash,
         model: config.model,
         promptVersion: PROMPT_VERSION,
         promptHash,
@@ -371,62 +532,14 @@ async function requestBatch(
         memberCount: profiles.length,
       },
     });
+    attempted += 1;
     logBatchProgress({ batchNumber, attemptNumber, status: "started", memberCount: profiles.length });
     try {
-      const controller = new AbortController();
-      const remainingMs = deadline.getTime() - Date.now();
-      if (remainingMs <= 0) throw new Error("已超过周日 23:00 生成截止时间");
-      const timer = setTimeout(
-        () => controller.abort(),
-        Math.min(deepSeekTimeoutMs(), remainingMs),
-      );
-      let completion: DeepSeekCompletion;
-      try {
-        const response = await fetch(`${config.baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${config.apiKey}`,
-            "content-type": "application/json",
-            "x-request-id": requestId,
-          },
-          body: JSON.stringify({
-            model: config.model,
-            temperature: 0.4,
-            response_format: { type: "json_object" },
-            stream: true,
-            messages: [
-              {
-                role: "system",
-                content: "你是积分活动任务规划器。严格遵守输入中的边界，文案必须简洁，只输出合法 JSON，不输出 Markdown。",
-              },
-              { role: "user", content: prompt },
-            ],
-          }),
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`DeepSeek HTTP ${response.status}`);
-        completion = await readDeepSeekCompletion(response);
-      } finally {
-        clearTimeout(timer);
-      }
-      assertBeforeGenerationDeadline(deadline);
+      const completion = await requestDeepSeekCompletion({ config, prompt, requestId, deadline });
       const content = completion.content;
       if (!content) throw new Error("DeepSeek 未返回任务内容");
       const parsed = parseModelOutput(content);
-      const expectedRefs = new Set(profiles.map((profile) => profile.memberRef));
-      const returnedRefs = new Set(parsed.tasks.map((task) => task.memberRef));
-      if (returnedRefs.size !== parsed.tasks.length || returnedRefs.size !== expectedRefs.size) {
-        throw new Error("DeepSeek 返回了重复或缺失的成员任务");
-      }
-      for (const memberRef of expectedRefs) {
-        if (!returnedRefs.has(memberRef)) throw new Error(`DeepSeek 缺少成员 ${memberRef} 的任务`);
-      }
-      const byRef = new Map(profiles.map((profile) => [profile.memberRef, profile]));
-      const tasks = parsed.tasks.map((task) => {
-        const profile = byRef.get(task.memberRef);
-        if (!profile) throw new Error(`DeepSeek 返回未知成员 ${task.memberRef}`);
-        return validateGeneratedTask(task, profile);
-      });
+      const tasks = applyGeneratedCopy(profiles, parsed.tasks);
       await db.weeklyChallengeGenerationAttempt.update({
         where: { id: attempt.id },
         data: {
@@ -446,7 +559,7 @@ async function requestBatch(
         inputTokens: completion.usage?.prompt_tokens ?? 0,
         outputTokens: completion.usage?.completion_tokens ?? 0,
       });
-      return tasks;
+      return { tasks, source: "AI" as const, reused: false, warning: null };
     } catch (error) {
       lastError = error;
       previousValidationError = retryCorrection(error);
@@ -472,7 +585,51 @@ async function requestBatch(
       }
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("DeepSeek 批次生成失败");
+  await refreshGenerationLease(periodId, generationRunId);
+  const fallbackCopies = profiles.map((profile) => {
+    const task = deterministicTask(profile);
+    return {
+      memberRef: profile.memberRef,
+      title: task.title,
+      description: task.description,
+      reason: task.reason,
+    };
+  });
+  const warning = lastError instanceof Error
+    ? lastError.message.slice(0, 1000)
+    : "DeepSeek 在生成截止前未能返回有效文案";
+  await db.weeklyChallengeGenerationAttempt.create({
+    data: {
+      periodId,
+      batchNumber,
+      attemptNumber: previousAttempts + attempted + 1,
+      status: "SUCCEEDED",
+      source: "DETERMINISTIC",
+      generationRunId,
+      inputHash,
+      model: DETERMINISTIC_MODEL,
+      promptVersion: PROMPT_VERSION,
+      promptHash: inputHash,
+      requestId: crypto.randomUUID(),
+      memberCount: profiles.length,
+      latencyMs: 0,
+      error: warning,
+      validatedOutput: { tasks: fallbackCopies },
+    },
+  });
+  logBatchProgress({
+    batchNumber,
+    attemptNumber: previousAttempts + attempted + 1,
+    status: "fallback",
+    memberCount: profiles.length,
+    errorCategory: generationFailureCategory(lastError),
+  });
+  return {
+    tasks: applyGeneratedCopy(profiles, fallbackCopies),
+    source: "DETERMINISTIC" as const,
+    reused: false,
+    warning,
+  };
 }
 
 async function frozenAudience(periodStart: Date) {
@@ -517,7 +674,7 @@ export async function generateWeeklyChallengePeriod(input: {
           personalRewardBudget: audience.length * MAX_PERSONAL_REWARD,
           rewardPolicyVersion: REWARD_POLICY_VERSION,
           raceReward: RACE_REWARD,
-          model: config.model,
+          model: config?.model ?? DETERMINISTIC_MODEL,
           promptVersion: PROMPT_VERSION,
           audienceSnapshot: audience.map((row) => row.id),
           audienceCount: audience.length,
@@ -544,8 +701,11 @@ export async function generateWeeklyChallengePeriod(input: {
         status: "GENERATING",
         generationRunId: runId,
         generationStartedAt: new Date(),
+        generationMode: "AI",
+        fallbackBatchCount: 0,
+        generationWarning: null,
         failureReason: null,
-        model: config.model,
+        model: config?.model ?? DETERMINISTIC_MODEL,
         promptVersion: PROMPT_VERSION,
         rewardPolicyVersion: REWARD_POLICY_VERSION,
       },
@@ -555,10 +715,12 @@ export async function generateWeeklyChallengePeriod(input: {
   }
   if (period.generationRunId !== runId) return period;
   try {
-    const deadline = input.allowLateGeneration
+    if (Date.now() >= period.periodStart.getTime()) {
+      throw new Error("周期已经开始，本周不再补发任务");
+    }
+    const providerDeadline = input.allowLateGeneration
       ? new Date(period.periodStart.getTime() - 10 * 60 * 1000)
       : generationDeadline(period.periodStart);
-    assertBeforeGenerationDeadline(deadline);
     const audience = z.array(z.string()).parse(period.audienceSnapshot);
     if (audience.length === 0) {
       await db.$transaction(async (tx) => {
@@ -577,7 +739,7 @@ export async function generateWeeklyChallengePeriod(input: {
               audienceCount: 0,
               totalRewards: 0,
               rewardBudget: period.personalRewardBudget,
-              model: config.model,
+              model: config?.model ?? DETERMINISTIC_MODEL,
               promptVersion: PROMPT_VERSION,
               rewardPolicyVersion: REWARD_POLICY_VERSION,
               reason: "上周没有提交视频的成员不生成本周任务",
@@ -590,16 +752,24 @@ export async function generateWeeklyChallengePeriod(input: {
     const profiles = await buildProfiles(period.periodStart, audience);
     if (profiles.length !== audience.length) throw new Error("冻结成员中存在已停用或缺失账号");
     const tasks: GeneratedTask[] = [];
+    const batchResults: Array<{ source: "AI" | "DETERMINISTIC"; reused: boolean; warning: string | null }> = [];
     for (let index = 0; index < profiles.length; index += BATCH_SIZE) {
-      tasks.push(...await requestBatch(
+      const result = await requestBatch(
         period.id,
         runId,
         Math.floor(index / BATCH_SIZE),
         profiles.slice(index, index + BATCH_SIZE),
-        deadline,
-      ));
+        providerDeadline,
+      );
+      tasks.push(...result.tasks);
+      batchResults.push(result);
     }
-    assertBeforeGenerationDeadline(deadline);
+    if (Date.now() >= period.periodStart.getTime()) throw new Error("周期已经开始，本周不再补发任务");
+    const fallbackBatchCount = batchResults.filter((result) => result.source === "DETERMINISTIC").length;
+    const generationMode = fallbackBatchCount === 0
+      ? "AI" as const
+      : fallbackBatchCount === batchResults.length ? "DETERMINISTIC" as const : "HYBRID" as const;
+    const generationWarning = batchResults.find((result) => result.warning)?.warning ?? null;
     const suggestedTotalRewards = tasks.reduce((sum, task) => sum + task.rewardPoints, 0);
     const totalRewards = suggestedTotalRewards;
     if (tasks.length !== period.audienceCount || totalRewards > period.personalRewardBudget) {
@@ -609,7 +779,14 @@ export async function generateWeeklyChallengePeriod(input: {
     await db.$transaction(async (tx) => {
       const claimed = await tx.weeklyChallengePeriod.updateMany({
         where: { id: period!.id, status: "GENERATING", generationRunId: runId },
-        data: { status: "READY", generatedAt: new Date(), failureReason: null },
+        data: {
+          status: "READY",
+          generatedAt: new Date(),
+          generationMode,
+          fallbackBatchCount,
+          generationWarning,
+          failureReason: null,
+        },
       });
       if (claimed.count !== 1) throw new Error("周挑战生成租约已失效");
       await tx.weeklyChallengeAssignment.deleteMany({ where: { periodId: period!.id } });
@@ -650,13 +827,30 @@ export async function generateWeeklyChallengePeriod(input: {
             rewardBudget: period!.personalRewardBudget,
             rewardBudgetAdjusted: suggestedTotalRewards !== totalRewards,
             adjustedAssignmentCount: 0,
-            model: config.model,
+            model: config?.model ?? DETERMINISTIC_MODEL,
             promptVersion: PROMPT_VERSION,
             rewardPolicyVersion: REWARD_POLICY_VERSION,
+            generationMode,
+            fallbackBatchCount,
+            reusedBatchCount: batchResults.filter((result) => result.reused).length,
           },
         },
       });
     });
+    if (fallbackBatchCount > 0) {
+      await sendOperationalAlert({
+        source: "weekly-challenge-generator",
+        severity: "warning",
+        message: "周挑战已使用确定性文案降级并按时生成",
+        details: {
+          periodId: period.id,
+          periodStart: period.periodStart.toISOString(),
+          fallbackBatchCount,
+          totalBatchCount: batchResults.length,
+          errorCategory: generationFailureCategory(generationWarning),
+        },
+      });
+    }
     return db.weeklyChallengePeriod.findUniqueOrThrow({ where: { id: period.id } });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "周挑战生成失败";
@@ -677,12 +871,25 @@ export async function generateWeeklyChallengePeriod(input: {
 export async function runWeeklyChallengeMaintenance(now = new Date()) {
   const lifecycle = await activateAndCloseWeeklyChallenges(now);
   const shifted = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  const isGenerationWindow = shifted.getUTCDay() === 0 && shifted.getUTCHours() >= 18 && shifted.getUTCHours() < 23;
-  if (!isGenerationWindow) return { ...lifecycle, generated: false };
+  const isGenerationWindow = shifted.getUTCDay() === 0 && shifted.getUTCHours() >= 18;
+  if (!isGenerationWindow) return { ...lifecycle, generationDue: false, periodStart: null };
   const setting = await db.systemSetting.findUnique({ where: { key: "WEEKLY_CHALLENGES" }, select: { enabled: true } });
-  if (!setting?.enabled) return { ...lifecycle, generated: false };
-  const period = await generateWeeklyChallengePeriod();
-  return { ...lifecycle, generated: period.status === "READY", periodId: period.id, status: period.status };
+  if (!setting?.enabled) return { ...lifecycle, generationDue: false, periodStart: null };
+  const bounds = nextShanghaiWeekBounds(now);
+  const period = await db.weeklyChallengePeriod.findUnique({
+    where: { periodStart: bounds.start },
+    select: { id: true, status: true, generationStartedAt: true },
+  });
+  const stale = period?.status === "GENERATING"
+    && (!period.generationStartedAt || period.generationStartedAt < new Date(now.getTime() - 15 * 60_000));
+  const generationDue = !period || period.status === "FAILED" || stale;
+  return {
+    ...lifecycle,
+    generationDue,
+    periodStart: generationDue ? bounds.start : null,
+    periodId: period?.id ?? null,
+    status: period?.status ?? null,
+  };
 }
 
 export const weeklyChallengeGenerationInternals = {
@@ -694,7 +901,13 @@ export const weeklyChallengeGenerationInternals = {
   generationDeadline,
   parseModelOutput,
   readDeepSeekCompletion,
-  deepSeekTimeoutMs,
+  requestDeepSeekCompletion,
+  deepSeekHardTimeoutMs,
+  deepSeekFirstByteTimeoutMs,
+  deepSeekIdleTimeoutMs,
+  deepSeekMaxOutputTokens,
   retryCorrection,
   refreshGenerationLease,
+  deterministicTask,
+  applyGeneratedCopy,
 };

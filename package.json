@@ -43,7 +43,7 @@
     "lucide-react": "^0.468.0",
     "next": "^16.2.11",
     "nodemailer": "^9.0.3",
-    "postcss": "^8.5.22",
+    "postcss": "^8.5.25",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sharp": "^0.35.3",
@@ -62,7 +62,7 @@
     "vitest": "^3.2.4"
   },
   "overrides": {
-    "postcss": "^8.5.22",
+    "postcss": "^8.5.25",
     "sharp": "^0.35.3"
   }
 }

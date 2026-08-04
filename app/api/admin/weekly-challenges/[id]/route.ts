@@ -20,6 +20,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
             batchNumber: true,
             attemptNumber: true,
             status: true,
+            source: true,
+            generationRunId: true,
             model: true,
             promptVersion: true,
             requestId: true,

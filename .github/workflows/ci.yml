@@ -64,6 +64,7 @@ jobs:
       - run: docker compose build app
       - run: docker build --target worker -t miaomiao-points-worker:ci .
       - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts"
+      - run: bash scripts/test-pull-release-images.sh
 
   e2e:
     needs: core

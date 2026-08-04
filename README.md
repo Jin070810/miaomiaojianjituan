@@ -23,7 +23,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 新服务器首次准备可由 root 执行 `bash scripts/bootstrap-server.sh`，它会安装 Docker/Compose、配置 2GB Swap、限制入站端口并创建 `/opt/miaomiaojianjituan`。正式 workflow 会在备份和启动容器前执行 `bash scripts/production-preflight.sh`，检查生产密钥、非默认数据库密码、Docker Compose 和 HTTPS 证书。
 
-正式发布由 GitHub Actions 校验已合并的 release commit，再通过专用部署账号让生产服务器拉取该 commit，并利用本机 Docker/BuildKit 缓存构建 App/Worker 镜像。构建成功后才生成发布前备份、执行 migration、切换 Web/Worker 并刷新 Nginx。该流程不再通过低带宽 SSH 链路传输完整镜像；详细设计和耗时目标见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)。
+正式发布由 GitHub Actions 校验已合并的 release commit，在隔离的 Actions runner 构建 App/Worker 镜像并推送 GHCR。生产服务器只按不可变 digest 拉取镜像并校验 OCI revision，不执行应用构建；镜像验证成功后才生成发布前备份、执行 migration、切换 Web/Worker 并刷新 Nginx。详细设计和耗时目标见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)。
 
 ## 快手视频抓取
 

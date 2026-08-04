@@ -82,8 +82,10 @@ jobs:
               and .tierCountPerAssignment == 3
               and .runningAttempts == 0
               and (.finalFailedBatches | length) == 0
-              and .promptVersion == "weekly-challenge-v3-tiered-rewards"
-              and .rewardPolicyVersion == "tiered-v1"
+              and .promptVersion == "weekly-challenge-v5-deterministic-targets"
+              and .rewardPolicyVersion == "tiered-v2-hard-combined"
+              and .generationMode == "AI"
+              and .fallbackBatchCount == 0
               and .model == "deepseek-v4-flash")
           ' shadow-report/report.json >/dev/null
       - name: Verify production health before change

@@ -58,6 +58,9 @@ export async function seedWeeklyChallengeE2E() {
       periodEnd: current.end,
       claimEndsAt: current.claimEndsAt,
       status: "ACTIVE",
+      generationMode: "HYBRID",
+      fallbackBatchCount: 1,
+      generationWarning: "模拟模型超时，已使用稳定模板",
       model: "e2e-mock-model",
       promptVersion: "weekly-challenge-v1",
       audienceSnapshot: [member.id, noTaskMember.id],
@@ -93,6 +96,23 @@ export async function seedWeeklyChallengeE2E() {
       },
     }),
   ]);
+  await db.weeklyChallengeGenerationAttempt.create({
+    data: {
+      periodId: period.id,
+      batchNumber: 0,
+      attemptNumber: 1,
+      status: "SUCCEEDED",
+      source: "DETERMINISTIC",
+      model: "deterministic-weekly-v1",
+      promptVersion: "weekly-challenge-v5-deterministic-targets",
+      promptHash: "e2e-deterministic-prompt",
+      requestId: "e2e-deterministic-request",
+      memberCount: 1,
+      latencyMs: 0,
+      error: "模拟模型超时，已使用稳定模板",
+      validatedOutput: { tasks: [] },
+    },
+  });
   await db.weeklyChallengePeriod.create({
     data: {
       periodStart: next.start,

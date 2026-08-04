@@ -150,6 +150,17 @@ enum WeeklyChallengeAttemptStatus {
   FAILED
 }
 
+enum WeeklyChallengeGenerationSource {
+  AI
+  DETERMINISTIC
+}
+
+enum WeeklyChallengeGenerationMode {
+  AI
+  HYBRID
+  DETERMINISTIC
+}
+
 enum AnnouncementStatus {
   DRAFT
   PUBLISHED
@@ -713,6 +724,9 @@ model WeeklyChallengePeriod {
   audienceCount        Int
   generationRunId      String?
   generationStartedAt  DateTime?
+  generationMode       WeeklyChallengeGenerationMode @default(AI)
+  fallbackBatchCount   Int                           @default(0)
+  generationWarning    String?
   generatedAt          DateTime?
   activatedAt          DateTime?
   closedAt             DateTime?
@@ -767,6 +781,9 @@ model WeeklyChallengeGenerationAttempt {
   batchNumber     Int
   attemptNumber   Int
   status          WeeklyChallengeAttemptStatus @default(RUNNING)
+  source          WeeklyChallengeGenerationSource @default(AI)
+  generationRunId String?
+  inputHash       String?
   model           String
   promptVersion   String
   promptHash      String
@@ -783,6 +800,7 @@ model WeeklyChallengeGenerationAttempt {
 
   @@unique([periodId, batchNumber, attemptNumber])
   @@index([periodId, status, createdAt])
+  @@index([periodId, batchNumber, inputHash, status])
 }
 
 model WeeklyRaceWinner {

@@ -36,8 +36,8 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
   const periodIds: string[] = [];
   let server: http.Server;
   let streamedRequestCount = 0;
-  let emittedInvalidBaseline = false;
-  let responseMode: "valid" | "missing-member" | "invalid-baseline-once" | "http-429" | "http-500" | "invalid-json" | "timeout" = "valid";
+  let emittedInvalidCopy = false;
+  let responseMode: "valid" | "missing-member" | "invalid-copy-once" | "http-429" | "http-500" | "invalid-json" | "timeout" = "valid";
 
   beforeAll(async () => {
     server = http.createServer((request, response) => {
@@ -63,26 +63,19 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
             retryCorrection?: { previousValidationError: string };
           };
           const selected = responseMode === "missing-member" ? prompt.members.slice(1) : prompt.members;
-          const shouldInvalidateBaseline = responseMode === "invalid-baseline-once"
+          const shouldInvalidateCopy = responseMode === "invalid-copy-once"
             && !prompt.retryCorrection
-            && !emittedInvalidBaseline;
+            && !emittedInvalidCopy;
           const tasks = selected.map((member, index) => {
             return {
               memberRef: member.memberRef,
-              type: "COMBINED",
-              baselineVideoCount: shouldInvalidateBaseline && index === 0
-                ? member.referenceWeeks[1].videoCount + 1
-                : member.referenceWeeks[1].videoCount,
-              baselineLikes: member.referenceWeeks[1].likesTotal,
               title: "双指标冲刺",
               description: "同时完成本周视频发布和累计点赞目标",
               reason: "依据最近两周逐周数据生成",
-              targetVideoCount: 6,
-              targetLikes: 1500,
-              rewardPoints: 1000,
+              ...(shouldInvalidateCopy && index === 0 ? { targetLikes: 999_999 } : {}),
             };
           });
-          if (shouldInvalidateBaseline) emittedInvalidBaseline = true;
+          if (shouldInvalidateCopy) emittedInvalidCopy = true;
           const send = () => {
             const content = responseMode === "invalid-json" ? "{" : JSON.stringify({ tasks });
             const splitAt = Math.floor(content.length / 2);
@@ -105,7 +98,9 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     process.env.DEEPSEEK_BASE_URL = `http://127.0.0.1:${address.port}`;
     process.env.DEEPSEEK_API_KEY = "mock-deepseek-key";
     process.env.DEEPSEEK_MODEL = "mock-weekly-challenge-model";
-    process.env.DEEPSEEK_TIMEOUT_MS = "25";
+    process.env.DEEPSEEK_HARD_TIMEOUT_MS = "50";
+    process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS = "25";
+    process.env.DEEPSEEK_IDLE_TIMEOUT_MS = "25";
     process.env.DEEPSEEK_RETRY_BASE_MS = "5";
 
     const stalePeriods = await db.weeklyChallengePeriod.findMany({
@@ -174,7 +169,9 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     delete process.env.DEEPSEEK_BASE_URL;
     delete process.env.DEEPSEEK_API_KEY;
     delete process.env.DEEPSEEK_MODEL;
-    delete process.env.DEEPSEEK_TIMEOUT_MS;
+    delete process.env.DEEPSEEK_HARD_TIMEOUT_MS;
+    delete process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS;
+    delete process.env.DEEPSEEK_IDLE_TIMEOUT_MS;
     delete process.env.DEEPSEEK_RETRY_BASE_MS;
     await db.$disconnect();
   });
@@ -208,7 +205,6 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       generatedPeriodStart,
       failedPeriodStart,
       correctedPeriodStart,
-      ...providerFailureCases.map((entry) => entry[1]),
     ];
     await db.videoSubmission.createMany({
       data: generationStarts.flatMap((periodStart, periodIndex) => users.map((user, userIndex) => ({
@@ -223,6 +219,19 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
         idempotencyKey: `weekly-generation-video-${suffix}-${periodIndex}-${userIndex}`,
       }))),
     });
+    await db.videoSubmission.createMany({
+      data: providerFailureCases.flatMap(([mode, periodStart]) => users.slice(2, 4).map((user, userIndex) => ({
+        userId: user.id,
+        sourceUrl: `https://v.kuaishou.com/weekly-provider-${suffix}-${mode}-${userIndex}`,
+        requestUrl: `https://v.kuaishou.com/weekly-provider-${suffix}-${mode}-${userIndex}`,
+        sourceKind: "short-link",
+        status: "APPROVED" as const,
+        likes: 500,
+        submittedNickname: `生成成员${userIndex}`,
+        submittedAt: new Date(periodStart.getTime() - 24 * 60 * 60 * 1000),
+        idempotencyKey: `weekly-provider-video-${suffix}-${mode}-${userIndex}`,
+      }))),
+    });
 
     responseMode = "valid";
     const period = await generateWeeklyChallengePeriod({ periodStart: generatedPeriodStart });
@@ -231,7 +240,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(period.status).toBe("READY");
     expect(assignments).toHaveLength(300);
     expect(assignments.every((assignment) => assignment.type === "COMBINED" && assignment.targetLikes !== null)).toBe(true);
-    expect(streamedRequestCount).toBe(12);
+    expect(streamedRequestCount).toBe(38);
     expect(assignments.reduce((sum, assignment) => sum + assignment.rewardPoints, 0)).toBeLessThanOrEqual(300_000);
     expect(assignments.every((assignment) =>
       Number.isInteger(assignment.rewardPoints)
@@ -241,7 +250,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       && assignment.rewardTiers.length === 3)).toBe(true);
     expect(await db.weeklyChallengeGenerationAttempt.count({
       where: { periodId: period.id, status: "SUCCEEDED" },
-    })).toBe(12);
+    })).toBe(38);
     const audit = await db.auditLog.findFirstOrThrow({
       where: {
         entity: "WeeklyChallengePeriod",
@@ -251,7 +260,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     });
     expect(audit.afterValue).toMatchObject({
       audienceCount: 300,
-      suggestedTotalRewards: 300_000,
+      suggestedTotalRewards: expect.any(Number),
       rewardBudget: 300_000,
       rewardBudgetAdjusted: false,
       adjustedAssignmentCount: 0,
@@ -259,25 +268,42 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     });
   }, 30_000);
 
-  it("marks the whole period failed when a batch omits a member", async () => {
+  it("publishes the whole period with deterministic copy when every AI batch omits a member", async () => {
     responseMode = "missing-member";
-    await expect(generateWeeklyChallengePeriod({ periodStart: failedPeriodStart })).rejects.toThrow("重复或缺失");
+    await generateWeeklyChallengePeriod({ periodStart: failedPeriodStart });
     const period = await db.weeklyChallengePeriod.findUniqueOrThrow({ where: { periodStart: failedPeriodStart } });
     periodIds.push(period.id);
-    expect(period.status).toBe("FAILED");
-    expect(await db.weeklyChallengeAssignment.count({ where: { periodId: period.id } })).toBe(0);
+    expect(period).toMatchObject({ status: "READY", generationMode: "DETERMINISTIC", fallbackBatchCount: 38 });
+    expect(await db.weeklyChallengeAssignment.count({ where: { periodId: period.id } })).toBe(300);
     expect(await db.weeklyChallengeGenerationAttempt.count({
       where: { periodId: period.id, status: "FAILED" },
-    })).toBe(3);
+    })).toBe(114);
   }, 30_000);
 
-  it("feeds business validation back to the model and upgrades failed-period metadata on retry", async () => {
+  it("reuses validated batch checkpoints instead of calling the provider again", async () => {
+    const before = streamedRequestCount;
+    await db.weeklyChallengePeriod.update({
+      where: { periodStart: failedPeriodStart },
+      data: { status: "FAILED", failureReason: "模拟 Worker 在最终发布后确认失败" },
+    });
+    responseMode = "valid";
+    const retried = await generateWeeklyChallengePeriod({ periodStart: failedPeriodStart, retryFailed: true });
+    expect(retried).toMatchObject({
+      status: "READY",
+      generationMode: "DETERMINISTIC",
+      fallbackBatchCount: 38,
+    });
+    expect(streamedRequestCount).toBe(before);
+    expect(await db.weeklyChallengeAssignment.count({ where: { periodId: retried.id } })).toBe(300);
+  }, 30_000);
+
+  it("feeds copy validation back to the model and records the resilient prompt version", async () => {
     await db.user.update({
       where: { id: userIds[0] },
       data: { createdAt: new Date(correctedPeriodStart.getTime() - 3 * 24 * 60 * 60 * 1000) },
     });
-    emittedInvalidBaseline = false;
-    responseMode = "invalid-baseline-once";
+    emittedInvalidCopy = false;
+    responseMode = "invalid-copy-once";
     const period = await generateWeeklyChallengePeriod({ periodStart: correctedPeriodStart });
     periodIds.push(period.id);
 
@@ -289,10 +315,11 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(period).toMatchObject({
       status: "READY",
       model: "mock-weekly-challenge-model",
-      promptVersion: "weekly-challenge-v4-hard-combined-two-week",
+      promptVersion: "weekly-challenge-v5-deterministic-targets",
       rewardPolicyVersion: "tiered-v2-hard-combined",
+      generationMode: "AI",
     });
-    expect(failedAttempt?.error).toContain("基线判断超过历史峰值");
+    expect(failedAttempt?.error).toContain("Unrecognized key");
     expect(attempts.filter((attempt) => attempt.status === "FAILED")).toHaveLength(1);
     expect(attempts.find((attempt) =>
       attempt.batchNumber === failedAttempt?.batchNumber && attempt.status === "SUCCEEDED")?.promptHash)
@@ -305,18 +332,6 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     expect(assignment.targetVideoCount).toBeGreaterThanOrEqual(4);
     expect(assignment.targetLikes).toBeGreaterThan(0);
 
-    await db.weeklyChallengePeriod.update({
-      where: { periodStart: failedPeriodStart },
-      data: { model: "legacy-model", promptVersion: "weekly-challenge-v1" },
-    });
-    responseMode = "valid";
-    const retried = await generateWeeklyChallengePeriod({ periodStart: failedPeriodStart, retryFailed: true });
-    expect(retried).toMatchObject({
-      status: "READY",
-      model: "mock-weekly-challenge-model",
-      promptVersion: "weekly-challenge-v4-hard-combined-two-week",
-      rewardPolicyVersion: "tiered-v2-hard-combined",
-    });
   }, 30_000);
 
   it("refreshes only the active generation run lease", async () => {
@@ -484,27 +499,29 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     const assignment = await db.weeklyChallengeAssignment.findFirstOrThrow({ where: { periodId: period.id } });
     expect(regenerated).toMatchObject({
       status: "READY",
-      promptVersion: "weekly-challenge-v4-hard-combined-two-week",
+      promptVersion: "weekly-challenge-v5-deterministic-targets",
       rewardPolicyVersion: "tiered-v2-hard-combined",
     });
     expect(assignment.type).toBe("COMBINED");
-    expect(assignment.baselineVideoCount).toBe(1);
-    expect(assignment.baselineLikes).toBe(600);
+    expect(assignment.baselineVideoCount).toBe(0);
+    expect(assignment.baselineLikes).toBe(400);
     expect(assignment.targetLikes).toBeGreaterThan(0);
     expect(assignment.rewardTiers).toHaveLength(3);
   });
 
   for (const [mode, periodStart] of providerFailureCases) {
-    it(`fails atomically after three ${mode} provider responses`, async () => {
+    it(`publishes deterministic assignments after three ${mode} provider responses`, async () => {
       responseMode = mode;
-      await expect(generateWeeklyChallengePeriod({ periodStart })).rejects.toThrow();
-      const period = await db.weeklyChallengePeriod.findUniqueOrThrow({ where: { periodStart } });
+      const period = await generateWeeklyChallengePeriod({ periodStart });
       periodIds.push(period.id);
-      expect(period.status).toBe("FAILED");
-      expect(await db.weeklyChallengeAssignment.count({ where: { periodId: period.id } })).toBe(0);
+      expect(period).toMatchObject({ status: "READY", generationMode: "DETERMINISTIC", fallbackBatchCount: 1 });
+      expect(await db.weeklyChallengeAssignment.count({ where: { periodId: period.id } })).toBe(2);
       expect(await db.weeklyChallengeGenerationAttempt.count({
         where: { periodId: period.id, status: "FAILED" },
       })).toBe(3);
+      expect(await db.weeklyChallengeGenerationAttempt.count({
+        where: { periodId: period.id, status: "SUCCEEDED", source: "DETERMINISTIC" },
+      })).toBe(1);
     }, 30_000);
   }
 

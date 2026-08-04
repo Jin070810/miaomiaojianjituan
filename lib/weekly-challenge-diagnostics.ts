@@ -1,6 +1,7 @@
 type GenerationAttemptSnapshot = {
   batchNumber: number;
   status: string;
+  source?: "AI" | "DETERMINISTIC";
   latencyMs: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -50,6 +51,8 @@ export function summarizeGenerationAttempts(attempts: GenerationAttemptSnapshot[
   const outputTokens = attempts.reduce((sum, attempt) => sum + (attempt.outputTokens ?? 0), 0);
   return {
     attempts: attempts.length,
+    aiAttempts: attempts.filter((attempt) => !attempt.source || attempt.source === "AI").length,
+    deterministicAttempts: attempts.filter((attempt) => attempt.source === "DETERMINISTIC").length,
     succeededAttempts: attempts.filter((attempt) => attempt.status === "SUCCEEDED").length,
     failedAttempts: attempts.filter((attempt) => attempt.status === "FAILED").length,
     runningAttempts: attempts.filter((attempt) => attempt.status === "RUNNING").length,

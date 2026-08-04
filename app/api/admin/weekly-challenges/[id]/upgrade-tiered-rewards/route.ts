@@ -15,8 +15,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       ip: getClientIp(request),
       requestId: requestId(),
     });
-    const job = await enqueueWeeklyChallengeGeneration(result.periodStart, true, true);
-    return NextResponse.json({ ...result, queued: true, jobId: job.id }, { status: 202 });
+    const queued = await enqueueWeeklyChallengeGeneration(result.periodStart, true, true);
+    return NextResponse.json({
+      ...result,
+      queued: true,
+      jobId: queued.job.id,
+      queueState: queued.state,
+      alreadyRunning: queued.reused,
+    }, { status: 202 });
   } catch (error) {
     return NextResponse.json({
       error: error instanceof Error ? error.message : "周挑战重新生成提交失败",

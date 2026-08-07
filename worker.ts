@@ -15,6 +15,7 @@ import {
 } from "./lib/weekly-challenge-jobs";
 import { runMemberClearanceMaintenance } from "./lib/member-clearance";
 import { runMemberGrowthMonthlyMaintenance } from "./lib/member-achievements";
+import { runBirthdayMaintenance } from "./lib/birthdays";
 
 const worker = new Worker("kuaishou-video", async (job) => {
   await processVideoSubmission(job.data.videoId);
@@ -81,6 +82,7 @@ async function maintenance() {
       runWeeklyChallengeMaintenance(),
       runMemberClearanceMaintenance(),
       runMemberGrowthMonthlyMaintenance(),
+      runBirthdayMaintenance(),
     ]);
     if (challengeMaintenance.generationDue && challengeMaintenance.periodStart) {
       await enqueueWeeklyChallengeGeneration(challengeMaintenance.periodStart, true, false);

@@ -10,6 +10,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
 import { periodBounds } from "@/lib/rankings";
+import { birthdaySubmissionEligibility } from "@/lib/birthdays";
 
 const schema = z.object({ link: z.string().trim().min(8).max(2000) });
 
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
       }
       return NextResponse.json({ video: sameSource, duplicate: true }, { status: 409 });
     }
+    const birthdayEligibility = await birthdaySubmissionEligibility(user.id);
     const video = await db.$transaction(async (tx) => {
       const created = await tx.videoSubmission.create({
         data: {
@@ -66,6 +68,8 @@ export async function POST(request: Request) {
           shortCode: normalized.shortCode,
           submittedNickname: user.nickname.trim(),
           idempotencyKey,
+          birthdayBenefitYear: birthdayEligibility?.benefitYear,
+          birthdayOccurrenceDate: birthdayEligibility?.occurrenceDate,
         },
       });
       await tx.auditLog.create({
@@ -74,7 +78,7 @@ export async function POST(request: Request) {
           action: "VIDEO_SUBMITTED",
           entity: "VideoSubmission",
           entityId: created.id,
-          afterValue: { sourceKind: normalized.sourceKind, requestUrl: normalized.requestUrl },
+          afterValue: { sourceKind: normalized.sourceKind, requestUrl: normalized.requestUrl, birthdayBenefitYear: birthdayEligibility?.benefitYear },
           ip: getClientIp(request),
           requestId: idempotencyKey,
         },

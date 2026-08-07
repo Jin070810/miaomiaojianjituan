@@ -8,7 +8,12 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
 
-const schema = z.object({ receiverKuaishouId: z.string().trim().min(2).max(80), amount: z.number().int().positive().max(500000), note: z.string().trim().max(200).optional() });
+const schema = z.object({
+  receiverKuaishouId: z.string().trim().min(2).max(80).optional(),
+  receiverId: z.string().trim().min(1).optional(),
+  amount: z.number().int().positive().max(500000),
+  note: z.string().trim().max(200).optional(),
+}).refine((input) => Boolean(input.receiverKuaishouId) !== Boolean(input.receiverId), "请选择一位转入成员");
 
 export async function POST(request: Request) {
   try {
@@ -21,7 +26,9 @@ export async function POST(request: Request) {
     await enforceRateLimit(`transfer:${user.id}`, 20, 60);
     const input = schema.parse(await request.json());
     const idempotencyKey = requireIdempotency(request);
-    const receiver = await db.user.findFirst({ where: { kuaishouId: { equals: input.receiverKuaishouId, mode: "insensitive" }, active: true } });
+    const receiver = input.receiverId
+      ? await db.user.findFirst({ where: { id: input.receiverId, active: true, role: { in: ["MEMBER", "REVIEWER"] } } })
+      : await db.user.findFirst({ where: { kuaishouId: { equals: input.receiverKuaishouId!, mode: "insensitive" }, active: true } });
     if (!receiver) return NextResponse.json({ error: "未找到转入成员" }, { status: 404 });
     const transfer = await completeTransfer({
       senderId: user.id,

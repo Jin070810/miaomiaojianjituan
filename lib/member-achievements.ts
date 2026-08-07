@@ -29,6 +29,8 @@ export const ACHIEVEMENT_CATALOG = [
   { code: "CHALLENGES_4", title: "挑战伙伴", description: "完成 4 次周挑战", kind: "challenges", threshold: 4 },
 ] as const;
 
+export const BIRTHDAY_ACHIEVEMENT = { code: "BIRTHDAY_STAR", title: "生日星光", description: "参加一次生日星愿", kind: "birthday", threshold: 1 } as const;
+
 export function calculateGrowthExperience(video: ApprovedVideo) {
   return 100 + Math.floor((video.likes ?? 0) / 100) + Math.floor((video.views ?? 0) / 1_000) + (video.commentCount ?? 0) * 5;
 }
@@ -121,9 +123,10 @@ async function syncAchievements(tx: Transaction, userId: string, videos: Approve
   }
   const qualified = ACHIEVEMENT_CATALOG.filter((achievement) => metrics[achievement.kind] >= achievement.threshold);
   const qualifiedCodes = new Set<string>(qualified.map((achievement) => achievement.code));
-  const existingCodes = new Set(existing.map((achievement) => achievement.code));
+  const catalogCodes = new Set<string>(ACHIEVEMENT_CATALOG.map((achievement) => achievement.code));
+  const existingCodes = new Set(existing.filter((achievement) => catalogCodes.has(achievement.code)).map((achievement) => achievement.code));
   const gained = qualified.filter((achievement) => !existingCodes.has(achievement.code));
-  const revoked = existing.filter((achievement) => !qualifiedCodes.has(achievement.code)).map((achievement) => achievement.code);
+  const revoked = existing.filter((achievement) => catalogCodes.has(achievement.code) && !qualifiedCodes.has(achievement.code)).map((achievement) => achievement.code);
   if (revoked.length) await tx.memberAchievement.deleteMany({ where: { userId, code: { in: revoked } } });
   for (const achievement of gained) {
     await tx.memberAchievement.create({ data: { userId, code: achievement.code, metadata: { metric: achievement.kind, value: metrics[achievement.kind] } } });
@@ -174,7 +177,10 @@ export async function getMemberAchievements(userId: string, reference = new Date
     return {
       generatedAt: reference,
       profile: { ...profile, name: levelFor(profile.experience).name, nextLevel: GROWTH_LEVELS.find((row) => row.minimumExperience > profile.experience) ?? null },
-      achievements: ACHIEVEMENT_CATALOG.map((item) => ({ ...item, earnedAt: achievements.find((achievement) => achievement.code === item.code)?.earnedAt ?? null })),
+      achievements: [
+        ...ACHIEVEMENT_CATALOG.map((item) => ({ ...item, earnedAt: achievements.find((achievement) => achievement.code === item.code)?.earnedAt ?? null })),
+        { ...BIRTHDAY_ACHIEVEMENT, earnedAt: achievements.find((achievement) => achievement.code === BIRTHDAY_ACHIEVEMENT.code)?.earnedAt ?? null },
+      ],
       goal: { ...reconciled.goal, progress: reconciled.progress },
       highlights,
       reviews,

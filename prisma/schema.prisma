@@ -54,6 +54,8 @@ enum LedgerType {
   WEEKLY_CHALLENGE_REVERSAL
   WEEKLY_RACE_REVERSAL
   MEMBER_CLEARANCE_FORFEIT
+  BIRTHDAY_DRAW_REWARD
+  BIRTHDAY_VIDEO_BONUS
 }
 
 enum TransferStatus {
@@ -105,6 +107,20 @@ enum NotificationType {
   WEEKLY_CHALLENGE
   MEMBER_CLEARANCE
   ACHIEVEMENT
+  BIRTHDAY
+}
+
+enum BirthdayPrizeKind {
+  POINTS
+  GIFT
+}
+
+enum BirthdayPrizeStatus {
+  GRANTED
+  PENDING_CLAIM
+  CLAIMED
+  EXPIRED
+  REVOKED
 }
 
 enum MemberEligibilityStatus {
@@ -173,55 +189,59 @@ enum AnnouncementAudience {
 }
 
 model User {
-  id               String               @id @default(cuid())
-  kuaishouId       String               @unique
-  nickname         String
-  avatarUrl        String?
-  passwordHash     String
-  role             Role                 @default(MEMBER)
-  active           Boolean              @default(true)
-  guildStatus      String?
-  boundPhoneEnc    String?
-  invited          Boolean              @default(false)
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
-  account          PointAccount?
-  recipientProfile RecipientProfile?
-  videos           VideoSubmission[]
-  videoAppeals     VideoAppeal[]      @relation("AppealRequester")
-  reviewedAppeals  VideoAppeal[]      @relation("AppealReviewer")
-  secondaryVideoReviews VideoSecondaryReview[] @relation("SecondaryVideoReviewer")
-  rankingEntries   RankingEntry[]
-  rankingAwards    RankingAward[]
-  outgoing         Transfer[]           @relation("sender")
-  incoming         Transfer[]           @relation("receiver")
-  redemptions      RedemptionOrder[]
-  auditLogs        AuditLog[]           @relation("actor")
-  notifications    Notification[]
-  announcements    Announcement[]       @relation("AnnouncementCreator")
-  announcementRecipients AnnouncementRecipient[]
-  guildHistory     GuildStatusHistory[]
-  sessions         Session[]
-  operationSettings SystemSetting[]     @relation("OperationSettingUpdater")
-  weeklyChallengeAssignments WeeklyChallengeAssignment[]
-  weeklyRaceWins             WeeklyRaceWinner[]
-  passwordResetRequests      PasswordResetRequest[] @relation("PasswordResetTarget")
-  reviewedPasswordResetRequests PasswordResetRequest[] @relation("PasswordResetReviewer")
-  eligibility                MemberEligibility?
-  clearancePolicyVersions    MembershipClearancePolicyVersion[] @relation("ClearancePolicyCreator")
-  rejoinRequests             RejoinRequest[]
-  reviewedRejoinRequests     RejoinRequest[] @relation("RejoinReviewer")
-  growthProfile              MemberGrowthProfile?
-  achievements               MemberAchievement[]
-  monthlyGoals               MemberMonthlyGoal[]
-  monthlyReviews             MemberMonthlyReview[]
+  id                            String                             @id @default(cuid())
+  kuaishouId                    String                             @unique
+  nickname                      String
+  avatarUrl                     String?
+  passwordHash                  String
+  role                          Role                               @default(MEMBER)
+  active                        Boolean                            @default(true)
+  guildStatus                   String?
+  boundPhoneEnc                 String?
+  invited                       Boolean                            @default(false)
+  createdAt                     DateTime                           @default(now())
+  updatedAt                     DateTime                           @updatedAt
+  account                       PointAccount?
+  recipientProfile              RecipientProfile?
+  videos                        VideoSubmission[]
+  videoAppeals                  VideoAppeal[]                      @relation("AppealRequester")
+  reviewedAppeals               VideoAppeal[]                      @relation("AppealReviewer")
+  secondaryVideoReviews         VideoSecondaryReview[]             @relation("SecondaryVideoReviewer")
+  rankingEntries                RankingEntry[]
+  rankingAwards                 RankingAward[]
+  outgoing                      Transfer[]                         @relation("sender")
+  incoming                      Transfer[]                         @relation("receiver")
+  redemptions                   RedemptionOrder[]
+  auditLogs                     AuditLog[]                         @relation("actor")
+  notifications                 Notification[]
+  announcements                 Announcement[]                     @relation("AnnouncementCreator")
+  announcementRecipients        AnnouncementRecipient[]
+  guildHistory                  GuildStatusHistory[]
+  sessions                      Session[]
+  operationSettings             SystemSetting[]                    @relation("OperationSettingUpdater")
+  weeklyChallengeAssignments    WeeklyChallengeAssignment[]
+  weeklyRaceWins                WeeklyRaceWinner[]
+  passwordResetRequests         PasswordResetRequest[]             @relation("PasswordResetTarget")
+  reviewedPasswordResetRequests PasswordResetRequest[]             @relation("PasswordResetReviewer")
+  eligibility                   MemberEligibility?
+  clearancePolicyVersions       MembershipClearancePolicyVersion[] @relation("ClearancePolicyCreator")
+  rejoinRequests                RejoinRequest[]
+  reviewedRejoinRequests        RejoinRequest[]                    @relation("RejoinReviewer")
+  growthProfile                 MemberGrowthProfile?
+  achievements                  MemberAchievement[]
+  monthlyGoals                  MemberMonthlyGoal[]
+  monthlyReviews                MemberMonthlyReview[]
+  birthdayProfile               MemberBirthdayProfile?
+  birthdayBenefits              BirthdayAnnualBenefit[]
+  birthdayWishesSent            BirthdayWish[]                     @relation("BirthdayWishSender")
+  birthdayWishesReceived        BirthdayWish[]                     @relation("BirthdayWishRecipient")
 }
 
 model MemberClearanceProgram {
-  id             String   @id @default("default")
+  id             String    @id @default("default")
   firstEnabledAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 model MembershipClearancePolicyVersion {
@@ -239,23 +259,23 @@ model MembershipClearancePolicyVersion {
 }
 
 model MemberEligibility {
-  id              String                  @id @default(cuid())
-  userId          String                  @unique
-  policyVersionId String
-  status          MemberEligibilityStatus @default(ACTIVE)
-  cycleStartedAt  DateTime
-  lastOutputAt    DateTime?
-  warning14SentAt DateTime?
-  warning3SentAt  DateTime?
-  clearedAt       DateTime?
-  cooldownEndsAt  DateTime?
-  rejoinRetryAt   DateTime?
+  id               String                           @id @default(cuid())
+  userId           String                           @unique
+  policyVersionId  String
+  status           MemberEligibilityStatus          @default(ACTIVE)
+  cycleStartedAt   DateTime
+  lastOutputAt     DateTime?
+  warning14SentAt  DateTime?
+  warning3SentAt   DateTime?
+  clearedAt        DateTime?
+  cooldownEndsAt   DateTime?
+  rejoinRetryAt    DateTime?
   onboardingSeenAt DateTime?
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
-  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  policyVersion   MembershipClearancePolicyVersion @relation(fields: [policyVersionId], references: [id])
-  rejoinRequests  RejoinRequest[]
+  createdAt        DateTime                         @default(now())
+  updatedAt        DateTime                         @updatedAt
+  user             User                             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  policyVersion    MembershipClearancePolicyVersion @relation(fields: [policyVersionId], references: [id])
+  rejoinRequests   RejoinRequest[]
 
   @@index([status, cooldownEndsAt])
   @@index([status, cycleStartedAt])
@@ -344,51 +364,55 @@ model PointLedger {
 }
 
 model VideoPointRule {
-  id                  String   @id @default("default")
-  minimumLikes        Int      @default(200)
-  fixedTierMaxLikes   Int      @default(1000)
-  fixedTierPoints     Int      @default(50)
-  likesDivisor        Int      @default(2)
-  maximumPoints       Int      @default(5000)
-  submissionWindowDays Int     @default(7)
-  updatedById         String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                   String   @id @default("default")
+  minimumLikes         Int      @default(200)
+  fixedTierMaxLikes    Int      @default(1000)
+  fixedTierPoints      Int      @default(50)
+  likesDivisor         Int      @default(2)
+  maximumPoints        Int      @default(5000)
+  submissionWindowDays Int      @default(7)
+  updatedById          String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 }
 
 model VideoSubmission {
-  id                String      @id @default(cuid())
-  userId            String
-  sourceUrl         String
-  requestUrl        String
-  sourceKind        String
-  status            VideoStatus @default(PROCESSING)
-  shortCode         String?
-  photoId           String?
-  likes             Int?
-  views             Int?
-  commentCount      Int?
-  caption           String?
-  coverUrl          String?
-  metadataFetchedAt DateTime?
-  publishedAt       DateTime?
-  fetchedOwner      String?
-  matchedOwner      Boolean?
-  points            Int         @default(0)
-  submittedNickname String
-  submittedAt       DateTime    @default(now())
-  processedAt       DateTime?
-  reviewedAt        DateTime?
-  reviewReason      String?
-  rawPayload        Json?
-  idempotencyKey    String      @unique
-  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  appeals           VideoAppeal[]
-  secondaryReview   VideoSecondaryReview?
+  id                     String                @id @default(cuid())
+  userId                 String
+  sourceUrl              String
+  requestUrl             String
+  sourceKind             String
+  status                 VideoStatus           @default(PROCESSING)
+  shortCode              String?
+  photoId                String?
+  likes                  Int?
+  views                  Int?
+  commentCount           Int?
+  caption                String?
+  coverUrl               String?
+  metadataFetchedAt      DateTime?
+  publishedAt            DateTime?
+  fetchedOwner           String?
+  matchedOwner           Boolean?
+  points                 Int                   @default(0)
+  birthdayBenefitYear    Int?
+  birthdayOccurrenceDate DateTime?
+  birthdayBonusPoints    Int                   @default(0)
+  submittedNickname      String
+  submittedAt            DateTime              @default(now())
+  processedAt            DateTime?
+  reviewedAt             DateTime?
+  reviewReason           String?
+  rawPayload             Json?
+  idempotencyKey         String                @unique
+  user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appeals                VideoAppeal[]
+  secondaryReview        VideoSecondaryReview?
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
   @@index([photoId, status])
+  @@index([userId, birthdayBenefitYear])
 }
 
 model VideoSecondaryReview {
@@ -409,20 +433,20 @@ model VideoSecondaryReview {
 }
 
 model VideoAppeal {
-  id              String            @id @default(cuid())
-  videoId         String
-  userId          String
-  reason          String
-  status          VideoAppealStatus @default(PENDING)
-  reviewReason    String?
-  reviewedPoints  Int?
-  idempotencyKey  String            @unique
-  createdAt       DateTime          @default(now())
-  reviewedAt      DateTime?
-  reviewedById    String?
-  video           VideoSubmission   @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  user            User              @relation("AppealRequester", fields: [userId], references: [id], onDelete: Cascade)
-  reviewedBy      User?             @relation("AppealReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  id             String            @id @default(cuid())
+  videoId        String
+  userId         String
+  reason         String
+  status         VideoAppealStatus @default(PENDING)
+  reviewReason   String?
+  reviewedPoints Int?
+  idempotencyKey String            @unique
+  createdAt      DateTime          @default(now())
+  reviewedAt     DateTime?
+  reviewedById   String?
+  video          VideoSubmission   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user           User              @relation("AppealRequester", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy     User?             @relation("AppealReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@index([videoId, createdAt])
@@ -446,56 +470,58 @@ model Transfer {
 }
 
 model Gift {
-  id            String            @id @default(cuid())
-  name          String
-  kind          GiftKind          @default(PHYSICAL)
-  pointsCost    Int
-  stock         Int               @default(0)
-  imageUrl      String?
-  description   String?
-  category      String            @default("实用好物")
-  tags          String[]          @default([])
+  id                String                 @id @default(cuid())
+  name              String
+  kind              GiftKind               @default(PHYSICAL)
+  pointsCost        Int
+  stock             Int                    @default(0)
+  imageUrl          String?
+  description       String?
+  category          String                 @default("实用好物")
+  tags              String[]               @default([])
   fulfillmentFields Json?
-  active        Boolean           @default(true)
-  pinned        Boolean           @default(false)
-  displayOrder  Int               @default(0)
-  deletedAt     DateTime?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  orders        RedemptionOrder[]
-  rankingAwards RankingAward[]
+  active            Boolean                @default(true)
+  pinned            Boolean                @default(false)
+  displayOrder      Int                    @default(0)
+  deletedAt         DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  orders            RedemptionOrder[]
+  rankingAwards     RankingAward[]
+  birthdayPoolItem  BirthdayPrizePoolItem?
+  birthdayPrizes    BirthdayPrize[]
 
   @@index([deletedAt, active, pinned, displayOrder])
   @@index([deletedAt, active, category])
 }
 
 model MemberGrowthProfile {
-  id             String   @id @default(cuid())
-  userId         String   @unique
-  experience     Int      @default(0)
-  level          Int      @default(1)
-  scoreVersion   String   @default("v1")
-  calculatedAt   DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  experience   Int      @default(0)
+  level        Int      @default(1)
+  scoreVersion String   @default("v1")
+  calculatedAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model MemberAchievement {
-  id          String   @id @default(cuid())
-  userId      String
-  code        String
-  earnedAt    DateTime @default(now())
-  metadata    Json?
-  createdAt   DateTime @default(now())
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  userId    String
+  code      String
+  earnedAt  DateTime @default(now())
+  metadata  Json?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, code])
   @@index([userId, earnedAt])
 }
 
 model MemberMonthlyGoal {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   userId             String
   monthStart         DateTime
   baselineVideos     Int
@@ -503,28 +529,28 @@ model MemberMonthlyGoal {
   targetVideos       Int
   targetEngagement   Int
   completedAt        DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, monthStart])
   @@index([userId, monthStart])
 }
 
 model MemberMonthlyReview {
-  id               String   @id @default(cuid())
-  userId           String
-  monthStart       DateTime
-  approvedVideos   Int
-  engagement       Int
-  goalCompleted    Boolean
-  baselineVideos   Int      @default(0)
-  baselineEngagement Int    @default(0)
-  previousVideos   Int      @default(0)
-  previousEngagement Int    @default(0)
-  highlightVideoId String?
-  createdAt        DateTime @default(now())
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                 String   @id @default(cuid())
+  userId             String
+  monthStart         DateTime
+  approvedVideos     Int
+  engagement         Int
+  goalCompleted      Boolean
+  baselineVideos     Int      @default(0)
+  baselineEngagement Int      @default(0)
+  previousVideos     Int      @default(0)
+  previousEngagement Int      @default(0)
+  highlightVideoId   String?
+  createdAt          DateTime @default(now())
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, monthStart])
   @@index([userId, monthStart])
@@ -550,11 +576,108 @@ model RedemptionOrder {
   reviewedAt          DateTime?
   fulfilledAt         DateTime?
   trackingNumber      String?
+  birthdayPrizeId     String?          @unique
   user                User             @relation(fields: [userId], references: [id])
   gift                Gift             @relation(fields: [giftId], references: [id])
+  birthdayPrize       BirthdayPrize?   @relation(fields: [birthdayPrizeId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
+}
+
+model MemberBirthdayProfile {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  birthDateEnc          String?
+  birthMonth            Int?
+  birthDay              Int?
+  birthEffectiveAt      DateTime?
+  pendingBirthDateEnc   String?
+  pendingBirthMonth     Int?
+  pendingBirthDay       Int?
+  pendingEffectiveAt    DateTime?
+  visibleOnWall         Boolean   @default(false)
+  visibilityConsentedAt DateTime?
+  lastSelfChangeAt      DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([visibleOnWall, birthMonth, birthDay])
+  @@index([pendingEffectiveAt])
+  @@index([birthEffectiveAt])
+}
+
+model BirthdayAnnualBenefit {
+  id                String         @id @default(cuid())
+  userId            String
+  benefitYear       Int
+  occurrenceDate    DateTime
+  drawOpensAt       DateTime
+  drawClosesAt      DateTime
+  bonusGranted      Int            @default(0)
+  drawPolicyVersion String         @default("birthday-draw-v1")
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prize             BirthdayPrize?
+
+  @@unique([userId, benefitYear])
+  @@index([occurrenceDate])
+}
+
+model BirthdayPrizePoolItem {
+  id             String          @id @default(cuid())
+  giftId         String          @unique
+  allocatedStock Int
+  remainingStock Int
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  gift           Gift            @relation(fields: [giftId], references: [id], onDelete: Restrict)
+  prizes         BirthdayPrize[]
+
+  @@index([active, remainingStock])
+}
+
+model BirthdayPrize {
+  id                 String                 @id @default(cuid())
+  annualBenefitId    String                 @unique
+  kind               BirthdayPrizeKind
+  points             Int?
+  giftId             String?
+  poolItemId         String?
+  status             BirthdayPrizeStatus
+  ticket             Int
+  fallback           Boolean                @default(false)
+  claimExpiresAt     DateTime?
+  claimedAt          DateTime?
+  expiredAt          DateTime?
+  revokedAt          DateTime?
+  drawIdempotencyKey String                 @unique
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  annualBenefit      BirthdayAnnualBenefit  @relation(fields: [annualBenefitId], references: [id], onDelete: Cascade)
+  gift               Gift?                  @relation(fields: [giftId], references: [id], onDelete: Restrict)
+  poolItem           BirthdayPrizePoolItem? @relation(fields: [poolItemId], references: [id], onDelete: SetNull)
+  redemptionOrder    RedemptionOrder?
+
+  @@index([status, claimExpiresAt])
+}
+
+model BirthdayWish {
+  id          String   @id @default(cuid())
+  senderId    String
+  recipientId String
+  benefitYear Int
+  presetCode  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  sender      User     @relation("BirthdayWishSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient   User     @relation("BirthdayWishRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, recipientId, benefitYear])
+  @@index([recipientId, benefitYear, createdAt])
 }
 
 model RecipientProfile {
@@ -608,8 +731,8 @@ model RankingAward {
   userId              String
   rank                Int
   value               Int
-  rewardTitle        String?
-  rewardDescription  String?
+  rewardTitle         String?
+  rewardDescription   String?
   giftId              String?
   status              RankingAwardStatus @default(PENDING)
   recipientName       String?
@@ -629,18 +752,18 @@ model RankingAward {
 }
 
 model Announcement {
-  id          String               @id @default(cuid())
-  title       String
-  content     String
-  status      AnnouncementStatus   @default(DRAFT)
-  audience    AnnouncementAudience
-  createdById String
-  publishedAt DateTime?
-  withdrawnAt DateTime?
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
-  createdBy   User                 @relation("AnnouncementCreator", fields: [createdById], references: [id])
-  recipients  AnnouncementRecipient[]
+  id            String                  @id @default(cuid())
+  title         String
+  content       String
+  status        AnnouncementStatus      @default(DRAFT)
+  audience      AnnouncementAudience
+  createdById   String
+  publishedAt   DateTime?
+  withdrawnAt   DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  createdBy     User                    @relation("AnnouncementCreator", fields: [createdById], references: [id])
+  recipients    AnnouncementRecipient[]
   notifications Notification[]
 
   @@index([status, createdAt])
@@ -724,8 +847,8 @@ model WeeklyChallengePeriod {
   audienceCount        Int
   generationRunId      String?
   generationStartedAt  DateTime?
-  generationMode       WeeklyChallengeGenerationMode @default(AI)
-  fallbackBatchCount   Int                           @default(0)
+  generationMode       WeeklyChallengeGenerationMode      @default(AI)
+  fallbackBatchCount   Int                                @default(0)
   generationWarning    String?
   generatedAt          DateTime?
   activatedAt          DateTime?
@@ -741,34 +864,34 @@ model WeeklyChallengePeriod {
 }
 
 model WeeklyChallengeAssignment {
-  id                 String                          @id @default(cuid())
-  periodId           String
-  userId             String
-  type               WeeklyChallengeType
-  status             WeeklyChallengeAssignmentStatus @default(ACTIVE)
-  baselineVideoCount Int                             @default(0)
-  baselineLikes      Int                             @default(0)
-  weeklyVideoCounts  Json
-  weeklyLikeSums     Json
-  targetVideoCount   Int?
-  targetLikes        Int?
-  rewardPoints       Int
-  rewardTiers        Json?
-  claimedRewardPoints Int                            @default(0)
-  claimedTier        Int                            @default(-1)
-  difficultyScore    Int
-  title              String
-  description        String
-  aiReason           String
-  completedAt        DateTime?
-  claimedAt          DateTime?
+  id                  String                          @id @default(cuid())
+  periodId            String
+  userId              String
+  type                WeeklyChallengeType
+  status              WeeklyChallengeAssignmentStatus @default(ACTIVE)
+  baselineVideoCount  Int                             @default(0)
+  baselineLikes       Int                             @default(0)
+  weeklyVideoCounts   Json
+  weeklyLikeSums      Json
+  targetVideoCount    Int?
+  targetLikes         Int?
+  rewardPoints        Int
+  rewardTiers         Json?
+  claimedRewardPoints Int                             @default(0)
+  claimedTier         Int                             @default(-1)
+  difficultyScore     Int
+  title               String
+  description         String
+  aiReason            String
+  completedAt         DateTime?
+  claimedAt           DateTime?
   claimIdempotencyKey String?                         @unique
-  reversedAt         DateTime?
-  createdAt          DateTime                        @default(now())
-  updatedAt          DateTime                        @updatedAt
-  period             WeeklyChallengePeriod           @relation(fields: [periodId], references: [id], onDelete: Cascade)
-  user               User                            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  raceWin            WeeklyRaceWinner?
+  reversedAt          DateTime?
+  createdAt           DateTime                        @default(now())
+  updatedAt           DateTime                        @updatedAt
+  period              WeeklyChallengePeriod           @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  user                User                            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  raceWin             WeeklyRaceWinner?
 
   @@unique([periodId, userId])
   @@index([userId, status, createdAt])
@@ -776,11 +899,11 @@ model WeeklyChallengeAssignment {
 }
 
 model WeeklyChallengeGenerationAttempt {
-  id              String                       @id @default(cuid())
+  id              String                          @id @default(cuid())
   periodId        String
   batchNumber     Int
   attemptNumber   Int
-  status          WeeklyChallengeAttemptStatus @default(RUNNING)
+  status          WeeklyChallengeAttemptStatus    @default(RUNNING)
   source          WeeklyChallengeGenerationSource @default(AI)
   generationRunId String?
   inputHash       String?
@@ -794,9 +917,9 @@ model WeeklyChallengeGenerationAttempt {
   outputTokens    Int?
   error           String?
   validatedOutput Json?
-  createdAt       DateTime                     @default(now())
-  updatedAt       DateTime                     @updatedAt
-  period          WeeklyChallengePeriod        @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  createdAt       DateTime                        @default(now())
+  updatedAt       DateTime                        @updatedAt
+  period          WeeklyChallengePeriod           @relation(fields: [periodId], references: [id], onDelete: Cascade)
 
   @@unique([periodId, batchNumber, attemptNumber])
   @@index([periodId, status, createdAt])

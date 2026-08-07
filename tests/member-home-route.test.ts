@@ -6,6 +6,8 @@ const dbMocks = vi.hoisted(() => ({
   videoSubmission: { groupBy: vi.fn(), count: vi.fn() },
   pointAccount: { count: vi.fn() },
   memberEligibility: { findUnique: vi.fn() },
+  memberBirthdayProfile: { findUnique: vi.fn() },
+  birthdayAnnualBenefit: { findFirst: vi.fn() },
 }));
 
 vi.mock("@/lib/auth", () => authMocks);
@@ -35,6 +37,8 @@ describe("member home route", () => {
     dbMocks.pointAccount.count.mockResolvedValue(4);
     dbMocks.videoSubmission.count.mockResolvedValue(12);
     dbMocks.memberEligibility.findUnique.mockResolvedValue(null);
+    dbMocks.memberBirthdayProfile.findUnique.mockResolvedValue(null);
+    dbMocks.birthdayAnnualBenefit.findFirst.mockResolvedValue(null);
 
     const response = await GET();
     const body = await response.json();
@@ -44,6 +48,7 @@ describe("member home route", () => {
       user: { id: "member-1", kuaishouId: "MiaoOne", nickname: "妙妙", balance: 880 },
       summary: { approvedVideos: 12, rank: 5, videoCounts: { all: 3, approved: 2, processing: 0, exception: 1 } },
       ledger: [{ id: "ledger-1", amount: 50 }],
+      birthday: { registered: false, effective: false, visibleOnWall: false, benefit: null },
     });
     expect(JSON.stringify(body)).not.toContain("passwordHash");
     expect(dbMocks.videoSubmission.groupBy).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "member-1" } }));

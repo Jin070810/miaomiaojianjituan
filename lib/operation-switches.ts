@@ -33,6 +33,18 @@ export const operationSwitchDefinitions = {
     disabledMessage: "成员自动清退当前暂停",
     defaultEnabled: false,
   },
+  BIRTHDAY_PROGRAM: {
+    label: "生日星愿",
+    description: "关闭后隐藏生日墙并暂停生日资料、祝福和个人提醒，历史记录保留。",
+    disabledMessage: "生日星愿暂未开放",
+    defaultEnabled: false,
+  },
+  BIRTHDAY_REWARDS: {
+    label: "生日奖励发放",
+    description: "关闭后暂停生日抽奖和作品加成，生日墙与历史记录仍可查看。",
+    disabledMessage: "生日奖励当前暂停",
+    defaultEnabled: false,
+  },
 } as const;
 
 export type OperationSwitchKey = keyof typeof operationSwitchDefinitions;

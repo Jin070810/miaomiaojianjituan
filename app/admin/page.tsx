@@ -9,6 +9,7 @@ import {
   ArrowUpRight,
   BarChart3,
   Bell,
+  CakeSlice,
   Check,
   ChevronDown,
   ChevronRight,
@@ -47,6 +48,7 @@ import { PointsAdmin } from "./modules/points-admin";
 import { WorkbenchAdmin } from "./modules/workbench";
 import { AdminGlobalSearch } from "./modules/admin-search";
 import { ActivityDrawer } from "./modules/activity-drawer";
+import { BirthdayAdmin, type BirthdayAdminData } from "./modules/birthday-admin";
 import { isMemberParticipantRole } from "@/lib/member-roles";
 import { canonicalKuaishouVideoUrl } from "@/lib/kuaishou-url";
 import {
@@ -338,10 +340,11 @@ type AdminData = {
   ordersPagination: AdminPagination;
   auditPagination: AdminPagination;
   memberGrowth: AdminMemberGrowth | null;
+  birthdays: BirthdayAdminData | null;
 };
 
 const emptyPagination: AdminPagination = { page: 1, take: 50, total: 0, pages: 1 };
-const adminSections: AdminSection[] = ["workbench", "overview", "videos", "users", "points", "gifts", "orders", "rankings", "challenges", "announcements", "logs", "settings"];
+const adminSections: AdminSection[] = ["workbench", "overview", "videos", "users", "points", "gifts", "orders", "rankings", "challenges", "birthdays", "announcements", "logs", "settings"];
 const defaultPointRule: VideoPointRule = {
   minimumLikes: 200,
   fixedTierMaxLikes: 1000,
@@ -385,6 +388,7 @@ function initialAdminData(dashboard: {
     ordersPagination: emptyPagination,
     auditPagination: { ...emptyPagination, total: dashboard.audit?.length ?? 0 },
     memberGrowth: dashboard.memberGrowth ?? null,
+    birthdays: null,
   };
 }
 
@@ -482,6 +486,7 @@ function AdminSidebar({
         { id: "orders" as const, label: "兑换订单", icon: PackageCheck, badge: pendingOrders ? pendingOrders.toString() : undefined },
         { id: "rankings" as const, label: "榜单结算", icon: Trophy },
         { id: "challenges" as const, label: "AI 周挑战", icon: Sparkles },
+        { id: "birthdays" as const, label: "生日运营", icon: CakeSlice },
         { id: "announcements" as const, label: "公告通知", icon: Megaphone },
       ],
     },
@@ -1716,7 +1721,7 @@ function auditRoleLabel(role: string) {
 function AdminMobileNav({ active, open, onClose, onChange }: { active: AdminSection; open: boolean; onClose: () => void; onChange: (section: AdminSection) => void }) {
   if (!open) return null;
   const items: Array<{ id: AdminSection; label: string }> = [
-    { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉" }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单" }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
+    { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉" }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单" }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "birthdays", label: "生日运营" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
   ];
   return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}>{item.label}</button>)}</nav></div>;
 }
@@ -1871,6 +1876,7 @@ export default function AdminPage() {
           const weeklyChallenges = payload.weeklyChallenges as { periods?: AdminWeeklyChallengePeriod[] };
           return { ...current, weeklyChallengePeriods: weeklyChallenges.periods ?? [] };
         }
+        if (section === "birthdays") return { ...current, birthdays: payload.birthdays as BirthdayAdminData };
         if (section === "announcements") {
           const announcements = payload.announcements as { announcements?: AdminAnnouncement[] };
           const users = payload.users as { users?: AdminUserRow[]; pagination?: AdminPagination };
@@ -2567,6 +2573,7 @@ export default function AdminPage() {
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
     if (active === "challenges") return <WeeklyChallengesAdmin periods={data.weeklyChallengePeriods} onRetry={handleWeeklyChallengeRetry} onUpgrade={handleWeeklyChallengeUpgrade} />;
+    if (active === "birthdays" && data.birthdays) return <BirthdayAdmin data={data.birthdays} onReload={async () => { const payload = await loadAdminSection("birthdays"); setData((current) => current ? { ...current, birthdays: payload.birthdays as BirthdayAdminData } : current); }} />;
     if (active === "announcements") return <AnnouncementsAdmin rows={data.announcements} users={data.announcementUsers} onSave={saveAnnouncement} onAction={actionAnnouncement} />;
     if (active === "logs") return <LogsAdmin rows={data.audit} pagination={data.auditPagination} onLoadMore={loadMoreAudit} onSearch={(search) => loadAudit({ search })} onFilter={(filters) => loadAudit(filters)} />;
     if (active === "settings") return <SettingsAdmin />;
@@ -2581,7 +2588,7 @@ export default function AdminPage() {
       <section className="admin-main">
         <header className="admin-topbar">
           <button className="mobile-admin-menu" aria-label="打开菜单" onClick={() => setMobileNavOpen(true)}><MoreHorizontal size={20} /></button>
-          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "workbench" ? "运营工作台" : active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "challenges" ? "AI 周挑战" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
+          <div className="admin-breadcrumb"><span>管理后台</span><ChevronRight size={15} /><strong>{active === "workbench" ? "运营工作台" : active === "overview" ? "数据概览" : active === "videos" ? "视频与申诉" : active === "users" ? "用户与公会" : active === "points" ? "积分管理" : active === "gifts" ? "礼品管理" : active === "orders" ? "兑换订单" : active === "rankings" ? "榜单结算" : active === "challenges" ? "AI 周挑战" : active === "birthdays" ? "生日运营" : active === "announcements" ? "公告通知" : active === "settings" ? "系统设置" : "审计日志"}</strong></div>
           <AdminGlobalSearch onNavigate={(section, filter) => changeSection(section as AdminSection, filter)} onActivity={(item) => setActivityTarget({ entity: ({ users: "User", videos: "VideoSubmission", orders: "RedemptionOrder", gifts: "Gift" } as Record<string, string>)[item.section] ?? "AuditLog", entityId: item.id, title: item.title })} />
           <div className="admin-top-actions"><span className="admin-divider" /><span className="admin-avatar">管</span><div className="admin-user"><strong>管理员</strong><small>超级管理员</small></div></div>
         </header>

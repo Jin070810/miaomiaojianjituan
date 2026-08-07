@@ -63,6 +63,20 @@ const actionLabels: Record<string, string> = {
   VIDEO_SECONDARY_REVIEW_CREATED: "创建二次审核任务",
   VIDEO_REVOKED: "撤销视频积分",
   VIDEO_SUBMITTED: "提交视频",
+  BIRTHDAY_PROFILE_UPDATED: "更新生日资料",
+  BIRTHDAY_PROFILE_ADMIN_CORRECTED: "管理员修正生日资料",
+  BIRTHDAY_PROFILE_EFFECTIVE: "生日资料生效",
+  BIRTHDAY_WISH_SENT: "送出生日祝福",
+  BIRTHDAY_WISH_UPDATED: "更换生日祝福",
+  BIRTHDAY_PRIZE_DRAWN: "抽取生日奖品",
+  BIRTHDAY_GIFT_CLAIMED: "提交生日礼物领奖资料",
+  BIRTHDAY_GIFT_EXPIRED: "生日礼物领奖过期",
+  BIRTHDAY_GIFT_REVOKED: "撤回生日礼物",
+  BIRTHDAY_DRAW_WINDOW_EXTENDED: "延长生日抽奖窗口",
+  BIRTHDAY_CLAIM_WINDOW_EXTENDED: "延长生日领奖窗口",
+  BIRTHDAY_POOL_STOCK_RESERVED: "预留生日奖池库存",
+  BIRTHDAY_POOL_STOCK_RELEASED: "释放生日奖池库存",
+  BIRTHDAY_VIDEO_BONUS_GRANTED: "发放生日作品加成",
   VIDEO_WORKER_RECOVERY: "恢复视频任务",
 };
 
@@ -87,9 +101,14 @@ const entityLabels: Record<string, string> = {
   MemberEligibility: "成员资格周期",
   MembershipClearancePolicyVersion: "成员清退规则",
   RejoinRequest: "重新加入申请",
+  MemberBirthdayProfile: "生日资料",
+  BirthdayAnnualBenefit: "生日年度权益",
+  BirthdayPrize: "生日奖品",
+  BirthdayPrizePoolItem: "生日奖池库存",
+  BirthdayWish: "生日祝福",
 };
 
-const sensitiveKey = /(password|secret|session|phone|address|qrcode|cashqr|boundphone)/i;
+const sensitiveKey = /(password|secret|session|phone|address|qrcode|cashqr|boundphone|birthdate)/i;
 
 type AuditWriter = Prisma.TransactionClient | PrismaClient;
 

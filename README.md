@@ -174,4 +174,4 @@ docker build --target worker -t miaomiao-points-worker:verify .
 
 ## 工程协作
 
-开发约束见 [`AGENTS.md`](AGENTS.md)，完整分支、PR、测试、发布和回滚流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)。单人维护仓库使用维护者自审清单，多人协作时使用非作者审查；任何正式部署仍必须通过 CI、staging 验收和 GitHub `production` 环境批准。
+开发约束见 [`AGENTS.md`](AGENTS.md)，完整分支、PR、测试、发布和回滚流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)，生日功能的开关、Worker、验收和回滚见 [`docs/BIRTHDAY-SYSTEM.md`](docs/BIRTHDAY-SYSTEM.md)。单人维护仓库使用维护者自审清单，多人协作时使用非作者审查；任何正式部署仍必须通过 CI、staging 验收和 GitHub `production` 环境批准。

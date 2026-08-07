@@ -64,6 +64,8 @@ function ledgerLabel(type: string, note: string | null) {
     REDEMPTION: "兑换礼物",
     ADMIN_ADJUSTMENT: "积分调整",
     REVERSAL: "积分退回",
+    BIRTHDAY_DRAW_REWARD: "生日星愿奖励",
+    BIRTHDAY_VIDEO_BONUS: "生日作品加成",
     REFUND: "兑换退款",
     RANKING_REWARD: "榜单奖励",
   };

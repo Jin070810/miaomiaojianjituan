@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowUpRight,
   BadgeCheck,
+  CakeSlice,
   ChevronDown,
   ChevronRight,
   CircleHelp,
@@ -56,8 +57,9 @@ import type { MembershipFieldDefinition } from "@/lib/gifts";
 import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
 import { fetchMemberJson, MemberFetchError } from "@/lib/member-fetch";
 import { AchievementSummaryCard, AchievementView, type AchievementData } from "./member/achievement-view";
+import BirthdayView, { BirthdayEntry } from "./member/birthday-view";
 
-type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "achievements" | "ledger" | "transfers" | "orders";
+type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "achievements" | "birthday" | "ledger" | "transfers" | "orders";
 
 type DialogType = "submit" | "transfer" | "redeem" | "profile" | "recipient" | "password" | null;
 
@@ -83,6 +85,7 @@ type DashboardData = {
     videoCounts: { all: number; approved: number; processing: number; exception: number };
   };
   eligibility?: { status: string; deadlineAt: string; warningDays: number[]; inactivityDays: number; cooldownDays: number; onboardingSeenAt: string | null } | null;
+  birthday?: { registered: boolean; effective: boolean; pendingEffectiveAt: string | null; visibleOnWall: boolean; benefit: { benefitYear: number; drawOpensAt: string; drawClosesAt: string; prize: { id: string; kind: string; status: string; points: number | null; claimExpiresAt: string | null } | null } | null };
   ledger: Array<{
     id: string;
     type: string;
@@ -719,6 +722,8 @@ function HomeView({
         onOpen={() => onNavigate("achievements")}
         onRetry={onRetryAchievements}
       />
+
+      <BirthdayEntry onOpen={() => onNavigate("birthday")} />
 
       <section className={`challenge-entry ${challenge ? "" : "is-empty"}`} aria-labelledby="weekly-challenge-title">
         <div className="challenge-entry-head">
@@ -1403,6 +1408,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
       <section className="journal-section">
         <div className="journal-section-heading ruled"><h2>记录</h2></div>
         <div className="journal-menu">
+        <button aria-label="生日星愿" onClick={() => onNavigate("birthday")}><span><CakeSlice size={19} />生日星愿</span><ChevronRight size={18} /></button>
         <button aria-label="成长与成就" onClick={() => onNavigate("achievements")}><span><Medal size={19} />成长与成就</span><ChevronRight size={18} /></button>
         <button aria-label="成长记录" onClick={() => onNavigate("growth")}><span><ChartNoAxesCombined size={19} />成长记录</span><ChevronRight size={18} /></button>
         <button aria-label="积分记录" onClick={() => onNavigate("ledger")}><span><WalletCards size={19} />积分记录</span><ChevronRight size={18} /></button>
@@ -2196,6 +2202,7 @@ export default function MemberApp() {
     if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} error={challengeError} onRetry={() => setChallengeRevision((value) => value + 1)} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
     if (view === "growth") return <GrowthView growth={growth} loading={growthLoading} error={growthError} onBack={() => handleNavigate("home")} onRetry={() => setGrowthRevision((value) => value + 1)} />;
     if (view === "achievements") return <AchievementView data={achievements} loading={achievementsLoading} error={achievementsError} onBack={() => handleNavigate("home")} onRetry={() => setAchievementsRevision((value) => value + 1)} />;
+    if (view === "birthday") return <BirthdayView onBack={() => handleNavigate("home")} onBalanceChanged={() => invalidateSections(["ledger", "transfers", "orders"])} />;
     if (view === "ledger") return <DeferredPage state={sectionStates.ledger} error={sectionErrors.ledger} onRetry={() => void loadSection("ledger", true)}><LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} /></DeferredPage>;
     if (view === "transfers") return <DeferredPage state={sectionStates.transfers} error={sectionErrors.transfers} onRetry={() => void loadSection("transfers", true)}><TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} /></DeferredPage>;
     if (view === "orders") return <DeferredPage state={sectionStates.orders} error={sectionErrors.orders} onRetry={() => void loadSection("orders", true)}><RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} /></DeferredPage>;
@@ -2232,8 +2239,8 @@ export default function MemberApp() {
       setClearanceOnboardingOpen(false);
     }
   };
-  const secondaryView = ["challenge", "growth", "achievements", "ledger", "transfers", "orders"].includes(view);
-  const navigationView: MemberView = view === "challenge" || view === "growth" || view === "achievements" || view === "ledger"
+  const secondaryView = ["challenge", "growth", "achievements", "birthday", "ledger", "transfers", "orders"].includes(view);
+  const navigationView: MemberView = view === "challenge" || view === "growth" || view === "achievements" || view === "birthday" || view === "ledger"
     ? "home"
     : view === "transfers" || view === "orders"
       ? "profile"
@@ -2252,6 +2259,7 @@ export default function MemberApp() {
               if (notification.entityType === "PointLedger") handleNavigate("ledger");
               if (notification.entityType === "WeeklyChallengeAssignment") handleNavigate("challenge");
               if (["MemberGrowthProfile", "MemberAchievement", "MemberMonthlyGoal"].includes(notification.entityType ?? "")) handleNavigate("achievements");
+              if (["BirthdayAnnualBenefit", "BirthdayPrize"].includes(notification.entityType ?? "")) handleNavigate("birthday");
             }} />
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>

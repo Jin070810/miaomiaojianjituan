@@ -13,6 +13,7 @@ import {
 import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
 import { reconcileMemberAchievements } from "./member-achievements";
+import { applyBirthdayVideoBonus, revokeBirthdayVideoBonus } from "./birthdays";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -546,6 +547,12 @@ async function revokeApprovedVideoInTransaction(
   if (video.points > 0) {
     await debitCompensating(tx, video.userId, video.points, "REVERSAL", video.id, `撤销视频奖励：${input.reason}`);
   }
+  const birthdayBonusReversed = await revokeBirthdayVideoBonus(tx, {
+    userId: video.userId,
+    videoId: video.id,
+    benefitYear: video.birthdayBenefitYear,
+    bonusPoints: video.birthdayBonusPoints,
+  });
   const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
   await tx.auditLog.create({
     data: {
@@ -553,8 +560,8 @@ async function revokeApprovedVideoInTransaction(
       action: "VIDEO_REVOKED",
       entity: "VideoSubmission",
       entityId: video.id,
-      beforeValue: { status: video.status, points: video.points },
-      afterValue: { status: updated.status, points: 0 },
+      beforeValue: { status: video.status, points: video.points, birthdayBonusPoints: video.birthdayBonusPoints },
+      afterValue: { status: updated.status, points: 0, birthdayBonusPoints: 0 },
       reason: input.reason,
       ip: input.ip,
     },
@@ -563,10 +570,10 @@ async function revokeApprovedVideoInTransaction(
     userId: video.userId,
     type: "VIDEO_RESULT",
     title: "视频奖励已撤销",
-    body: `${input.reason}${video.points > 0 ? `，已扣回 ${video.points} 积分` : ""}`,
+    body: `${input.reason}${video.points + birthdayBonusReversed > 0 ? `，已扣回 ${video.points + birthdayBonusReversed} 积分` : ""}`,
     entityType: "VideoSubmission",
     entityId: video.id,
-    metadata: { amount: -video.points, status: "REVOKED" },
+    metadata: { amount: -(video.points + birthdayBonusReversed), status: "REVOKED", birthdayBonus: birthdayBonusReversed },
     dedupeKey: `video:${video.id}:revoked`,
   });
   await reconcileWeeklyChallengesAfterVideoRevocation(tx, {
@@ -670,6 +677,13 @@ export async function creditVideoReward(input: {
     if (input.points > 0) {
       await credit(tx, input.userId, input.points, "VIDEO_REWARD", video.id, "视频审核通过");
     }
+    const birthdayBonus = await applyBirthdayVideoBonus(tx, {
+      userId: input.userId,
+      videoId: video.id,
+      basePoints: input.points,
+      benefitYear: video.birthdayBenefitYear,
+      occurrenceDate: video.birthdayOccurrenceDate,
+    });
     await tx.auditLog.create({
       data: {
         actorId: input.actorId,
@@ -677,7 +691,7 @@ export async function creditVideoReward(input: {
         entity: "VideoSubmission",
         entityId: video.id,
         beforeValue: { status: video.status, points: video.points },
-        afterValue: { status: updated.status, points: updated.points },
+        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus },
         ip: input.ip,
       },
     });
@@ -688,10 +702,10 @@ export async function creditVideoReward(input: {
       userId: input.userId,
       type: "VIDEO_RESULT",
       title: "视频审核通过",
-      body: `视频已通过校验${input.points > 0 ? `，${input.points} 积分已到账` : ""}`,
+      body: `视频已通过校验${input.points > 0 ? `，${input.points} 积分已到账` : ""}${birthdayBonus > 0 ? `，另获生日加成 ${birthdayBonus} 分` : ""}`,
       entityType: "VideoSubmission",
       entityId: video.id,
-      metadata: { amount: input.points, points: input.points, status: "APPROVED" },
+      metadata: { amount: input.points + birthdayBonus, points: input.points, birthdayBonus, status: "APPROVED" },
       dedupeKey: `video:${video.id}:approved`,
     });
     await evaluateWeeklyChallengeAfterVideoApproval(tx, {
@@ -826,6 +840,13 @@ export async function resolveVideoAppeal(input: {
     if (points > 0) {
       await credit(tx, appeal.video.userId, points, "VIDEO_REWARD", appeal.video.id, "视频申诉通过");
     }
+    const birthdayBonus = await applyBirthdayVideoBonus(tx, {
+      userId: appeal.video.userId,
+      videoId: appeal.video.id,
+      basePoints: points,
+      benefitYear: appeal.video.birthdayBenefitYear,
+      occurrenceDate: appeal.video.birthdayOccurrenceDate,
+    });
     const updated = await tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
     await tx.auditLog.create({
       data: {
@@ -834,7 +855,7 @@ export async function resolveVideoAppeal(input: {
         entity: "VideoAppeal",
         entityId: appeal.id,
         beforeValue: { appealStatus: appeal.status, videoStatus: appeal.video.status, points: appeal.video.points },
-        afterValue: { appealStatus: updated.status, videoStatus: video.status, points },
+        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus },
         reason: input.reason,
         ip: input.ip,
       },
@@ -843,10 +864,10 @@ export async function resolveVideoAppeal(input: {
       userId: appeal.userId,
       type: "APPEAL_RESULT",
       title: "视频申诉已通过",
-      body: `申诉复查通过${points > 0 ? `，${points} 积分已到账` : ""}`,
+      body: `申诉复查通过${points > 0 ? `，${points} 积分已到账` : ""}${birthdayBonus > 0 ? `，另获生日加成 ${birthdayBonus} 分` : ""}`,
       entityType: "VideoAppeal",
       entityId: appeal.id,
-      metadata: { amount: points, points, status: "APPROVED", videoId: appeal.videoId },
+      metadata: { amount: points + birthdayBonus, points, birthdayBonus, status: "APPROVED", videoId: appeal.videoId },
       dedupeKey: `appeal:${appeal.id}:approved`,
     });
     await evaluateWeeklyChallengeAfterVideoApproval(tx, {

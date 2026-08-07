@@ -7,7 +7,7 @@ export async function GET() {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
-  const [recentLedger, videoStatusGroups, higherBalanceCount, approvedVideos, eligibility] = await Promise.all([
+  const [recentLedger, videoStatusGroups, higherBalanceCount, approvedVideos, eligibility, birthdayProfile, birthdayBenefit] = await Promise.all([
     user.account
       ? db.pointLedger.findMany({
           where: { accountId: user.account.id },
@@ -23,6 +23,14 @@ export async function GET() {
     db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true, role: { in: memberParticipantRoles } } } }),
     db.videoSubmission.count({ where: { userId: user.id, status: "APPROVED" } }),
     db.memberEligibility.findUnique({ where: { userId: user.id }, include: { policyVersion: true } }),
+    db.memberBirthdayProfile.findUnique({ where: { userId: user.id }, select: { birthMonth: true, birthDay: true, pendingEffectiveAt: true, visibleOnWall: true } }).catch((error) => {
+      console.error("[member-home] birthday profile unavailable", error);
+      return null;
+    }),
+    db.birthdayAnnualBenefit.findFirst({ where: { userId: user.id }, orderBy: { occurrenceDate: "desc" }, include: { prize: { select: { id: true, kind: true, status: true, points: true, claimExpiresAt: true } } } }).catch((error) => {
+      console.error("[member-home] birthday benefit unavailable", error);
+      return null;
+    }),
   ]);
   const videoCounts = videoStatusGroups.reduce(
     (counts, row) => {
@@ -56,5 +64,17 @@ export async function GET() {
       onboardingSeenAt: eligibility.onboardingSeenAt,
     } : null,
     ledger: recentLedger,
+    birthday: birthdayProfile ? {
+      registered: Boolean(birthdayProfile.birthMonth || birthdayProfile.pendingEffectiveAt),
+      effective: Boolean(birthdayProfile.birthMonth && birthdayProfile.birthDay),
+      pendingEffectiveAt: birthdayProfile.pendingEffectiveAt,
+      visibleOnWall: birthdayProfile.visibleOnWall,
+      benefit: birthdayBenefit ? {
+        benefitYear: birthdayBenefit.benefitYear,
+        drawOpensAt: birthdayBenefit.drawOpensAt,
+        drawClosesAt: birthdayBenefit.drawClosesAt,
+        prize: birthdayBenefit.prize,
+      } : null,
+    } : { registered: false, effective: false, pendingEffectiveAt: null, visibleOnWall: false, benefit: null },
   });
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { birthdayDrawBand, birthdayOccurrence, birthdayVideoBonus, shanghaiDateParts } from "@/lib/birthdays";
 
 describe("birthday rules", () => {
-  it("maps every ticket to the published probability table", () => {
+  it("maps every ticket to the fixed server-side probability table", () => {
     const counts = new Map<string, number>();
     for (let ticket = 0; ticket < 100_000; ticket += 1) {
       const band = birthdayDrawBand(ticket);

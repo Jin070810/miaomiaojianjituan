@@ -412,31 +412,51 @@ async function drawBirthdayPrizeOnce(input: { userId: string; idempotencyKey: st
     }
     const user = await tx.user.findUnique({ where: { id: input.userId }, select: { active: true, role: true } });
     if (!user?.active || !isMemberParticipantRole(user.role)) throw new Error("成员不存在或当前不能参加生日星愿");
+    const currentYear = shanghaiDateParts(now).year;
+    const existingPrize = await tx.birthdayPrize.findFirst({
+      where: {
+        annualBenefit: {
+          userId: input.userId,
+          OR: [
+            { benefitYear: currentYear },
+            { drawOpensAt: { lte: now }, drawClosesAt: { gt: now } },
+          ],
+        },
+      },
+      include: { gift: true, annualBenefit: true },
+      orderBy: { annualBenefit: { occurrenceDate: "desc" } },
+    });
+    if (existingPrize) return existingPrize;
     const profile = await tx.memberBirthdayProfile.findUnique({ where: { userId: input.userId } });
     if (!profile) throw new Error("请先登记生日");
     const effective = effectiveProfileFields(profile, now);
     if (!effective) throw new Error("生日资料尚未生效");
-    const candidate = occurrenceAround(effective, now).find((item) => now >= item.at && now < new Date(item.at.getTime() + DRAW_WINDOW_DAYS * DAY_MS));
-    if (!candidate) throw new Error("当前不在生日抽奖开放期");
-    if (effective.effectiveAt > candidate.at) throw new Error("本年度生日发生时资料尚未生效，不补发生日权益");
-    const benefit = await ensureAnnualBenefit(tx, input.userId, candidate.year, effective.month, effective.day);
-    const existingPrize = await tx.birthdayPrize.findUnique({ where: { annualBenefitId: benefit.id }, include: { gift: true, annualBenefit: true } });
-    if (existingPrize) return existingPrize;
+    let benefit = await tx.birthdayAnnualBenefit.findFirst({
+      where: { userId: input.userId, drawOpensAt: { lte: now }, drawClosesAt: { gt: now }, prize: null },
+      orderBy: { drawOpensAt: "desc" },
+    });
+    if (!benefit) {
+      const candidate = occurrenceAround(effective, now).find((item) => now >= item.at && now < new Date(item.at.getTime() + DRAW_WINDOW_DAYS * DAY_MS));
+      if (!candidate) throw new Error("当前不在生日抽奖开放期");
+      if (effective.effectiveAt > candidate.at) throw new Error("本年度生日发生时资料尚未生效，不补发生日权益");
+      benefit = await ensureAnnualBenefit(tx, input.userId, candidate.year, effective.month, effective.day);
+    }
+    if (now < benefit.drawOpensAt || now >= benefit.drawClosesAt) throw new Error("本年度生日抽奖窗口已结束");
     const ticket = input.ticket ?? crypto.randomInt(100_000);
     const band = birthdayDrawBand(ticket);
     const poolItem = band.kind === "GIFT" ? await reserveGiftForBand(tx, band) : null;
     if (poolItem) {
       const prize = await tx.birthdayPrize.create({ data: { annualBenefitId: benefit.id, kind: "GIFT", giftId: poolItem.giftId, poolItemId: poolItem.id, status: "PENDING_CLAIM", ticket, claimExpiresAt: new Date(now.getTime() + CLAIM_WINDOW_DAYS * DAY_MS), drawIdempotencyKey: input.idempotencyKey }, include: { gift: true, annualBenefit: true } });
-      await tx.memberAchievement.upsert({ where: { userId_code: { userId: input.userId, code: "BIRTHDAY_STAR" } }, create: { userId: input.userId, code: "BIRTHDAY_STAR", metadata: { firstBenefitYear: candidate.year } }, update: {} });
+      await tx.memberAchievement.upsert({ where: { userId_code: { userId: input.userId, code: "BIRTHDAY_STAR" } }, create: { userId: input.userId, code: "BIRTHDAY_STAR", metadata: { firstBenefitYear: benefit.benefitYear } }, update: {} });
       await createNotification(tx, { userId: input.userId, type: "BIRTHDAY", title: "生日礼物等待领奖", body: `抽中了“${poolItem.gift.name}”，请在 30 天内填写领奖资料。`, entityType: "BirthdayPrize", entityId: prize.id, dedupeKey: `birthday:claim-opened:${benefit.id}` });
-      await tx.auditLog.create({ data: { actorId: input.userId, action: "BIRTHDAY_PRIZE_DRAWN", entity: "BirthdayPrize", entityId: prize.id, afterValue: { kind: "GIFT", giftId: poolItem.giftId, benefitYear: candidate.year, policyVersion: BIRTHDAY_DRAW_POLICY_VERSION }, ip: input.ip, requestId: input.idempotencyKey } });
+      await tx.auditLog.create({ data: { actorId: input.userId, action: "BIRTHDAY_PRIZE_DRAWN", entity: "BirthdayPrize", entityId: prize.id, afterValue: { kind: "GIFT", giftId: poolItem.giftId, benefitYear: benefit.benefitYear, policyVersion: BIRTHDAY_DRAW_POLICY_VERSION }, ip: input.ip, requestId: input.idempotencyKey } });
       return prize;
     }
     const points = band.kind === "POINTS" ? band.points : band.fallbackPoints;
     const prize = await tx.birthdayPrize.create({ data: { annualBenefitId: benefit.id, kind: "POINTS", points, status: "GRANTED", ticket, fallback: band.kind === "GIFT", drawIdempotencyKey: input.idempotencyKey }, include: { gift: true, annualBenefit: true } });
     await creditBirthdayPoints(tx, { userId: input.userId, amount: points, type: "BIRTHDAY_DRAW_REWARD", referenceId: prize.id, note: "生日星愿抽奖奖励", idempotencyKey: `birthday-draw:${benefit.id}` });
-    await tx.memberAchievement.upsert({ where: { userId_code: { userId: input.userId, code: "BIRTHDAY_STAR" } }, create: { userId: input.userId, code: "BIRTHDAY_STAR", metadata: { firstBenefitYear: candidate.year } }, update: {} });
-    await tx.auditLog.create({ data: { actorId: input.userId, action: "BIRTHDAY_PRIZE_DRAWN", entity: "BirthdayPrize", entityId: prize.id, afterValue: { kind: "POINTS", points, fallback: band.kind === "GIFT", benefitYear: candidate.year, policyVersion: BIRTHDAY_DRAW_POLICY_VERSION }, ip: input.ip, requestId: input.idempotencyKey } });
+    await tx.memberAchievement.upsert({ where: { userId_code: { userId: input.userId, code: "BIRTHDAY_STAR" } }, create: { userId: input.userId, code: "BIRTHDAY_STAR", metadata: { firstBenefitYear: benefit.benefitYear } }, update: {} });
+    await tx.auditLog.create({ data: { actorId: input.userId, action: "BIRTHDAY_PRIZE_DRAWN", entity: "BirthdayPrize", entityId: prize.id, afterValue: { kind: "POINTS", points, fallback: band.kind === "GIFT", benefitYear: benefit.benefitYear, policyVersion: BIRTHDAY_DRAW_POLICY_VERSION }, ip: input.ip, requestId: input.idempotencyKey } });
     return prize;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }

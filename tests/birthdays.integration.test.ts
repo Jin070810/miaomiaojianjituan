@@ -33,6 +33,8 @@ describe.skipIf(!enabled)("birthday database integration", () => {
   let bonusMemberId = "";
   let missedMemberId = "";
   let revokedMemberId = "";
+  let changedDateMemberId = "";
+  let extendedDrawMemberId = "";
   const giftIds: string[] = [];
   const previousSettings = new Map<string, { enabled: boolean; description: string | null; updatedById: string | null } | null>();
 
@@ -53,9 +55,11 @@ describe.skipIf(!enabled)("birthday database integration", () => {
       db.user.create({ data: { kuaishouId: `birthday-bonus-${suffix}`, nickname: "加成成员", passwordHash: "test", account: { create: { balance: 0 } } } }),
       db.user.create({ data: { kuaishouId: `birthday-missed-${suffix}`, nickname: "错过生日成员", passwordHash: "test", account: { create: { balance: 0 } } } }),
       db.user.create({ data: { kuaishouId: `birthday-revoked-${suffix}`, nickname: "撤回成员", passwordHash: "test", account: { create: { balance: 0 } } } }),
+      db.user.create({ data: { kuaishouId: `birthday-changed-date-${suffix}`, nickname: "改期成员", passwordHash: "test", account: { create: { balance: 0 } } } }),
+      db.user.create({ data: { kuaishouId: `birthday-extended-draw-${suffix}`, nickname: "延期抽奖成员", passwordHash: "test", account: { create: { balance: 0 } } } }),
     ]);
     userIds.push(...users.map((user) => user.id));
-    [birthdayMemberId, senderId, privateMemberId, adminId, productMemberAId, productMemberBId, expiringMemberId, profileMemberId, bonusMemberId, missedMemberId, revokedMemberId] = users.map((user) => user.id);
+    [birthdayMemberId, senderId, privateMemberId, adminId, productMemberAId, productMemberBId, expiringMemberId, profileMemberId, bonusMemberId, missedMemberId, revokedMemberId, changedDateMemberId, extendedDrawMemberId] = users.map((user) => user.id);
     await db.memberBirthdayProfile.createMany({ data: [
       { userId: birthdayMemberId, birthDateEnc: encryptSensitive("2000-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: true, visibilityConsentedAt: now },
       { userId: senderId, birthDateEnc: encryptSensitive("2001-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: false },
@@ -64,6 +68,8 @@ describe.skipIf(!enabled)("birthday database integration", () => {
       { userId: productMemberBId, birthDateEnc: encryptSensitive("2004-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: false },
       { userId: expiringMemberId, birthDateEnc: encryptSensitive("2005-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: false },
       { userId: revokedMemberId, birthDateEnc: encryptSensitive("2006-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: false },
+      { userId: changedDateMemberId, birthDateEnc: encryptSensitive("2007-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: false },
+      { userId: extendedDrawMemberId, birthDateEnc: encryptSensitive("2008-08-07"), birthMonth: 8, birthDay: 7, birthEffectiveAt: new Date("2026-01-01T00:00:00.000Z"), visibleOnWall: false },
     ] });
   });
 
@@ -100,6 +106,31 @@ describe.skipIf(!enabled)("birthday database integration", () => {
     expect(results[0].id).toBe(results[1].id);
     expect(await db.birthdayPrize.count({ where: { annualBenefit: { userId: birthdayMemberId, benefitYear: 2026 } } })).toBe(1);
     expect(await db.pointLedger.count({ where: { type: "BIRTHDAY_DRAW_REWARD", referenceId: results[0].id } })).toBe(1);
+  });
+
+  it("does not reopen a closed annual draw window after a birthday date change", async () => {
+    await db.birthdayAnnualBenefit.create({ data: {
+      userId: changedDateMemberId,
+      benefitYear: 2026,
+      occurrenceDate: new Date("2025-12-31T16:00:00.000Z"),
+      drawOpensAt: new Date("2025-12-31T16:00:00.000Z"),
+      drawClosesAt: new Date("2026-01-07T16:00:00.000Z"),
+    } });
+    await expect(drawBirthdayPrize({ userId: changedDateMemberId, idempotencyKey: `birthday-changed-date-${suffix}`, now, ticket: 0 })).rejects.toThrow("窗口已结束");
+    expect(await db.birthdayPrize.count({ where: { annualBenefit: { userId: changedDateMemberId } } })).toBe(0);
+  });
+
+  it("honors an administrator extension beyond the natural draw window", async () => {
+    const benefit = await db.birthdayAnnualBenefit.create({ data: {
+      userId: extendedDrawMemberId,
+      benefitYear: 2026,
+      occurrenceDate: occurrence,
+      drawOpensAt: occurrence,
+      drawClosesAt: new Date(occurrence.getTime() + 7 * 86_400_000),
+    } });
+    await extendBirthdayWindow({ actorId: adminId, target: "DRAW", id: benefit.id, days: 7, reason: "测试延长抽奖窗口" });
+    const afterNaturalWindow = new Date(occurrence.getTime() + 8 * 86_400_000);
+    await expect(drawBirthdayPrize({ userId: extendedDrawMemberId, idempotencyKey: `birthday-extended-draw-${suffix}`, now: afterNaturalWindow, ticket: 0 })).resolves.toMatchObject({ kind: "POINTS", points: 10 });
   });
 
   it("updates one wish and never broadcasts birthday notifications to wall viewers", async () => {

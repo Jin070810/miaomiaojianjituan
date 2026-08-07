@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { BIRTHDAY_DRAW_POLICY_VERSION, BIRTHDAY_WISH_PRESETS, updateMemberBirthday } from "@/lib/birthdays";
+import { BIRTHDAY_WISH_PRESETS, updateMemberBirthday } from "@/lib/birthdays";
 import { assertSameOrigin, decryptSensitive, getClientIp, rateLimitResponse } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { isMemberParticipantRole } from "@/lib/member-roles";
@@ -38,13 +38,33 @@ export async function GET() {
       pendingDay: profile.pendingBirthDay,
       pendingEffectiveAt: profile.pendingEffectiveAt,
       visibleOnWall: profile.visibleOnWall,
+      onboardingSeenAt: profile.onboardingSeenAt,
       lastSelfChangeAt: profile.lastSelfChangeAt,
       nextSelfChangeAt: profile.lastSelfChangeAt ? new Date(profile.lastSelfChangeAt.getTime() + 365 * 86_400_000) : null,
     } : null,
-    benefits,
-    wishes,
+    benefits: benefits.map((benefit) => ({
+      id: benefit.id,
+      benefitYear: benefit.benefitYear,
+      occurrenceDate: benefit.occurrenceDate,
+      drawOpensAt: benefit.drawOpensAt,
+      drawClosesAt: benefit.drawClosesAt,
+      bonusGranted: benefit.bonusGranted,
+      prize: benefit.prize ? {
+        id: benefit.prize.id,
+        kind: benefit.prize.kind,
+        points: benefit.prize.points,
+        status: benefit.prize.status,
+        fallback: benefit.prize.fallback,
+        claimExpiresAt: benefit.prize.claimExpiresAt,
+        claimedAt: benefit.prize.claimedAt,
+        expiredAt: benefit.prize.expiredAt,
+        revokedAt: benefit.prize.revokedAt,
+        gift: benefit.prize.gift,
+        redemptionOrder: benefit.prize.redemptionOrder,
+      } : null,
+    })),
+    wishes: wishes.map((wish) => ({ id: wish.id, benefitYear: wish.benefitYear, presetCode: wish.presetCode, createdAt: wish.createdAt, sender: wish.sender })),
     presets: BIRTHDAY_WISH_PRESETS,
-    drawPolicyVersion: BIRTHDAY_DRAW_POLICY_VERSION,
   });
 }
 

@@ -11,7 +11,15 @@ export async function POST(request: Request) {
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     await enforceRateLimit(`birthday-draw:${user.id}`, 5, 60);
     const prize = await drawBirthdayPrize({ userId: user.id, idempotencyKey: requireIdempotency(request), ip: getClientIp(request) });
-    return NextResponse.json({ prize });
+    return NextResponse.json({ prize: {
+      id: prize.id,
+      kind: prize.kind,
+      points: prize.points,
+      status: prize.status,
+      fallback: prize.fallback,
+      claimExpiresAt: prize.claimExpiresAt,
+      gift: prize.gift ? { id: prize.gift.id, name: prize.gift.name, kind: prize.gift.kind, imageUrl: prize.gift.imageUrl } : null,
+    } });
   } catch (error) {
     const limited = rateLimitResponse(error);
     if (limited) return limited;

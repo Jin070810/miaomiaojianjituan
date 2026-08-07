@@ -195,6 +195,21 @@ export async function updateMemberBirthday(input: {
   });
 }
 
+export async function markBirthdayOnboardingSeen(userId: string, now = new Date()) {
+  if (!(await switchEnabled(BIRTHDAY_PROGRAM_SWITCH))) throw new Error("生日星愿暂未开放");
+  return db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { active: true, role: true } });
+    if (!user?.active || !isMemberParticipantRole(user.role)) throw new Error("当前账号不能参加生日星愿");
+    const existing = await tx.memberBirthdayProfile.findUnique({ where: { userId } });
+    if (existing?.onboardingSeenAt) return existing;
+    return tx.memberBirthdayProfile.upsert({
+      where: { userId },
+      create: { userId, onboardingSeenAt: now },
+      update: { onboardingSeenAt: now },
+    });
+  });
+}
+
 export async function applyPendingBirthdayProfiles(now = new Date()) {
   const pending = await db.memberBirthdayProfile.findMany({
     where: { pendingEffectiveAt: { lte: now }, pendingBirthDateEnc: { not: null } },
@@ -206,8 +221,8 @@ export async function applyPendingBirthdayProfiles(now = new Date()) {
     const result = await db.$transaction(async (tx) => {
       const profile = await tx.memberBirthdayProfile.findUnique({ where: { id: row.id } });
       if (!profile?.pendingEffectiveAt || profile.pendingEffectiveAt > now || !profile.pendingBirthDateEnc || !profile.pendingBirthMonth || !profile.pendingBirthDay) return false;
-      await tx.memberBirthdayProfile.update({
-        where: { id: profile.id },
+      const changed = await tx.memberBirthdayProfile.updateMany({
+        where: { id: profile.id, pendingEffectiveAt: { lte: now }, pendingBirthDateEnc: { not: null } },
         data: {
           birthDateEnc: profile.pendingBirthDateEnc,
           birthMonth: profile.pendingBirthMonth,
@@ -219,6 +234,7 @@ export async function applyPendingBirthdayProfiles(now = new Date()) {
           pendingEffectiveAt: null,
         },
       });
+      if (changed.count !== 1) return false;
       await tx.auditLog.create({ data: { action: "BIRTHDAY_PROFILE_EFFECTIVE", entity: "MemberBirthdayProfile", entityId: profile.id, afterValue: { birthMonth: profile.pendingBirthMonth, birthDay: profile.pendingBirthDay } } });
       return true;
     });
@@ -547,6 +563,11 @@ export async function extendBirthdayWindow(input: { actorId: string; target: "DR
 export async function claimBirthdayGift(input: { userId: string; prizeId: string; idempotencyKey: string; recipientName?: string; phone?: string; address?: string; membershipAnswers?: Record<string, string>; now?: Date; ip?: string }) {
   const now = input.now ?? new Date();
   return db.$transaction(async (tx) => {
+    const existingByKey = await tx.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (existingByKey) {
+      if (existingByKey.userId !== input.userId || existingByKey.birthdayPrizeId !== input.prizeId) throw new Error("领奖请求标识已被使用");
+      return existingByKey;
+    }
     const [user, prize] = await Promise.all([
       tx.user.findUnique({ where: { id: input.userId }, select: { active: true, role: true } }),
       tx.birthdayPrize.findFirst({ where: { id: input.prizeId, annualBenefit: { userId: input.userId } }, include: { gift: true, redemptionOrder: true } }),
@@ -570,8 +591,16 @@ export async function claimBirthdayGift(input: { userId: string; prizeId: string
       const answers = validateMembershipAnswers(fields, input.membershipAnswers ?? {});
       fulfillmentDataEnc = encryptSensitive(JSON.stringify({ fields, answers }));
     }
+    const claimed = await tx.birthdayPrize.updateMany({
+      where: { id: prize.id, status: "PENDING_CLAIM", claimExpiresAt: { gt: now } },
+      data: { status: "CLAIMED", claimedAt: now },
+    });
+    if (claimed.count !== 1) {
+      const existingOrder = await tx.redemptionOrder.findUnique({ where: { birthdayPrizeId: prize.id } });
+      if (existingOrder) return existingOrder;
+      throw new Error("生日商品领奖状态已变化，请刷新后重试");
+    }
     const order = await tx.redemptionOrder.create({ data: { userId: input.userId, giftId: gift.id, quantity: 1, unitCost: 0, totalCost: 0, status: "PENDING", recipientName, recipientPhoneEnc: phone ? encryptSensitive(phone) : null, recipientAddressEnc: address ? encryptSensitive(address) : null, fulfillmentDataEnc, note: "生日星愿商品奖品", idempotencyKey: input.idempotencyKey, birthdayPrizeId: prize.id } });
-    await tx.birthdayPrize.update({ where: { id: prize.id }, data: { status: "CLAIMED", claimedAt: now } });
     if (gift.kind === "PHYSICAL") {
       await tx.recipientProfile.upsert({ where: { userId: input.userId }, create: { userId: input.userId, recipientName, phoneEnc: encryptSensitive(phone!), addressEnc: encryptSensitive(address!) }, update: { recipientName, phoneEnc: encryptSensitive(phone!), addressEnc: encryptSensitive(address!) } });
     }

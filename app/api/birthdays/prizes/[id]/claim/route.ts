@@ -19,7 +19,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const input = schema.parse(await request.json());
     const order = await claimBirthdayGift({ ...input, userId: user.id, prizeId: id, idempotencyKey: requireIdempotency(request), ip: getClientIp(request) });
-    return NextResponse.json({ order });
+    return NextResponse.json({ order: { id: order.id, giftId: order.giftId, status: order.status, totalCost: order.totalCost, birthdayPrizeId: order.birthdayPrizeId, createdAt: order.createdAt } });
   } catch (error) {
     const limited = rateLimitResponse(error);
     if (limited) return limited;

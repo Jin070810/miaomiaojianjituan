@@ -15,7 +15,7 @@ async function login(page: import("@playwright/test").Page, kuaishouId: string) 
   await page.goto(result.user.role === "ADMIN" ? "/admin" : "/");
 }
 
-test("birthday wall reveals birthdays only after member entry", async ({ page }) => {
+test("birthday wall reveals birthdays only after member entry", async ({ page }, testInfo) => {
   await login(page, birthdayE2EIds.member);
   await expect(page.getByRole("heading", { name: "生日星愿" })).toBeVisible();
   await expect(page.getByText("今日公开寿星")).toHaveCount(0);
@@ -23,13 +23,23 @@ test("birthday wall reveals birthdays only after member entry", async ({ page })
   const notificationsBefore = await db.notification.count({ where: { userId: member.id } });
 
   await page.getByRole("button", { name: "进入生日星愿" }).click();
+  await expect(page.getByRole("heading", { name: "生日星愿权益" })).toBeVisible();
+  await expect(page.getByText("年度生日抽奖")).toBeVisible();
+  await expect(page.getByText("生日作品加成")).toBeVisible();
+  await expect(page.getByText("团友祝福与心意")).toBeVisible();
+  await expect(page.getByText("寿星标识与年度纪念")).toBeVisible();
+  await page.screenshot({ path: `output/playwright/birthday-benefits-${testInfo.project.name}.png`, fullPage: false });
+  await page.getByRole("button", { name: "我知道了" }).click();
+  await expect(page.getByRole("heading", { name: "生日星愿权益" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "今日寿星" })).toBeVisible();
   await expect(page.getByText("今日公开寿星")).toBeVisible();
   await expect(page.getByText("今日隐藏寿星")).toHaveCount(0);
-  await expect(page.getByText("birthday-draw-v1")).not.toBeVisible();
-  await page.getByText("查看公开概率").click();
-  await expect(page.getByText("birthday-draw-v1")).toBeVisible();
-  await expect(page.getByText("1000–2000 分商品")).toBeVisible();
+  await expect(page.getByText("查看公开概率")).toHaveCount(0);
+  await expect(page.getByText("birthday-draw-v1")).toHaveCount(0);
+  await expect(page.getByText("1000–2000 分商品")).toHaveCount(0);
+  await page.screenshot({ path: `output/playwright/birthday-wall-${testInfo.project.name}.png`, fullPage: true });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "生日星愿权益" })).toHaveCount(0);
   expect(await db.notification.count({ where: { userId: member.id } })).toBe(notificationsBefore);
   await expectNoHorizontalOverflow(page);
   await expectElementsWithinViewport(page, ".member-app, .member-content, .birthday-page, .birthday-person, .birthday-draw-panel");

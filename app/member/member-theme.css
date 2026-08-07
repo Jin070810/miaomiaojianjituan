@@ -117,6 +117,12 @@
 .birthday-wish-list p { margin: 2px 0 0; color: #82756f; font-size: 12px; line-height: 1.45; }
 .birthday-modal > header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 15px; }
 .birthday-modal h2 { margin: 3px 0; }
+.birthday-benefit-intro { display: grid; gap: 14px; margin-bottom: 18px; }
+.birthday-benefit-intro > div { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; }
+.birthday-benefit-intro svg { color: #bd4b53; margin-top: 2px; }
+.birthday-benefit-intro span { display: grid; gap: 3px; min-width: 0; }
+.birthday-benefit-intro strong { color: #352f45; font-size: 15px; }
+.birthday-benefit-intro small { color: #756e7c; font-size: 13px; line-height: 1.6; }
 .birthday-preset-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
 .birthday-preset-list label { position: relative; min-height: 100px; padding: 13px; display: flex; flex-direction: column; gap: 5px; border: 1px solid #e1d4cc; border-radius: 8px; background: #fffdf9; cursor: pointer; }
 .birthday-preset-list label.selected { border-color: #bd5a50; background: #fff3e9; box-shadow: inset 0 0 0 1px #bd5a50; }

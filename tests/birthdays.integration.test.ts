@@ -141,15 +141,18 @@ describe.skipIf(!enabled)("birthday database integration", () => {
     expect(await db.birthdayPrizePoolItem.findUniqueOrThrow({ where: { id: item.id } }).then((row) => row.remainingStock)).toBe(0);
 
     const productPrize = prizes.find((prize) => prize.kind === "GIFT")!;
-    const firstOrder = await claimBirthdayGift({
+    const concurrentOrders = await Promise.all(Array.from({ length: 5 }, (_, index) => claimBirthdayGift({
       userId: productPrize.annualBenefit.userId,
       prizeId: productPrize.id,
-      idempotencyKey: `birthday-claim-${suffix}`,
+      idempotencyKey: `birthday-claim-${index}-${suffix}`,
       recipientName: "测试收件人",
       phone: "13800138000",
       address: "测试地址 1 号",
       now,
-    });
+    })));
+    const firstOrder = concurrentOrders[0];
+    expect(new Set(concurrentOrders.map((order) => order.id))).toEqual(new Set([firstOrder.id]));
+    expect(await db.redemptionOrder.count({ where: { birthdayPrizeId: productPrize.id } })).toBe(1);
     const repeatedOrder = await claimBirthdayGift({
       userId: productPrize.annualBenefit.userId,
       prizeId: productPrize.id,

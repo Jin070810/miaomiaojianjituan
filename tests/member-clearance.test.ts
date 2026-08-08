@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { clearanceSchedule, CLEARANCE_DEFAULTS, validateClearancePolicy } from "@/lib/member-clearance";
+import { describe, expect, it, vi } from "vitest";
+import { clearanceSchedule, CLEARANCE_DEFAULTS, memberClearanceInternals, validateClearancePolicy } from "@/lib/member-clearance";
 
 describe("member clearance policy", () => {
   it("uses the fixed 30/7/3/15 schedule without timezone-dependent rounding", () => {
@@ -16,5 +16,12 @@ describe("member clearance policy", () => {
     expect(validateClearancePolicy({ inactivityDays: 30, warningDays: [7, 3], cooldownDays: 15 })).toMatchObject({ warningDays: [7, 3] });
     expect(() => validateClearancePolicy({ inactivityDays: 30, warningDays: [7, 7], cooldownDays: 15 })).toThrow("两个");
     expect(() => validateClearancePolicy({ inactivityDays: 30, warningDays: [30, 3], cooldownDays: 15 })).toThrow("预警");
+  });
+
+  it("creates the default policy idempotently when concurrent readers see an empty table", async () => {
+    const upsert = vi.fn().mockResolvedValue({ id: "policy-1", version: 1 });
+    const tx = { membershipClearancePolicyVersion: { findFirst: vi.fn().mockResolvedValue(null), upsert } };
+    await memberClearanceInternals.activePolicy(tx as never);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { version: 1 }, update: {} }));
   });
 });

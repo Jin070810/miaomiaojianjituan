@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { CakeSlice, CalendarClock, Gift, PackagePlus, RefreshCw, Sparkles, UserRoundCog, Users } from "lucide-react";
 
 export type BirthdayAdminData = {
@@ -14,12 +14,23 @@ export type BirthdayAdminData = {
   drawWindows: Array<{ id: string; nickname: string; benefitYear: number; drawClosesAt: string }>;
 };
 
+function birthdayMemberLabel(profile: BirthdayAdminData["profiles"][number]) {
+  return `${profile.nickname} · ${profile.birthMonth ? `${profile.birthMonth}月${profile.birthDay}日` : "待登记"}`;
+}
+
 export function BirthdayAdmin({ data, onReload }: { data: BirthdayAdminData; onReload: () => Promise<void> }) {
   const [giftId, setGiftId] = useState(data.eligibleGifts[0]?.id ?? "");
   const [quantity, setQuantity] = useState("1");
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [memberId, setMemberId] = useState(data.profiles[0]?.userId ?? "");
+  const [memberQuery, setMemberQuery] = useState(data.profiles[0] ? birthdayMemberLabel(data.profiles[0]) : "");
+  const memberOptions = useMemo(() => {
+    const query = memberQuery.trim().toLocaleLowerCase("zh-CN");
+    return data.profiles
+      .filter((profile) => !query || birthdayMemberLabel(profile).toLocaleLowerCase("zh-CN").includes(query))
+      .slice(0, 20);
+  }, [data.profiles, memberQuery]);
   const [correctedBirthday, setCorrectedBirthday] = useState("");
   const [correctionReason, setCorrectionReason] = useState("");
   const [extensionDays, setExtensionDays] = useState("7");
@@ -72,7 +83,7 @@ export function BirthdayAdmin({ data, onReload }: { data: BirthdayAdminData; onR
       <div className="data-table-wrap"><table className="data-table"><thead><tr><th>奖品</th><th>商品档位</th><th>累计预留</th><th>剩余</th><th>商城库存</th><th>操作</th></tr></thead><tbody>{data.pool.map((item) => <tr key={item.id}><td><strong>{item.gift.name}</strong><small>{item.gift.kind === "PHYSICAL" ? "实物" : "会员权益"}</small></td><td>{item.gift.pointsCost.toLocaleString()} 分</td><td>{item.allocatedStock}</td><td>{item.remainingStock}</td><td>{item.gift.stock}</td><td><button className="secondary-button mini-button" disabled={saving || item.remainingStock <= 0} onClick={() => void runAction({ action: "release", poolItemId: item.id, quantity: 1 }, "预留库存已返还商城。")}>释放 1 份</button></td></tr>)}{!data.pool.length ? <tr><td colSpan={6}>奖池暂未配置商品；商品档中奖时会自动发放对应保底积分。</td></tr> : null}</tbody></table></div>
     </section>
     <section className="admin-panel"><div className="admin-panel-head"><div><h2>近期寿星</h2><p>未来 30 天的已生效生日资料，包括未公开到生日墙的成员。</p></div></div><div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>生日</th><th>距离今天</th></tr></thead><tbody>{data.upcoming.map((member) => <tr key={member.userId}><td><strong>{member.nickname}</strong></td><td>{member.month} 月 {member.day} 日</td><td>{member.deltaDays === 0 ? "今天" : `${member.deltaDays} 天`}</td></tr>)}{!data.upcoming.length ? <tr><td colSpan={3}>未来 30 天暂无已生效生日。</td></tr> : null}</tbody></table></div></section>
-    <section className="admin-panel"><div className="admin-panel-head"><div><h2>生日纠错</h2><p>管理员修正不受 365 天自助限制，但仍在 7 天后生效；审计只记录月日。</p></div><UserRoundCog size={20} /></div><div className="birthday-correction-form"><select value={memberId} onChange={(event) => setMemberId(event.target.value)}><option value="">选择成员</option>{data.profiles.map((profile) => <option key={profile.userId} value={profile.userId}>{profile.nickname} · {profile.birthMonth ? `${profile.birthMonth}月${profile.birthDay}日` : "待登记"}</option>)}</select><input type="date" value={correctedBirthday} onChange={(event) => setCorrectedBirthday(event.target.value)} /><input value={correctionReason} maxLength={500} placeholder="纠错原因" onChange={(event) => setCorrectionReason(event.target.value)} /><button className="primary-button" disabled={saving || !memberId || !correctedBirthday || correctionReason.trim().length < 2} onClick={() => void correctBirthday()}>提交纠错</button></div></section>
+    <section className="admin-panel"><div className="admin-panel-head"><div><h2>生日纠错</h2><p>管理员修正不受 365 天自助限制，但仍在 7 天后生效；审计只记录月日。</p></div><UserRoundCog size={20} /></div><div className="birthday-correction-form"><div className="birthday-member-combobox"><input list="birthday-member-options" value={memberQuery} placeholder="搜索成员昵称" aria-label="搜索并选择成员" onChange={(event) => { const value = event.target.value; setMemberQuery(value); setMemberId(data.profiles.find((profile) => birthdayMemberLabel(profile) === value)?.userId ?? ""); }} /><datalist id="birthday-member-options">{memberOptions.map((profile) => <option key={profile.userId} value={birthdayMemberLabel(profile)} />)}</datalist></div><input type="date" value={correctedBirthday} onChange={(event) => setCorrectedBirthday(event.target.value)} /><input value={correctionReason} maxLength={500} placeholder="纠错原因" onChange={(event) => setCorrectionReason(event.target.value)} /><button className="primary-button" disabled={saving || !memberId || !correctedBirthday || correctionReason.trim().length < 2} onClick={() => void correctBirthday()}>提交纠错</button></div></section>
     <section className="admin-panel"><div className="admin-panel-head"><div><h2>待处理窗口</h2><p>延长或撤回操作必须填写原因。</p></div><CalendarClock size={20} /></div><div className="birthday-window-controls"><label><span>延长天数</span><input type="number" min="1" max="30" step="1" value={extensionDays} onChange={(event) => setExtensionDays(event.target.value)} /></label><label><span>操作原因</span><input value={extensionReason} maxLength={500} onChange={(event) => setExtensionReason(event.target.value)} /></label></div><div className="data-table-wrap"><table className="data-table"><thead><tr><th>类型</th><th>成员</th><th>内容</th><th>截止时间</th><th>操作</th></tr></thead><tbody>{data.drawWindows.map((benefit) => <tr key={benefit.id}><td>待抽奖</td><td>{benefit.nickname}</td><td>{benefit.benefitYear} 年权益</td><td>{new Date(benefit.drawClosesAt).toLocaleString("zh-CN")}</td><td><button className="secondary-button mini-button" disabled={saving} onClick={() => extendWindow("draw", benefit.id)}>延长</button></td></tr>)}{data.pendingClaims.map((prize) => <tr key={prize.id}><td>待领奖</td><td>{prize.nickname}</td><td>{prize.giftName}</td><td>{prize.claimExpiresAt ? new Date(prize.claimExpiresAt).toLocaleString("zh-CN") : "-"}</td><td><div className="table-actions"><button className="secondary-button mini-button" disabled={saving} onClick={() => extendWindow("claim", prize.id)}>延长</button><button className="danger-button mini-button" disabled={saving || extensionReason.trim().length < 2} onClick={() => void runAction({ action: "revoke_prize", prizeId: prize.id, reason: extensionReason }, "奖品已撤回，库存已返还商城。")}>撤回</button></div></td></tr>)}{!data.drawWindows.length && !data.pendingClaims.length ? <tr><td colSpan={5}>当前没有待处理窗口。</td></tr> : null}</tbody></table></div></section>
     <section className="admin-panel"><div className="admin-panel-head"><div><h2>抽奖分布</h2><p>结果按服务端票号和 `birthday-draw-v1` 概率生成。</p></div></div><div className="birthday-prize-groups">{data.prizeGroups.map((group) => <span key={`${group.kind}-${group.status}`}><b>{group.kind === "POINTS" ? "积分" : "商品"}</b><strong>{group._count.id}</strong><small>{group.status}</small></span>)}{!data.prizeGroups.length ? <p className="empty-copy">本年度还没有抽奖记录。</p> : null}</div></section>
   </div>;

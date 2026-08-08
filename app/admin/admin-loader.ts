@@ -56,8 +56,8 @@ export async function loadAdminSection(section: AdminSection, fetcher: Fetcher =
     ]);
     return { gifts, orders };
   }
-  if (section === "orders") return { orders: await fetchJson("/api/admin/orders?take=50", "兑换订单加载失败", fetcher) };
-  if (section === "rankings") return { rankings: await fetchJson("/api/admin/rankings", "榜单周期加载失败", fetcher) };
+  if (section === "orders") return { orders: await fetchJson("/api/admin/orders?take=20", "兑换订单加载失败", fetcher) };
+  if (section === "rankings") return { rankings: await fetchJson("/api/admin/rankings?view=summary", "榜单周期加载失败", fetcher) };
   if (section === "challenges") return { weeklyChallenges: await fetchJson("/api/admin/weekly-challenges?take=10", "周挑战加载失败", fetcher) };
   if (section === "birthdays") return { birthdays: await fetchJson("/api/admin/birthdays", "生日运营数据加载失败", fetcher) };
   if (section === "announcements") {

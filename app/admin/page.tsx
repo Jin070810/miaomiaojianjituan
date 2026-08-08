@@ -193,6 +193,7 @@ type AdminRankingAward = {
   recipientName: string | null;
   recipientPhone: string | null;
   recipientAddress: string | null;
+  hasRecipientDetails?: boolean;
   rewardTitle?: string | null;
   rewardDescription?: string | null;
 };
@@ -208,6 +209,7 @@ type AdminRankingPeriod = {
   settleable?: boolean;
 };
 type AdminPagination = { page: number; take: number; total: number; pages: number };
+type AdminOrderStatusCounts = { all: number; pending: number; fulfilled: number };
 type AdminAnnouncement = {
   id: string;
   title: string;
@@ -338,6 +340,7 @@ type AdminData = {
   usersPagination: AdminPagination;
   pointUsersPagination: AdminPagination;
   ordersPagination: AdminPagination;
+  orderStatusCounts: AdminOrderStatusCounts;
   auditPagination: AdminPagination;
   memberGrowth: AdminMemberGrowth | null;
   birthdays: BirthdayAdminData | null;
@@ -386,6 +389,7 @@ function initialAdminData(dashboard: {
     usersPagination: emptyPagination,
     pointUsersPagination: emptyPagination,
     ordersPagination: emptyPagination,
+    orderStatusCounts: { all: 0, pending: 0, fulfilled: 0 },
     auditPagination: { ...emptyPagination, total: dashboard.audit?.length ?? 0 },
     memberGrowth: dashboard.memberGrowth ?? null,
     birthdays: null,
@@ -764,7 +768,7 @@ function SecondaryReviewsAdmin({
       </div>
       <section className="admin-panel audit-panel">
         <div className="admin-panel-head"><div><h2>{labels[filter]}</h2><p>共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页；驳回会自动扣回视频积分</p></div></div>
-        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员与视频</th><th>数据</th><th>审核员</th><th>状态</th><th>时间</th><th /></tr></thead><tbody>
+        <div className="data-table-wrap secondary-review-table"><table className="data-table"><thead><tr><th>成员与视频</th><th>数据</th><th>审核员</th><th>状态</th><th>时间</th><th /></tr></thead><tbody>
           {rows.map((review) => {
             const href = canonicalKuaishouVideoUrl(review.video.photoId) ?? review.video.sourceUrl;
             return (
@@ -784,6 +788,13 @@ function SecondaryReviewsAdmin({
           })}
           {rows.length === 0 && <tr><td colSpan={6}>暂无二次审核任务</td></tr>}
         </tbody></table></div>
+        <div className="secondary-review-cards">
+          {rows.map((review) => {
+            const href = canonicalKuaishouVideoUrl(review.video.photoId) ?? review.video.sourceUrl;
+            return <article className="secondary-review-card" key={`mobile-${review.id}`}><div className="secondary-review-card-head">{review.video.coverUrl ? <img src={review.video.coverUrl} alt="" /> : <span className="table-thumb">▶</span>}<div><a href={href} target="_blank" rel="noopener noreferrer"><strong>{review.video.caption || "查看视频"}</strong><ExternalLink size={13} /></a><small>{review.video.user.nickname} · {review.video.user.kuaishouId}</small></div><span className={`status-chip ${review.status === "APPROVED" ? "success" : review.status === "REJECTED" ? "danger" : "warning"}`}>{labels[review.status]}</span></div><dl><div><dt>点赞</dt><dd>{review.video.likes?.toLocaleString() ?? "未获取"}</dd></div><div><dt>积分</dt><dd>{review.video.points.toLocaleString()}</dd></div><div><dt>审核员</dt><dd>{review.reviewer?.nickname ?? "未分配"}</dd></div><div><dt>时间</dt><dd>{formatAdminDate(review.reviewedAt ?? review.assignedAt ?? review.createdAt)}</dd></div></dl>{review.reviewReason && <p>{review.reviewReason}</p>}<div className="secondary-review-card-actions"><button className="secondary-button" onClick={() => onActivity(review.video)}><FileText size={16} />动态</button>{review.status === "PENDING" && <button className="primary-button" onClick={() => onAction(review, "approve")}><Check size={16} />通过</button>}{review.status === "PENDING" && <button className="danger-button" onClick={() => onAction(review, "reject")}><X size={16} />驳回</button>}</div></article>;
+          })}
+          {rows.length === 0 && <p className="empty-copy">暂无二次审核任务</p>}
+        </div>
         {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多二审任务 <ChevronDown size={15} /></button></div>}
       </section>
     </>
@@ -1003,11 +1014,24 @@ function GiftEditorDialog({ gift, onClose, onSave }: { gift: AdminGiftRow | null
 
 function GiftsAdmin({ rows, orders, busyGiftId, onCreate, onEdit, onMove, onTogglePin, onDelete }: { rows: AdminGiftRow[]; orders: AdminOrderRow[]; busyGiftId: string | null; onCreate: () => void; onEdit: (gift: AdminGiftRow) => void; onMove: (gift: AdminGiftRow, direction: -1 | 1) => void; onTogglePin: (gift: AdminGiftRow) => void; onDelete: (gift: AdminGiftRow) => void }) {
   const stock = rows.reduce((total, gift) => total + gift.stock, 0);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
+  const [state, setState] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [stockState, setStockState] = useState<"ALL" | "LOW" | "OUT">("ALL");
+  const [menuGiftId, setMenuGiftId] = useState<string | null>(null);
+  const categories = [...new Set(rows.map((gift) => gift.category).filter(Boolean))].sort();
+  const filteredRows = rows.filter((gift) => {
+    const matchesQuery = !query.trim() || gift.name.toLowerCase().includes(query.trim().toLowerCase());
+    const matchesCategory = !category || gift.category === category;
+    const matchesState = state === "ALL" || (state === "ACTIVE" ? gift.active : !gift.active);
+    const matchesStock = stockState === "ALL" || (stockState === "OUT" ? gift.stock === 0 : gift.stock > 0 && gift.stock <= 3);
+    return matchesQuery && matchesCategory && matchesState && matchesStock;
+  }).sort((left, right) => Number(left.stock > 3) - Number(right.stock > 3) || left.stock - right.stock || left.displayOrder - right.displayOrder);
   return (
     <>
       <div className="admin-page-title"><div><span className="eyebrow">REWARD CATALOG</span><h1>积分与礼品</h1><p>维护兑换规则、礼品库存和积分流水。</p></div><button className="primary-button" onClick={onCreate}><Gift size={16} />新增礼品</button></div>
       <div className="admin-stat-grid compact-stats"><StatCard label="上架礼品" value={rows.filter((gift) => gift.active).length.toString()} trend="+ 实时" icon={Gift} tone="coral" /><StatCard label="库存总量" value={stock.toLocaleString()} trend="+ 实时" icon={PackageCheck} tone="teal" /><StatCard label="累计兑换" value={orders.length.toString()} trend="+ 实时" icon={CircleDollarSign} tone="yellow" /></div>
-      <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>礼品目录</h2><p>置顶商品优先显示，分类与标签会实时同步到成员商城</p></div></div><div className="gift-admin-grid">{rows.map((gift, i) => { const busy = busyGiftId === gift.id; const canMoveUp = i > 0 && rows[i - 1].pinned === gift.pinned; const canMoveDown = i < rows.length - 1 && rows[i + 1].pinned === gift.pinned; const kindLabel = gift.kind === "CASH" ? "现金兑换" : gift.kind === "MEMBERSHIP" ? "会员权益" : "实物商品"; return <div className="gift-admin-card" key={gift.id}><img src={gift.imageUrl && (/^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl)) ? gift.imageUrl : gifts[i % gifts.length].image} alt={gift.name} /><div><strong>{gift.name}</strong><span>{kindLabel} · {gift.pointsCost.toLocaleString()} 积分 · 库存 {gift.stock} · 已兑 {gift.salesCount}</span><div className="gift-tag-list admin-gift-tags">{(gift.tags?.length ? gift.tags : [gift.category]).slice(0, 4).map((tag) => <small key={tag}>{tag}</small>)}</div><small className={`gift-catalog-state ${gift.active ? "active" : "inactive"}`}>{gift.pinned ? "已置顶 · " : ""}{gift.active ? "已上架" : "已下架"}</small></div><div className="gift-admin-actions"><button className={`table-more ${gift.pinned ? "is-pinned" : ""}`} disabled={busy} title={gift.pinned ? "取消置顶" : "置顶商品"} aria-label={gift.pinned ? `取消置顶${gift.name}` : `置顶${gift.name}`} onClick={() => onTogglePin(gift)}><Pin size={15} /></button><button className="table-more" disabled={busy || !canMoveUp} title="向前移动" aria-label={`向前移动${gift.name}`} onClick={() => onMove(gift, -1)}><ArrowUp size={15} /></button><button className="table-more" disabled={busy || !canMoveDown} title="向后移动" aria-label={`向后移动${gift.name}`} onClick={() => onMove(gift, 1)}><ArrowDown size={15} /></button><button className="table-more" disabled={busy} title="编辑礼品" aria-label={`编辑${gift.name}`} onClick={() => onEdit(gift)}><Pencil size={15} /></button><button className="table-more danger-action" disabled={busy} title="删除礼品" aria-label={`删除${gift.name}`} onClick={() => onDelete(gift)}><Trash2 size={15} /></button></div></div>; })}{rows.length === 0 && <p className="empty-copy">还没有礼品，点击“新增礼品”创建。</p>}</div></section>
+      <section className="admin-panel audit-panel"><div className="admin-panel-head gift-catalog-head"><div><h2>礼品目录</h2><p>缺货与低库存默认优先显示，筛选结果共 {filteredRows.length} 项</p></div><div className="gift-catalog-filters"><div className="admin-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索礼品名称" /></div><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="按分类筛选"><option value="">全部分类</option>{categories.map((item) => <option key={item}>{item}</option>)}</select><select value={state} onChange={(event) => setState(event.target.value as typeof state)} aria-label="按上下架筛选"><option value="ALL">全部状态</option><option value="ACTIVE">已上架</option><option value="INACTIVE">已下架</option></select><select value={stockState} onChange={(event) => setStockState(event.target.value as typeof stockState)} aria-label="按库存筛选"><option value="ALL">全部库存</option><option value="LOW">低库存</option><option value="OUT">已缺货</option></select></div></div><div className="gift-admin-grid">{filteredRows.map((gift, i) => { const rowIndex = rows.findIndex((row) => row.id === gift.id); const busy = busyGiftId === gift.id; const canMoveUp = rowIndex > 0 && rows[rowIndex - 1].pinned === gift.pinned; const canMoveDown = rowIndex < rows.length - 1 && rows[rowIndex + 1].pinned === gift.pinned; const kindLabel = gift.kind === "CASH" ? "现金兑换" : gift.kind === "MEMBERSHIP" ? "会员权益" : "实物商品"; return <div className="gift-admin-card" key={gift.id}><img src={gift.imageUrl && (/^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl)) ? gift.imageUrl : gifts[i % gifts.length].image} alt={gift.name} /><div><strong>{gift.name}</strong><span>{kindLabel} · {gift.pointsCost.toLocaleString()} 积分 · 库存 {gift.stock} · 已兑 {gift.salesCount}</span><div className="gift-tag-list admin-gift-tags">{(gift.tags?.length ? gift.tags : [gift.category]).slice(0, 4).map((tag) => <small key={tag}>{tag}</small>)}</div><small className={`gift-catalog-state ${gift.active ? "active" : "inactive"}`}>{gift.pinned ? "已置顶 · " : ""}{gift.active ? "已上架" : "已下架"}</small></div><div className="gift-admin-actions"><button className="table-more" aria-label={`${gift.name}操作菜单`} aria-expanded={menuGiftId === gift.id} onClick={() => setMenuGiftId((current) => current === gift.id ? null : gift.id)}><MoreHorizontal size={18} /></button>{menuGiftId === gift.id && <div className="gift-action-menu"><button disabled={busy} onClick={() => { onTogglePin(gift); setMenuGiftId(null); }}><Pin size={15} />{gift.pinned ? "取消置顶" : "置顶"}</button><button disabled={busy || !canMoveUp} onClick={() => { onMove(gift, -1); setMenuGiftId(null); }}><ArrowUp size={15} />向前移动</button><button disabled={busy || !canMoveDown} onClick={() => { onMove(gift, 1); setMenuGiftId(null); }}><ArrowDown size={15} />向后移动</button><button disabled={busy} onClick={() => { onEdit(gift); setMenuGiftId(null); }}><Pencil size={15} />编辑</button><button className="danger-action" disabled={busy} onClick={() => { onDelete(gift); setMenuGiftId(null); }}><Trash2 size={15} />删除</button></div>}</div></div>; })}{filteredRows.length === 0 && <p className="empty-copy">没有符合筛选条件的礼品。</p>}</div></section>
     </>
   );
 }
@@ -1052,12 +1076,14 @@ function OrderRecipientDetails({ order, loading, onLoad, onViewQr }: { order: Ad
 type AdminPromptOptions = {
   title: string;
   label: string;
+  description?: string;
   initialValue?: string;
   placeholder?: string;
   confirmLabel?: string;
   inputType?: "text" | "password" | "number";
   multiline?: boolean;
   required?: boolean;
+  confirmationOnly?: boolean;
 };
 
 function AdminPromptDialog({
@@ -1070,7 +1096,7 @@ function AdminPromptDialog({
   onConfirm: (value: string) => void;
 }) {
   const [value, setValue] = useState(options.initialValue ?? "");
-  const invalid = options.required !== false && !value.trim();
+  const invalid = !options.confirmationOnly && options.required !== false && !value.trim();
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
       <section className="modal-sheet admin-prompt-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-prompt-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -1078,12 +1104,13 @@ function AdminPromptDialog({
           <div><span className="eyebrow">CONFIRM ACTION</span><h2 id="admin-prompt-title">{options.title}</h2></div>
           <button className="icon-button" aria-label="取消操作" onClick={onCancel}><X size={20} /></button>
         </div>
-        <div className="field">
+        {options.description && <p className="admin-confirm-description">{options.description}</p>}
+        {!options.confirmationOnly && <div className="field">
           <label htmlFor="admin-prompt-value">{options.label}</label>
           {options.multiline
             ? <textarea id="admin-prompt-value" autoFocus rows={4} value={value} placeholder={options.placeholder} onChange={(event) => setValue(event.target.value)} />
             : <input id="admin-prompt-value" autoFocus type={options.inputType ?? "text"} value={value} placeholder={options.placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !invalid) onConfirm(value); }} />}
-        </div>
+        </div>}
         <div className="admin-panel-actions">
           <button className="secondary-button" onClick={onCancel}>取消</button>
           <button className="primary-button" disabled={invalid} onClick={() => onConfirm(value)}>{options.confirmLabel ?? "确认"}</button>
@@ -1114,7 +1141,7 @@ function useAdminPrompt() {
   };
 }
 
-function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilter, onActivity }: { rows: AdminOrderRow[]; pagination: AdminPagination; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void>; onActivity: (order: AdminOrderRow) => void }) {
+function OrdersAdmin({ rows, pagination, statusCounts, onAction, onLoadMore, onSearch, onFilter, onActivity }: { rows: AdminOrderRow[]; pagination: AdminPagination; statusCounts: AdminOrderStatusCounts; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void>; onActivity: (order: AdminOrderRow) => void }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
   const [details, setDetails] = useState<Record<string, Pick<AdminOrderRow, "recipientName" | "recipientPhone" | "recipientAddress" | "cashQrCodeUrl" | "membershipFields">>>({});
@@ -1197,8 +1224,8 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
   const filtered = rows;
   return (
     <>
-      <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>实物、现金与会员权益分别按发货、发放和开通处理；驳回会退回积分与库存。</p></div><button className="secondary-button"><FileText size={16} />导出订单</button></div>
-      <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => changeStatus("ALL")}>全部订单 <b>{status === "ALL" ? pagination.total : rows.length}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => changeStatus("PENDING")}>待采购 / 待发放 / 待开通 <b>{status === "PENDING" ? pagination.total : "—"}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => changeStatus("FULFILLED")}>已发货 / 已发放 / 已开通 <b>{status === "FULFILLED" ? pagination.total : "—"}</b></button></div>
+      <div className="admin-page-title"><div><span className="eyebrow">FULFILLMENT CENTER</span><h1>兑换订单</h1><p>实物、现金与会员权益分别按发货、发放和开通处理；驳回会退回积分与库存。</p></div><button className="secondary-button orders-export-button" aria-label="导出订单"><Download size={16} /><span>导出订单</span></button></div>
+      <div className="order-status-row"><button className={status === "ALL" ? "active" : ""} onClick={() => changeStatus("ALL")}>全部订单 <b>{statusCounts.all}</b></button><button className={status === "PENDING" ? "active" : ""} onClick={() => changeStatus("PENDING")}>待采购 / 待发放 / 待开通 <b>{statusCounts.pending}</b></button><button className={status === "FULFILLED" ? "active" : ""} onClick={() => changeStatus("FULFILLED")}>已发货 / 已发放 / 已开通 <b>{statusCounts.fulfilled}</b></button></div>
       <section className="admin-panel audit-panel"><div className="admin-panel-head"><div><h2>订单列表</h2><p>显示 {filtered.length} 条已加载订单，共 {pagination.total} 条；驳回订单会自动退回积分和库存</p></div><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索订单号或快手 ID" /><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>{feedback && <p className={feedback.type === "success" ? "form-success" : "form-error"} role="alert">{feedback.message}</p>}<div className="order-list">{filtered.map((order, i) => {
         const merged = { ...order, ...details[order.id] };
         const readyToFulfill = order.gift.kind === "CASH"
@@ -1208,7 +1235,7 @@ function OrdersAdmin({ rows, pagination, onAction, onLoadMore, onSearch, onFilte
             : Boolean(merged.recipientName && (merged.recipientPhone || merged.hasRecipientPhone) && (merged.recipientAddress || merged.hasRecipientAddress));
         const pendingShipment = ["PENDING", "APPROVED"].includes(order.status);
         const processing = processingOrderId === order.id;
-        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(order.gift.imageUrl) ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span>{order.id} · {order.user.nickname} · {order.user.kuaishouId}</span><OrderRecipientDetails order={merged} loading={detailsLoadingId === order.id} onLoad={() => void loadDetails(order)} onViewQr={(url) => setQrPreview({ url, giftName: order.gift.name, memberName: order.user.nickname })} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline"><button className="table-more" title="查看操作动态" aria-label="查看订单操作动态" onClick={() => onActivity(order)}><FileText size={16} /></button>{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : order.gift.kind === "MEMBERSHIP" ? "需先填写开通资料" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /></button>}</div></div>;
+        return <div className="order-row" key={order.id}><span className="order-thumb"><img src={order.gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(order.gift.imageUrl) ? order.gift.imageUrl : gifts[i % gifts.length].image} alt="" /></span><div><strong>{order.gift.name}</strong><span className="order-primary-meta">{order.user.nickname} · {order.user.kuaishouId}</span><span className="order-id-meta">订单尾号 {order.id.slice(-8)}</span><OrderRecipientDetails order={merged} loading={detailsLoadingId === order.id} onLoad={() => void loadDetails(order)} onViewQr={(url) => setQrPreview({ url, giftName: order.gift.name, memberName: order.user.nickname })} />{order.gift.kind === "PHYSICAL" && order.status === "FULFILLED" && <span className="tracking-copy">{order.trackingNumber ? `快递单号：${order.trackingNumber}` : "未填写快递单号"}{order.fulfilledAt ? ` · ${formatAdminDate(order.fulfilledAt)}` : ""}</span>}</div><b>{order.totalCost.toLocaleString()} 分</b><span className={`status-chip ${pendingShipment ? "warning" : order.status === "REJECTED" || order.status === "REFUNDED" ? "danger" : "success"}`}>{orderStatusLabel(order.status, order.gift.kind)}</span><div className="table-actions-inline"><button className="table-more" title="查看操作动态" aria-label="查看订单操作动态" onClick={() => onActivity(order)}><FileText size={16} /><span className="mobile-action-label">动态</span></button>{pendingShipment && <button className="secondary-button mini-button" disabled={Boolean(processingOrderId)} title={readyToFulfill ? undefined : order.gift.kind === "CASH" ? "需先填写收款码" : order.gift.kind === "MEMBERSHIP" ? "需先填写开通资料" : "需先填写完整收货资料"} onClick={() => void runAction(order, "fulfill", readyToFulfill)}>{processing ? "处理中..." : order.gift.kind === "CASH" ? "发放" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发货"}</button>}{pendingShipment && <button className="table-more" disabled={Boolean(processingOrderId)} title="驳回并退回积分" aria-label="驳回订单" onClick={() => void runAction(order, "reject")}><X size={16} /><span className="mobile-action-label">驳回</span></button>}{order.status === "FULFILLED" && order.gift.kind === "PHYSICAL" && <button className="table-more" disabled={Boolean(processingOrderId)} title="修改快递单号" aria-label="修改快递单号" onClick={() => void runAction(order, "update_tracking")}><PackageCheck size={16} /><span className="mobile-action-label">快递</span></button>}{order.status === "FULFILLED" && <button className="table-more" disabled={Boolean(processingOrderId)} title="退款" aria-label="退款" onClick={() => void runAction(order, "refund")}><X size={16} /><span className="mobile-action-label">退款</span></button>}</div></div>;
       })}{filtered.length === 0 && <p className="empty-copy">没有匹配的订单</p>}</div>{pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多订单 <ChevronDown size={15} /></button></div>}</section>
       {qrPreview && <div className="modal-backdrop" role="presentation" onMouseDown={() => setQrPreview(null)}><section className="modal-sheet qr-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="qr-preview-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">PAYMENT QR CODE</span><h2 id="qr-preview-title">收款码</h2><p>{qrPreview.memberName} · {qrPreview.giftName}</p></div><button className="icon-button" aria-label="关闭收款码预览" onClick={() => setQrPreview(null)}><X size={20} /></button></div><div className="qr-preview-image"><img src={qrPreview.url} alt={`${qrPreview.memberName}的收款码`} /></div></section></div>}
       {dialog}
@@ -1228,6 +1255,14 @@ function RankingsAdmin({
   const [rewards, setRewards] = useState<Record<string, Record<number, { title: string; description: string }>>>({});
   const [settling, setSettling] = useState("");
   const [error, setError] = useState("");
+  const [expandedPeriods, setExpandedPeriods] = useState<Set<string>>(() => {
+    const open = periods.filter((period) => period.status === "OPEN").map((period) => period.id);
+    const latestSettled = periods.find((period) => period.status === "SETTLED")?.id;
+    return new Set(latestSettled ? [...open, latestSettled] : open);
+  });
+  const [awardDetails, setAwardDetails] = useState<Record<string, Pick<AdminRankingAward, "recipientName" | "recipientPhone" | "recipientAddress">>>({});
+  const [visibleAwardId, setVisibleAwardId] = useState<string | null>(null);
+  const [loadingAwardId, setLoadingAwardId] = useState<string | null>(null);
   function updateReward(periodId: string, rank: number, field: "title" | "description", value: string) {
     setRewards((current) => ({ ...current, [periodId]: { ...(current[periodId] ?? {}), [rank]: { ...(current[periodId]?.[rank] ?? { title: "", description: "" }), [field]: value } } }));
   }
@@ -1249,18 +1284,51 @@ function RankingsAdmin({
       setSettling("");
     }
   }
+  function togglePeriod(id: string) {
+    setExpandedPeriods((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  async function viewAwardDetails(award: AdminRankingAward) {
+    if (visibleAwardId === award.id) {
+      setVisibleAwardId(null);
+      return;
+    }
+    if (awardDetails[award.id]) {
+      setVisibleAwardId(award.id);
+      return;
+    }
+    setLoadingAwardId(award.id);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/rankings/awards/${award.id}`, { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "领奖资料加载失败");
+      setAwardDetails((current) => ({ ...current, [award.id]: result.details }));
+      setVisibleAwardId(award.id);
+    } catch (detailsError) {
+      setError(detailsError instanceof Error ? detailsError.message : "领奖资料加载失败");
+    } finally {
+      setLoadingAwardId(null);
+    }
+  }
   return (
     <>
       <div className="admin-page-title">
         <div><span className="eyebrow">RANKING SETTLEMENT</span><h1>榜单结算</h1><p>只结算已结束周期；结算时保存奖励文字快照并向成员发送站内通知。</p></div>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
-      {periods.map((period) => (
+      {periods.map((period) => {
+        const expanded = expandedPeriods.has(period.id);
+        return (
         <section className="admin-panel audit-panel" key={period.id}>
           <div className="admin-panel-head">
             <div><h2>{period.type === "WEEK" ? "周更新排行榜" : "月点赞量排行榜"}</h2><p>{new Date(period.periodStart).toLocaleDateString("zh-CN")} 至 {new Date(period.periodEnd).toLocaleDateString("zh-CN")} · {period.status === "SETTLED" ? "已结算" : period.settleable ? "待结算" : "进行中"}</p></div>
-            <span className={`status-chip ${period.status === "SETTLED" ? "success" : period.settleable ? "warning" : "teal"}`}>{period.status === "SETTLED" ? "已结算" : period.settleable ? "待结算" : "进行中"}</span>
+            <div className="ranking-period-head-actions"><span className={`status-chip ${period.status === "SETTLED" ? "success" : period.settleable ? "warning" : "teal"}`}>{period.status === "SETTLED" ? "已结算" : period.settleable ? "待结算" : "进行中"}</span><button className="icon-button" aria-label={expanded ? "折叠榜单周期" : "展开榜单周期"} aria-expanded={expanded} onClick={() => togglePeriod(period.id)}><ChevronDown className={expanded ? "is-expanded" : ""} size={19} /></button></div>
           </div>
+          {expanded && <>
           {period.status === "OPEN" && period.settleable && <div className="ranking-settlement-preview"><strong>前五名预览</strong>{(period.preview ?? []).length === 0 ? <span className="field-hint">本期暂无有效成绩，结算后会发送“暂无有效成绩”通知。</span> : <><div className="ranking-preview-list">{period.preview?.map((row) => <div key={row.userId}><span>{row.rank}</span><strong>{row.nickname}</strong><small>{row.kuaishouId}</small><b>{row.value.toLocaleString()} {period.type === "WEEK" ? "个视频" : "赞"}</b></div>)}</div>{period.preview?.map((row) => <div className="ranking-reward-fields" key={`reward-${row.rank}`}><span>第 {row.rank} 名奖励</span><input value={rewards[period.id]?.[row.rank]?.title ?? ""} onChange={(event) => updateReward(period.id, row.rank, "title", event.target.value)} placeholder="奖励名称（必填）" maxLength={120} /><input value={rewards[period.id]?.[row.rank]?.description ?? ""} onChange={(event) => updateReward(period.id, row.rank, "description", event.target.value)} placeholder="奖励说明（可选）" maxLength={500} /></div>)}</>}</div>}
           {period.status === "OPEN" && period.settleable && <div className="admin-panel-actions"><button className="primary-button" disabled={settling === period.id} onClick={() => void settle(period)}><Trophy size={16} />{settling === period.id ? "结算中..." : "确认结算本期榜单"}</button></div>}
           <div className="data-table-wrap">
@@ -1273,7 +1341,7 @@ function RankingsAdmin({
                     <td>{award.value.toLocaleString()} {period.type === "WEEK" ? "个视频" : "赞"}</td>
                     <td><strong>{award.rewardTitle ?? "榜单奖励"}</strong>{award.rewardDescription && <small>{award.rewardDescription}</small>}</td>
                     <td><span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "待领奖" : award.status === "CLAIMED" ? "已填写" : award.status === "FULFILLED" ? "已完成" : award.status}</span></td>
-                    <td>{award.recipientName ? <><strong>{award.recipientName}</strong><small>{award.recipientPhone}<br />{award.recipientAddress}</small></> : "尚未填写"}</td>
+                    <td>{award.hasRecipientDetails ? <div className="ranking-recipient-summary"><span>资料已填写</span><button className="text-button" disabled={loadingAwardId === award.id} onClick={() => void viewAwardDetails(award)}>{loadingAwardId === award.id ? "读取中..." : visibleAwardId === award.id ? "收起" : "查看收货信息"}</button>{visibleAwardId === award.id && awardDetails[award.id] && <div className="ranking-recipient-details"><strong>{awardDetails[award.id].recipientName}</strong><small>{awardDetails[award.id].recipientPhone}<br />{awardDetails[award.id].recipientAddress}</small></div>}</div> : "尚未填写"}</td>
                     <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" onClick={() => onAwardUpdate(award, { status: "FULFILLED" })}>完成发放</button>}</td>
                   </tr>
                 ))}
@@ -1281,8 +1349,9 @@ function RankingsAdmin({
               </tbody>
             </table>
           </div>
+          </>}
         </section>
-      ))}
+      );})}
       {periods.length === 0 && <section className="admin-panel audit-panel"><p className="empty-copy">尚无已创建的榜单周期</p></section>}
     </>
   );
@@ -1309,6 +1378,7 @@ function AnnouncementsAdmin({
   const [actionId, setActionId] = useState("");
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [expandedAnnouncements, setExpandedAnnouncements] = useState<Set<string>>(new Set());
 
   const activeMembers = users.filter((user) => user.active && isMemberParticipantRole(user.role));
   const filteredMembers = activeMembers.filter((user) => {
@@ -1412,7 +1482,8 @@ function AnnouncementsAdmin({
           <div className="announcement-history">
             {rows.map((row) => <article className="announcement-history-row" key={row.id}>
               <div className="announcement-history-main"><div><strong>{row.title}</strong><span>{row.audience === "ALL" ? "全体成员" : `定向 ${row.recipients.length} 人`} · {formatAdminDate(row.createdAt)}</span></div><span className={`status-chip ${row.status === "PUBLISHED" ? "success" : row.status === "WITHDRAWN" ? "danger" : "warning"}`}>{row.status === "PUBLISHED" ? "已发布" : row.status === "WITHDRAWN" ? "已撤回" : "草稿"}</span></div>
-              <p>{row.status === "WITHDRAWN" ? "该公告已撤回，成员端正文已隐藏。" : row.content}</p>
+              <p className={expandedAnnouncements.has(row.id) ? "is-expanded" : ""}>{row.status === "WITHDRAWN" ? "该公告已撤回，成员端正文已隐藏。" : row.content}</p>
+              {row.status !== "WITHDRAWN" && row.content.length > 90 && <button className="text-button announcement-expand" onClick={() => setExpandedAnnouncements((current) => { const next = new Set(current); if (next.has(row.id)) next.delete(row.id); else next.add(row.id); return next; })}>{expandedAnnouncements.has(row.id) ? "收起全文" : "展开全文"}</button>}
               <div className="announcement-history-actions">{row.status === "DRAFT" && <><button className="secondary-button compact-button" onClick={() => edit(row)}>编辑</button><button className="primary-button compact-button" disabled={actionId === row.id} onClick={() => void action(row.id, "publish")}>发布</button></>}{row.status === "PUBLISHED" && <button className="danger-button compact-button" disabled={actionId === row.id} onClick={() => void action(row.id, "withdraw")}>撤回</button>}</div>
             </article>)}
             {rows.length === 0 && <div className="empty-state"><Megaphone size={25} /><strong>还没有公告</strong><span>创建草稿后会显示在这里</span></div>}
@@ -1651,6 +1722,7 @@ function SettingsAdmin() {
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const { ask, dialog } = useAdminPrompt();
 
   useEffect(() => {
     fetch("/api/admin/operation-switches", { cache: "no-store" })
@@ -1664,6 +1736,16 @@ function SettingsAdmin() {
   }, []);
 
   async function toggle(row: OperationSwitchRow) {
+    const nextState = row.enabled ? "暂停" : "开启";
+    const confirmed = await ask({
+      title: `${nextState}${row.label}`,
+      label: "确认运营开关变更",
+      description: `变更前：${row.enabled ? "已开启" : "已暂停"}\n变更后：${row.enabled ? "已暂停" : "已开启"}\n影响：${row.description}`,
+      confirmationOnly: true,
+      required: false,
+      confirmLabel: `确认${nextState}`,
+    });
+    if (confirmed === null) return;
     setSavingKey(row.key);
     setError("");
     try {
@@ -1710,6 +1792,7 @@ function SettingsAdmin() {
           <a className="secondary-button" href="/api/admin/exports/audit"><Download size={16} />审计 CSV</a>
         </div>
       </section>
+      {dialog}
     </>
   );
 }
@@ -1718,12 +1801,12 @@ function auditRoleLabel(role: string) {
   return role === "ADMIN" ? "管理员" : role === "REVIEWER" ? "审核员" : "成员";
 }
 
-function AdminMobileNav({ active, open, onClose, onChange }: { active: AdminSection; open: boolean; onClose: () => void; onChange: (section: AdminSection) => void }) {
+function AdminMobileNav({ active, open, pendingVideos, pendingOrders, onClose, onChange, onLogout }: { active: AdminSection; open: boolean; pendingVideos: number; pendingOrders: number; onClose: () => void; onChange: (section: AdminSection) => void; onLogout: () => void }) {
   if (!open) return null;
-  const items: Array<{ id: AdminSection; label: string }> = [
-    { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉" }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单" }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "birthdays", label: "生日运营" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
+  const items: Array<{ id: AdminSection; label: string; badge?: number }> = [
+    { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉", badge: pendingVideos }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单", badge: pendingOrders }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "birthdays", label: "生日运营" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
   ];
-  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}>{item.label}</button>)}</nav></div>;
+  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}><span>{item.label}</span>{Boolean(item.badge) && <b>{item.badge}</b>}</button>)}<div className="admin-mobile-nav-footer"><button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button><button onClick={onLogout}><LogOut size={17} />退出后台</button></div></nav></div>;
 }
 
 function auditActorLabel(row: AdminAuditRow) {
@@ -1791,6 +1874,8 @@ export default function AdminPage() {
     router.replace(`/admin?${params.toString()}`, { scroll: false });
     setActive(section);
     setNavigationTarget(filter ? { section, filter } : null);
+    setMobileNavOpen(false);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
   }
   useEffect(() => {
     const syncLocation = () => {
@@ -1800,6 +1885,7 @@ export default function AdminPage() {
       setActive(section);
       const filter = params.get("filter")?.trim() || undefined;
       setNavigationTarget(filter ? { section, filter } : null);
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
     };
     syncLocation();
     window.addEventListener("popstate", syncLocation);
@@ -1861,12 +1947,12 @@ export default function AdminPage() {
         }
         if (section === "gifts") {
           const gifts = payload.gifts as { gifts?: AdminGiftRow[] };
-          const orders = payload.orders as { orders?: AdminOrderRow[]; pagination?: AdminPagination };
-          return { ...current, gifts: gifts.gifts ?? [], orders: orders.orders ?? [], ordersPagination: orders.pagination ?? emptyPagination };
+          const orders = payload.orders as { orders?: AdminOrderRow[]; pagination?: AdminPagination; statusCounts?: AdminOrderStatusCounts };
+          return { ...current, gifts: gifts.gifts ?? [], orders: orders.orders ?? [], ordersPagination: orders.pagination ?? emptyPagination, orderStatusCounts: orders.statusCounts ?? current.orderStatusCounts };
         }
         if (section === "orders") {
-          const orders = payload.orders as { orders?: AdminOrderRow[]; pagination?: AdminPagination };
-          return { ...current, orders: orders.orders ?? [], ordersPagination: orders.pagination ?? emptyPagination };
+          const orders = payload.orders as { orders?: AdminOrderRow[]; pagination?: AdminPagination; statusCounts?: AdminOrderStatusCounts };
+          return { ...current, orders: orders.orders ?? [], ordersPagination: orders.pagination ?? emptyPagination, orderStatusCounts: orders.statusCounts ?? current.orderStatusCounts };
         }
         if (section === "rankings") {
           const rankings = payload.rankings as { periods?: AdminRankingPeriod[] };
@@ -2068,6 +2154,7 @@ export default function AdminPage() {
         ...current,
         orders: input.append ? [...current.orders, ...(result.orders ?? [])] : (result.orders ?? []),
         ordersPagination: result.pagination,
+        orderStatusCounts: result.statusCounts ?? current.orderStatusCounts,
       } : current);
     } catch (loadError) {
       setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "订单记录加载失败" });
@@ -2117,7 +2204,9 @@ export default function AdminPage() {
     if (action === "reject" && !reason) return;
     const confirmed = await askAdminValue({
       title: action === "approve" ? "确认二审通过" : "确认二审驳回",
-      label: action === "approve" ? "通过后该视频不再留在待二审池。" : `将扣回 ${review.video.points.toLocaleString()} 积分，并重新核对关联挑战奖励。`,
+      label: "确认二审结果",
+      description: action === "approve" ? "通过后该视频不再留在待二审池。" : `将扣回 ${review.video.points.toLocaleString()} 积分，并重新核对关联挑战奖励。`,
+      confirmationOnly: true,
       required: false,
       confirmLabel: action === "approve" ? "确认通过" : "确认驳回",
     });
@@ -2168,7 +2257,9 @@ export default function AdminPage() {
     if (action === "revoke" && !reason) return;
     const confirmed = await askAdminValue({
       title: action === "revoke" ? "确认撤销视频奖励" : "确认重新抓取视频",
-      label: action === "revoke" ? `将扣回 ${video.points.toLocaleString()} 积分，并重新核对关联挑战奖励。` : "将把视频重新放入自动处理队列，历史记录会保留。",
+      label: "确认视频操作",
+      description: action === "revoke" ? `将扣回 ${video.points.toLocaleString()} 积分，并重新核对关联挑战奖励。` : "将把视频重新放入自动处理队列，历史记录会保留。",
+      confirmationOnly: true,
       required: false,
       confirmLabel: action === "revoke" ? "确认撤销" : "确认重抓",
     });
@@ -2238,7 +2329,9 @@ export default function AdminPage() {
     }
     const confirmed = await askAdminValue({
       title: action === "approve" ? "确认通过视频申诉" : "确认驳回视频申诉",
-      label: action === "approve" ? `将为 ${appeal.user.nickname} 入账 ${points ?? appeal.video.points ?? 0} 积分，并写入审计记录。` : "将保留原自动驳回结果，并向成员发送处理结果。",
+      label: "确认申诉结果",
+      description: action === "approve" ? `将为 ${appeal.user.nickname} 入账 ${points ?? appeal.video.points ?? 0} 积分，并写入审计记录。` : "将保留原自动驳回结果，并向成员发送处理结果。",
+      confirmationOnly: true,
       required: false,
       confirmLabel: action === "approve" ? "确认通过并入账" : "确认驳回",
     });
@@ -2273,7 +2366,9 @@ export default function AdminPage() {
     if (["fulfill", "reject", "refund"].includes(action)) {
       const confirmed = await askAdminValue({
         title: action === "fulfill" ? "确认完成订单履约" : action === "reject" ? "确认驳回订单" : "确认退款订单",
-        label: action === "fulfill" ? `将把“${order.gift.name}”标记为已履约。` : `将变更“${order.gift.name}”的订单状态${action === "reject" || action === "refund" ? "并退回积分与库存" : ""}。`,
+        label: "确认订单状态变更",
+        description: action === "fulfill" ? `变更后：将“${order.gift.name}”标记为已履约。` : `变更后：将更新“${order.gift.name}”的订单状态，并退回积分与库存。`,
+        confirmationOnly: true,
         required: false,
         confirmLabel: "确认操作",
       });
@@ -2288,6 +2383,10 @@ export default function AdminPage() {
     if (!response.ok) {
       throw new Error(result.error ?? "订单操作失败");
     }
+    const wasPending = ["PENDING", "APPROVED"].includes(order.status);
+    const isPending = ["PENDING", "APPROVED"].includes(result.order.status);
+    const wasFulfilled = order.status === "FULFILLED";
+    const isFulfilled = result.order.status === "FULFILLED";
     setData((current) => current ? {
       ...current,
         orders: current.orders.map((item) => item.id === order.id ? {
@@ -2297,11 +2396,39 @@ export default function AdminPage() {
           fulfilledAt: result.order.fulfilledAt ?? item.fulfilledAt ?? null,
         } : item),
         metrics: { ...current.metrics, pendingOrders: ["approve", "fulfill", "reject", "refund"].includes(action) && ["PENDING", "APPROVED"].includes(order.status) ? Math.max(0, current.metrics.pendingOrders - 1) : current.metrics.pendingOrders },
+        orderStatusCounts: {
+          ...current.orderStatusCounts,
+          pending: Math.max(0, current.orderStatusCounts.pending + Number(isPending) - Number(wasPending)),
+          fulfilled: Math.max(0, current.orderStatusCounts.fulfilled + Number(isFulfilled) - Number(wasFulfilled)),
+        },
     } : current);
     invalidateOverview();
     return true;
   }
   async function handleUserUpdate(user: AdminUserRow, input: { active?: boolean; role?: "MEMBER" | "REVIEWER" | "ADMIN"; guildStatus?: string }) {
+    if (input.role && input.role !== user.role) {
+      const roleLabels = { MEMBER: "普通成员", REVIEWER: "审核员", ADMIN: "管理员" };
+      const confirmed = await askAdminValue({
+        title: `变更 ${user.nickname} 的角色`,
+        label: "确认角色变更",
+        description: `变更前：${roleLabels[user.role as keyof typeof roleLabels] ?? user.role}\n变更后：${roleLabels[input.role]}\n影响：新角色会立即改变该成员可访问的后台功能与管理权限。`,
+        confirmationOnly: true,
+        required: false,
+        confirmLabel: "确认变更",
+      });
+      if (confirmed === null) return;
+    }
+    if (typeof input.active === "boolean" && input.active !== user.active) {
+      const confirmed = await askAdminValue({
+        title: `${input.active ? "启用" : "停用"} ${user.nickname} 的账号`,
+        label: "确认账号状态变更",
+        description: `变更前：${user.active ? "已启用" : "已停用"}\n变更后：${input.active ? "已启用" : "已停用"}\n影响：停用后成员将无法继续使用账号；历史积分与审计记录保留。`,
+        confirmationOnly: true,
+        required: false,
+        confirmLabel: `确认${input.active ? "启用" : "停用"}`,
+      });
+      if (confirmed === null) return;
+    }
     const response = await fetch(`/api/admin/users/${user.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -2358,7 +2485,7 @@ export default function AdminPage() {
       setAdminFeedback({ type: "error", message: result.error ?? "榜单结算失败" });
       return;
     }
-    const refreshed = await fetch("/api/admin/rankings", { cache: "no-store" });
+    const refreshed = await fetch("/api/admin/rankings?view=summary", { cache: "no-store" });
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
     setAdminFeedback({
@@ -2377,7 +2504,7 @@ export default function AdminPage() {
       setAdminFeedback({ type: "error", message: result.error ?? "奖励更新失败" });
       return;
     }
-    const refreshed = await fetch("/api/admin/rankings", { cache: "no-store" });
+    const refreshed = await fetch("/api/admin/rankings?view=summary", { cache: "no-store" });
     const rankings = await refreshed.json();
     setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current);
     setAdminFeedback({ type: "success", message: "榜单奖励状态已更新" });
@@ -2570,7 +2697,7 @@ export default function AdminPage() {
     if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} />;
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;
-    if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;
+    if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} statusCounts={data.orderStatusCounts} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;
     if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
     if (active === "challenges") return <WeeklyChallengesAdmin periods={data.weeklyChallengePeriods} onRetry={handleWeeklyChallengeRetry} onUpgrade={handleWeeklyChallengeUpgrade} />;
     if (active === "birthdays" && data.birthdays) return <BirthdayAdmin data={data.birthdays} onReload={async () => { const payload = await loadAdminSection("birthdays"); setData((current) => current ? { ...current, birthdays: payload.birthdays as BirthdayAdminData } : current); }} />;
@@ -2605,7 +2732,7 @@ export default function AdminPage() {
       </section>
       {giftEditor && <GiftEditorDialog gift={giftEditor.gift} onClose={() => setGiftEditor(null)} onSave={handleGiftSave} />}
       {activityTarget && <ActivityDrawer {...activityTarget} onClose={() => setActivityTarget(null)} />}
-      <AdminMobileNav active={active} open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} onChange={changeSection} />
+      <AdminMobileNav active={active} open={mobileNavOpen} pendingVideos={data.metrics.pendingVideos} pendingOrders={data.metrics.pendingOrders} onClose={() => setMobileNavOpen(false)} onChange={changeSection} onLogout={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />
       {adminPromptDialog}
     </main>
   );

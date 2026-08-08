@@ -135,12 +135,13 @@ test("admin modules load on demand, retry locally, and keep cross-page selection
   page.on("request", (request) => {
     if (request.method() === "POST" && new URL(request.url()).pathname.startsWith("/api/admin/orders/")) orderPosts += 1;
   });
-  await page.route("**/api/admin/orders?take=50", (route) => route.fulfill({
+  await page.route("**/api/admin/orders?take=20", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
       orders: [{ id: "order-missing", totalCost: 100, status: "PENDING", createdAt: new Date().toISOString(), hasRecipientName: false, hasRecipientPhone: false, hasRecipientAddress: false, gift: { name: "测试礼品", kind: "PHYSICAL", imageUrl: null }, user: { nickname: "资料缺失成员", kuaishouId: "missing-profile" } }],
-      pagination: { page: 1, take: 50, total: 1, pages: 1 },
+      pagination: { page: 1, take: 20, total: 1, pages: 1 },
+      statusCounts: { all: 1, pending: 1, fulfilled: 0 },
     }),
   }));
   await page.getByRole("button", { name: "兑换订单" }).click();

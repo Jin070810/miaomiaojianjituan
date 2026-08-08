@@ -3869,18 +3869,25 @@ a {
 }
 
 .gift-admin-card {
-  overflow: hidden;
+  position: relative;
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: 7px;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) 64px;
   align-items: center;
   gap: 9px;
+  background: white;
+}
+
+.gift-admin-card:has(.gift-action-menu) {
+  z-index: 20;
 }
 
 .gift-admin-card img {
   width: 64px;
   height: 64px;
+  border-radius: 6px 0 0 6px;
   object-fit: cover;
 }
 
@@ -4740,6 +4747,10 @@ a {
 
 .gift-catalog-head {
   align-items: flex-end;
+}
+
+.admin-panel.audit-panel:has(> .gift-catalog-head) {
+  overflow: visible;
 }
 
 .gift-catalog-filters {

@@ -35,3 +35,46 @@ test("admin navigation resets scroll and responsive pages do not overflow", asyn
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: `output/playwright/admin-responsive-${testInfo.project.name}.png`, fullPage: true });
 });
+
+test("gift action menu renders above neighboring cards", async ({ page }, testInfo) => {
+  await login(page, e2eIds.admin);
+
+  if (testInfo.project.name.includes("mobile")) {
+    await page.getByRole("button", { name: "打开菜单" }).click();
+    await page.getByRole("navigation", { name: "管理后台导航" }).getByRole("button", { name: "礼品管理" }).click();
+  } else {
+    await page.locator(".admin-sidebar").getByRole("button", { name: "礼品管理" }).click();
+  }
+
+  await expect(page.getByRole("heading", { name: "礼品目录" })).toBeVisible();
+  const firstCard = page.locator(".gift-admin-card").first();
+  await firstCard.getByRole("button", { name: /操作菜单/ }).click();
+
+  const menu = firstCard.locator(".gift-action-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("button")).toHaveCount(5);
+  const deleteButton = menu.getByRole("button", { name: "删除" });
+  await deleteButton.scrollIntoViewIfNeeded();
+  await expect(deleteButton).toBeVisible();
+  const geometry = await firstCard.evaluate((card) => {
+    const menuElement = card.querySelector<HTMLElement>(".gift-action-menu");
+    const lastButton = menuElement?.querySelector<HTMLElement>("button:last-child");
+    if (!menuElement || !lastButton) return null;
+    const cardRect = card.getBoundingClientRect();
+    const menuRect = menuElement.getBoundingClientRect();
+    const buttonRect = lastButton.getBoundingClientRect();
+    const hit = document.elementFromPoint(buttonRect.left + buttonRect.width / 2, buttonRect.top + buttonRect.height / 2);
+    return {
+      cardBottom: cardRect.bottom,
+      menuBottom: menuRect.bottom,
+      menuHeight: menuRect.height,
+      lastButtonReceivesPointer: hit === lastButton || lastButton.contains(hit),
+    };
+  });
+  expect(geometry).not.toBeNull();
+  expect(geometry!.menuHeight).toBeGreaterThanOrEqual(220);
+  expect(geometry!.menuBottom).toBeGreaterThan(geometry!.cardBottom);
+  expect(geometry!.lastButtonReceivesPointer).toBe(true);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: `output/playwright/admin-gift-menu-${testInfo.project.name}.png`, fullPage: false });
+});

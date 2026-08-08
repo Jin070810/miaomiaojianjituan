@@ -36,6 +36,7 @@ const actionLabels: Record<string, string> = {
   REDEMPTION_RECONCILIATION_COMPLETED: "完成订单维护对账",
   REDEMPTION_TRACKING_UPDATED: "更新快递单号",
   RANKING_AWARD_CLAIMED: "填写榜单领奖信息",
+  RANKING_AWARD_RECIPIENT_VIEWED: "查看榜单领奖资料",
   RANKING_AWARD_UPDATED: "更新榜单奖励",
   RANKING_SETTLED: "完成榜单结算",
   TRANSFER_COMPLETED: "完成积分转账",

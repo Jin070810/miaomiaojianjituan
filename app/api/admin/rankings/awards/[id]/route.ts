@@ -2,13 +2,50 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { assertSameOrigin, getClientIp } from "@/lib/security";
+import { assertSameOrigin, decryptSensitive, getClientIp } from "@/lib/security";
 import { createNotification } from "@/lib/notifications";
+import { writeAuditLog } from "@/lib/audit";
 
 const schema = z.object({
   giftId: z.string().min(1).optional(),
   status: z.enum(["FULFILLED", "EXPIRED"]).optional(),
 });
+const privateHeaders = { "Cache-Control": "private, no-store" };
+
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const admin = await requireAdmin();
+    const { id } = await context.params;
+    const details = await db.$transaction(async (tx) => {
+      const award = await tx.rankingAward.findUnique({
+        where: { id },
+        select: {
+          recipientName: true,
+          recipientPhoneEnc: true,
+          recipientAddressEnc: true,
+        },
+      });
+      if (!award) throw new Error("榜单奖励不存在");
+      await writeAuditLog(tx, {
+        actorId: admin.id,
+        action: "RANKING_AWARD_RECIPIENT_VIEWED",
+        entity: "RankingAward",
+        entityId: id,
+        afterValue: { viewed: true },
+        ip: getClientIp(request),
+      });
+      return {
+        recipientName: award.recipientName,
+        recipientPhone: award.recipientPhoneEnc ? decryptSensitive(award.recipientPhoneEnc) : null,
+        recipientAddress: award.recipientAddressEnc ? decryptSensitive(award.recipientAddressEnc) : null,
+      };
+    });
+    return NextResponse.json({ details }, { headers: privateHeaders });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "无法读取领奖资料";
+    return NextResponse.json({ error: message }, { status: message === "榜单奖励不存在" ? 404 : 403, headers: privateHeaders });
+  }
+}
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {

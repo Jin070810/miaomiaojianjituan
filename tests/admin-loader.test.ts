@@ -47,6 +47,18 @@ describe("admin section loader", () => {
     expect(paths.some((value) => value.includes("take=10000"))).toBe(false);
   });
 
+  it("loads compact order pages and ranking summaries", async () => {
+    const paths: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      paths.push(String(input));
+      return jsonResponse({});
+    }) as unknown as typeof fetch;
+    await loadAdminSection("orders", fetcher);
+    await loadAdminSection("rankings", fetcher);
+    expect(paths).toContain("/api/admin/orders?take=20");
+    expect(paths).toContain("/api/admin/rankings?view=summary");
+  });
+
   it("preserves authorization status for page-level redirect handling", async () => {
     const fetcher = vi.fn(async () => jsonResponse({ error: "无权访问" }, 403)) as unknown as typeof fetch;
     await expect(loadAdminSection("orders", fetcher)).rejects.toMatchObject({ status: 403, message: "无权访问" } satisfies Partial<AdminFetchError>);

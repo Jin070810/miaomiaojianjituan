@@ -139,6 +139,9 @@ export async function getAdminWorkbench(range: AdminWorkbenchRange, reference = 
 }
 
 const SEARCH_LIMIT = 6;
+const videoSearchStatusLabels: Record<string, string> = { APPROVED: "已到账", REJECTED: "已驳回", REVOKED: "已撤销", FAILED: "抓取失败", PROCESSING: "处理中", PENDING_REVIEW: "待审核" };
+const orderSearchStatusLabels: Record<string, string> = { PENDING: "待处理", APPROVED: "待履约", FULFILLED: "已履约", REJECTED: "已驳回", REFUNDED: "已退款" };
+const searchDate = (value: Date) => new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", timeZone: "Asia/Shanghai" }).format(value);
 
 export async function searchAdminRecords(query: string) {
   const value = query.trim();
@@ -170,8 +173,8 @@ export async function searchAdminRecords(query: string) {
     query: value,
     groups: [
       { id: "users", label: "成员", items: users.map((row) => ({ id: row.id, title: row.nickname, subtitle: `${row.kuaishouId} · ${row.active ? "启用" : "已停用"}`, section: "users", search: row.kuaishouId })) },
-      { id: "videos", label: "视频", items: videos.map((row) => ({ id: row.id, title: row.photoId ?? "未获取 photoId", subtitle: `${row.user.nickname} · ${row.status}`, section: "videos", search: row.photoId ?? row.user.kuaishouId })) },
-      { id: "orders", label: "订单", items: orders.map((row) => ({ id: row.id, title: row.gift.name, subtitle: `${row.user.nickname} · ${row.status} · ${row.id}`, section: "orders", search: row.id })) },
+      { id: "videos", label: "视频", items: videos.map((row) => ({ id: row.id, title: row.photoId ?? "未获取 photoId", subtitle: `${row.user.nickname} · ${videoSearchStatusLabels[row.status] ?? row.status} · ${searchDate(row.submittedAt)}`, section: "videos", search: row.photoId ?? row.user.kuaishouId })) },
+      { id: "orders", label: "订单", items: orders.map((row) => ({ id: row.id, title: row.gift.name, subtitle: `${row.user.nickname} · ${orderSearchStatusLabels[row.status] ?? row.status} · ${searchDate(row.createdAt)} · 尾号 ${row.id.slice(-6)}`, section: "orders", search: row.id })) },
       { id: "gifts", label: "礼品", items: gifts.map((row) => ({ id: row.id, title: row.name, subtitle: `${row.pointsCost} 积分 · 库存 ${row.stock} · ${row.active ? "在架" : "已下架"}`, section: "gifts", search: row.name })) },
     ].filter((group) => group.items.length),
   };

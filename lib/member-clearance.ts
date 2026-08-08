@@ -34,8 +34,10 @@ function isEligibleMember(user: { active: boolean; role: Role | string }) {
 async function activePolicy(tx: Tx) {
   const policy = await tx.membershipClearancePolicyVersion.findFirst({ orderBy: { version: "desc" } });
   if (policy) return policy;
-  return tx.membershipClearancePolicyVersion.create({
-    data: { version: 1, inactivityDays: CLEARANCE_DEFAULTS.inactivityDays, warningDays: [...CLEARANCE_DEFAULTS.warningDays], cooldownDays: CLEARANCE_DEFAULTS.cooldownDays },
+  return tx.membershipClearancePolicyVersion.upsert({
+    where: { version: 1 },
+    create: { version: 1, inactivityDays: CLEARANCE_DEFAULTS.inactivityDays, warningDays: [...CLEARANCE_DEFAULTS.warningDays], cooldownDays: CLEARANCE_DEFAULTS.cooldownDays },
+    update: {},
   });
 }
 
@@ -351,4 +353,4 @@ export async function listMemberClearanceAdmin() {
   };
 }
 
-export const memberClearanceInternals = { clearMember };
+export const memberClearanceInternals = { activePolicy, clearMember };

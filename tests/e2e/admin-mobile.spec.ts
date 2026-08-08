@@ -56,3 +56,54 @@ test("weekly challenge fallback status stays readable at 390x844", async ({ page
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: "output/playwright/admin-weekly-fallback-390x844.png", fullPage: true });
 });
+
+test("secondary reviews use mobile cards with visible touch actions", async ({ page }) => {
+  await page.route("**/api/reviewer/video-reviews?take=50", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      reviews: [{
+        id: "mobile-review-1",
+        status: "PENDING",
+        reviewReason: null,
+        assignedAt: new Date().toISOString(),
+        reviewedAt: null,
+        createdAt: new Date().toISOString(),
+        reviewer: { id: "reviewer-1", kuaishouId: "reviewer-1", nickname: "测试审核员", role: "REVIEWER" },
+        video: {
+          id: "mobile-video-1",
+          sourceUrl: "https://www.kuaishou.com/short-video/mobile-review-photo",
+          likes: 860,
+          points: 100,
+          status: "APPROVED",
+          reviewReason: null,
+          fetchedOwner: "周挑战测试成员",
+          submittedNickname: "周挑战测试成员",
+          photoId: "mobile-review-photo",
+          submittedAt: new Date().toISOString(),
+          views: 1200,
+          commentCount: 12,
+          caption: "移动端二审卡片测试视频",
+          coverUrl: null,
+          user: { kuaishouId: e2eIds.member, nickname: "周挑战测试成员" },
+        },
+      }],
+      pagination: { page: 1, take: 50, total: 1, pages: 1 },
+    }),
+  }));
+  await page.route("**/api/admin/videos?take=50", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ videos: [], pagination: { page: 1, take: 50, total: 0, pages: 1 } }) }));
+  await page.route("**/api/admin/video-appeals?take=50", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ appeals: [], pagination: { page: 1, take: 50, total: 0, pages: 1 } }) }));
+  await login(page, e2eIds.admin);
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  await page.getByRole("navigation", { name: "管理后台导航" }).getByRole("button", { name: /视频与申诉/ }).click();
+  const card = page.locator(".secondary-review-card");
+  await expect(card).toBeVisible();
+  await expect(page.locator(".secondary-review-table")).toBeHidden();
+  await expect(card.getByRole("button", { name: "通过" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "驳回" })).toBeVisible();
+  const heights = await card.locator(".secondary-review-card-actions button").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+  expect(heights.every((height) => height >= 44)).toBe(true);
+  expect(await card.getByRole("button", { name: "通过" }).evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe("rgb(255, 255, 255)");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: "output/playwright/admin-secondary-review-390x844.png", fullPage: true });
+});

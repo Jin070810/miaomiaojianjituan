@@ -18,9 +18,10 @@ const settleSchema = z.object({
   }),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await requireAdmin();
+    const summaryView = new URL(request.url).searchParams.get("view") === "summary";
     const periods = await db.rankingPeriod.findMany({
       include: {
         entries: { orderBy: { rank: "asc" }, take: 100, include: { user: { select: { kuaishouId: true, nickname: true } } } },
@@ -38,13 +39,21 @@ export async function GET() {
         ...period,
         preview: previewById.get(period.id)?.rankings ?? [],
         settleable: candidateIds.has(period.id),
-        awards: period.awards.map(({ recipientPhoneEnc, recipientAddressEnc, ...award }) => ({
+        awards: period.awards.map(({ recipientName, recipientPhoneEnc, recipientAddressEnc, ...award }) => summaryView ? ({
           ...award,
+          recipientName: null,
+          recipientPhone: null,
+          recipientAddress: null,
+          hasRecipientDetails: Boolean(recipientName && recipientPhoneEnc && recipientAddressEnc),
+        }) : ({
+          ...award,
+          recipientName,
           recipientPhone: recipientPhoneEnc ? decryptSensitive(recipientPhoneEnc) : null,
           recipientAddress: recipientAddressEnc ? decryptSensitive(recipientAddressEnc) : null,
+          hasRecipientDetails: Boolean(recipientName && recipientPhoneEnc && recipientAddressEnc),
         })),
       })),
-    });
+    }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }

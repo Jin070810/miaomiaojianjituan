@@ -10,3 +10,15 @@ export function canonicalKuaishouVideoUrl(photoId: string | null | undefined) {
   if (!normalizedPhotoId || !PHOTO_ID_PATTERN.test(normalizedPhotoId)) return null;
   return `https://www.kuaishou.com/short-video/${normalizedPhotoId}`;
 }
+
+export function canonicalDouyinVideoUrl(photoId: string | null | undefined) {
+  const normalizedPhotoId = photoId?.trim();
+  if (!normalizedPhotoId || !/^\d+$/.test(normalizedPhotoId)) return null;
+  return `https://www.douyin.com/video/${normalizedPhotoId}`;
+}
+
+export function canonicalVideoUrl(sourceKind: string | null | undefined, photoId: string | null | undefined) {
+  return sourceKind?.startsWith("douyin-")
+    ? canonicalDouyinVideoUrl(photoId)
+    : canonicalKuaishouVideoUrl(photoId);
+}

@@ -36,7 +36,7 @@ CMD ["node", "server.js"]
 FROM node:22-alpine AS worker
 ARG APP_COMMIT_SHA
 ARG APP_BUILD_TIME
-RUN apk add --no-cache curl
+RUN apk add --no-cache chromium curl nss freetype harfbuzz ca-certificates ttf-freefont
 WORKDIR /app
 ENV NODE_ENV=production
 ENV APP_COMMIT_SHA=$APP_COMMIT_SHA

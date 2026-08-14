@@ -3,7 +3,7 @@
 import { AlertTriangle, ArrowLeft, Check, ChevronDown, ExternalLink, RefreshCw, ShieldCheck, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { canonicalKuaishouVideoUrl } from "@/lib/kuaishou-url";
+import { canonicalVideoUrl } from "@/lib/kuaishou-url";
 
 type ReviewStatus = "PENDING" | "APPROVED" | "REJECTED";
 type Pagination = { page: number; take: number; total: number; pages: number };
@@ -18,6 +18,7 @@ type SecondaryReview = {
   video: {
     id: string;
     sourceUrl: string;
+    sourceKind: string;
     photoId: string | null;
     likes: number | null;
     points: number;
@@ -40,7 +41,7 @@ function formatDate(value: string | null) {
 }
 
 function videoHref(review: SecondaryReview) {
-  return canonicalKuaishouVideoUrl(review.video.photoId) ?? review.video.sourceUrl;
+  return canonicalVideoUrl(review.video.sourceKind, review.video.photoId) ?? review.video.sourceUrl;
 }
 
 export default function ReviewerPage() {

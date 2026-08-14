@@ -2,6 +2,8 @@ import { Queue } from "bullmq";
 import { Prisma } from "@prisma/client";
 import { db } from "./db";
 import { fetchKuaishouVideo } from "./kuaishou-fetch";
+import { fetchDouyinVideo, closeDouyinBrowser } from "./douyin-fetch";
+import { isDouyinSourceKind } from "./douyin";
 import { videoEligibilityError } from "./kuaishou";
 import { creditVideoReward } from "./points";
 import { getVideoPointRule } from "./point-rules";
@@ -80,7 +82,9 @@ export async function processVideoSubmission(videoId: string) {
   const pointRule = await getVideoPointRule();
     let fetched;
     try {
-      fetched = await fetchKuaishouVideo(video.sourceUrl, video.submittedNickname, pointRule);
+      fetched = isDouyinSourceKind(video.sourceKind)
+        ? await fetchDouyinVideo(video.sourceUrl, video.submittedNickname, pointRule)
+        : await fetchKuaishouVideo(video.sourceUrl, video.submittedNickname, pointRule);
     } catch (error) {
       return autoRejectVideo(
         video.id,
@@ -108,6 +112,7 @@ export async function processVideoSubmission(videoId: string) {
       rawPayload: {
         sourceUrl: fetched.source.sourceUrl,
         ownerMatchMethod: fetched.ownerMatchMethod,
+        ...("rawPayload" in fetched ? fetched.rawPayload : {}),
       },
     };
     if (duplicate) {
@@ -260,5 +265,7 @@ export async function closeVideoQueue() {
   if (!current) return;
   await current.close();
 }
+
+export { closeDouyinBrowser };
 
 export { connection };

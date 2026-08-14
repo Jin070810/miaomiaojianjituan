@@ -1636,7 +1636,7 @@ function SubmitDialog({ onClose, onComplete }: { onClose: () => void; onComplete
       }
       setLink(clipboardText);
       if (clipboardText.length > 2000) {
-        setError("分享文案超过 2,000 字，请只保留包含快手链接的部分");
+        setError("分享文案超过 2,000 字，请只保留包含快手或抖音链接的部分");
       }
     } catch {
       setError("没能读取剪贴板，请长按输入框粘贴链接");
@@ -1663,19 +1663,19 @@ function SubmitDialog({ onClose, onComplete }: { onClose: () => void; onComplete
     }
   }
   return (
-    <ModalShell title="提交直播切片" eyebrow="把快手分享内容粘贴到这里" onClose={onClose}>
+    <ModalShell title="提交直播切片" eyebrow="把快手或抖音分享内容粘贴到这里" onClose={onClose}>
       {!submitted ? (
         <>
-          <p className="modal-lead">粘贴快手链接或整段分享内容，我们会帮你找到视频并检查点赞数。</p>
+          <p className="modal-lead">粘贴快手或抖音链接、整段分享内容，我们会帮你找到视频并检查点赞数。</p>
           <div className="field">
-            <label htmlFor="video-link">快手链接或分享内容</label>
+            <label htmlFor="video-link">快手或抖音链接或分享内容</label>
             <div className="input-with-icon">
               <Link2 size={18} />
               <textarea
                 id="video-link"
                 value={link}
                 onChange={(event) => setLink(event.target.value)}
-                placeholder="粘贴快手分享链接或分享文案"
+                placeholder="粘贴快手或抖音分享链接或分享文案"
                 rows={4}
                 maxLength={2000}
               />
@@ -1683,7 +1683,7 @@ function SubmitDialog({ onClose, onComplete }: { onClose: () => void; onComplete
                 <ClipboardPaste size={14} /> {pasting ? "读取中" : "粘贴"}
               </button>
             </div>
-            <span className="field-hint">短链接、长链接和整段分享内容都可以。切片需要在 7 天内发布，并且至少有 200 个赞。</span>
+            <span className="field-hint">快手、抖音的短链接、长链接和整段分享内容都可以。切片需要在 7 天内发布，并且至少有 200 个赞。</span>
             <span className={`field-hint ${link.length > 2000 ? "negative-text" : ""}`}>{link.length.toLocaleString()} / 2,000 字</span>
           </div>
           <div className="rule-notice">

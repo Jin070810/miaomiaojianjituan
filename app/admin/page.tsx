@@ -50,7 +50,7 @@ import { AdminGlobalSearch } from "./modules/admin-search";
 import { ActivityDrawer } from "./modules/activity-drawer";
 import { BirthdayAdmin, type BirthdayAdminData } from "./modules/birthday-admin";
 import { isMemberParticipantRole } from "@/lib/member-roles";
-import { canonicalKuaishouVideoUrl } from "@/lib/kuaishou-url";
+import { canonicalVideoUrl } from "@/lib/kuaishou-url";
 import {
   DEFAULT_GIFT_CATEGORIES,
   inferGiftCategory,
@@ -63,6 +63,7 @@ import {
 type AdminVideo = {
   id: string;
   sourceUrl: string;
+  sourceKind: string;
   likes: number | null;
   points: number;
   status: string;
@@ -632,12 +633,12 @@ function AuditTable({ rows, compact = false, onAction, onActivity }: { rows: Adm
         <thead><tr><th>视频与成员</th><th>点赞</th><th>奖励积分</th><th>状态</th>{!compact && <th>结果说明</th>}<th>提交时间</th><th /></tr></thead>
         <tbody>
           {(compact ? rows.slice(0, 4) : rows).map((row) => {
-            const href = canonicalKuaishouVideoUrl(row.photoId);
+            const href = canonicalVideoUrl(row.sourceKind, row.photoId);
             const reason = row.reviewReason?.trim() || (row.status === "APPROVED" ? "自动审核通过" : "历史记录未保存具体原因");
             return (
               <tr key={row.id}>
                 <td><div className="table-main"><span className="table-thumb">▶</span><div>{href
-                  ? <a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${row.user.nickname}已核验的快手视频`} title="在新标签页打开已核验的快手视频"><strong>{row.sourceUrl}</strong><ExternalLink size={13} /></a>
+                  ? <a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${row.user.nickname}已核验的视频`} title="在新标签页打开已核验的视频"><strong>{row.sourceUrl}</strong><ExternalLink size={13} /></a>
                   : <strong className="video-source-invalid" title="该历史记录没有可核验的视频 ID，无法提供跳转">{row.sourceUrl}</strong>}<small>{row.user.nickname} · {row.user.kuaishouId}</small></div></div></td>
                 <td>{row.likes?.toLocaleString() ?? "未获取"}</td><td className={row.status === "APPROVED" && row.points > 0 ? "positive-text" : ""}>{row.status === "APPROVED" && row.points > 0 ? `+${row.points.toLocaleString()}` : "未入账"}</td>
                 <td><span className={`status-chip ${row.status === "APPROVED" ? "success" : row.status === "FAILED" ? "warning" : "danger"}`}>{videoStatusLabel(row.status)}</span></td>
@@ -770,10 +771,10 @@ function SecondaryReviewsAdmin({
         <div className="admin-panel-head"><div><h2>{labels[filter]}</h2><p>共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页；驳回会自动扣回视频积分</p></div></div>
         <div className="data-table-wrap secondary-review-table"><table className="data-table"><thead><tr><th>成员与视频</th><th>数据</th><th>审核员</th><th>状态</th><th>时间</th><th /></tr></thead><tbody>
           {rows.map((review) => {
-            const href = canonicalKuaishouVideoUrl(review.video.photoId) ?? review.video.sourceUrl;
+            const href = canonicalVideoUrl(review.video.sourceKind, review.video.photoId) ?? review.video.sourceUrl;
             return (
               <tr key={review.id}>
-                <td><div className="table-main">{review.video.coverUrl ? <span className="table-thumb video-cover-thumb"><img src={review.video.coverUrl} alt="" /></span> : <span className="table-thumb">▶</span>}<div><a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${review.video.user.nickname}的二审视频`} title="打开快手视频"><strong>{review.video.caption || review.video.sourceUrl}</strong><ExternalLink size={13} /></a><small>{review.video.user.nickname} · {review.video.user.kuaishouId}</small></div></div></td>
+                <td><div className="table-main">{review.video.coverUrl ? <span className="table-thumb video-cover-thumb"><img src={review.video.coverUrl} alt="" /></span> : <span className="table-thumb">▶</span>}<div><a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${review.video.user.nickname}的二审视频`} title="打开视频"><strong>{review.video.caption || review.video.sourceUrl}</strong><ExternalLink size={13} /></a><small>{review.video.user.nickname} · {review.video.user.kuaishouId}</small></div></div></td>
                 <td><strong>{review.video.likes?.toLocaleString() ?? "未获取"} 赞</strong><small>{review.video.points.toLocaleString()} 积分 · photoId {review.video.photoId ?? "未获取"}</small></td>
                 <td>{review.reviewer ? <><span>{review.reviewer.nickname}</span><small>{review.reviewer.kuaishouId}</small></> : <span className="status-chip warning">未分配</span>}</td>
                 <td><span className={`status-chip ${review.status === "APPROVED" ? "success" : review.status === "REJECTED" ? "danger" : "warning"}`}>{labels[review.status]}</span>{review.reviewReason && <small>{review.reviewReason}</small>}</td>
@@ -790,7 +791,7 @@ function SecondaryReviewsAdmin({
         </tbody></table></div>
         <div className="secondary-review-cards">
           {rows.map((review) => {
-            const href = canonicalKuaishouVideoUrl(review.video.photoId) ?? review.video.sourceUrl;
+            const href = canonicalVideoUrl(review.video.sourceKind, review.video.photoId) ?? review.video.sourceUrl;
             return <article className="secondary-review-card" key={`mobile-${review.id}`}><div className="secondary-review-card-head">{review.video.coverUrl ? <img src={review.video.coverUrl} alt="" /> : <span className="table-thumb">▶</span>}<div><a href={href} target="_blank" rel="noopener noreferrer"><strong>{review.video.caption || "查看视频"}</strong><ExternalLink size={13} /></a><small>{review.video.user.nickname} · {review.video.user.kuaishouId}</small></div><span className={`status-chip ${review.status === "APPROVED" ? "success" : review.status === "REJECTED" ? "danger" : "warning"}`}>{labels[review.status]}</span></div><dl><div><dt>点赞</dt><dd>{review.video.likes?.toLocaleString() ?? "未获取"}</dd></div><div><dt>积分</dt><dd>{review.video.points.toLocaleString()}</dd></div><div><dt>审核员</dt><dd>{review.reviewer?.nickname ?? "未分配"}</dd></div><div><dt>时间</dt><dd>{formatAdminDate(review.reviewedAt ?? review.assignedAt ?? review.createdAt)}</dd></div></dl>{review.reviewReason && <p>{review.reviewReason}</p>}<div className="secondary-review-card-actions"><button className="secondary-button" onClick={() => onActivity(review.video)}><FileText size={16} />动态</button>{review.status === "PENDING" && <button className="primary-button" onClick={() => onAction(review, "approve")}><Check size={16} />通过</button>}{review.status === "PENDING" && <button className="danger-button" onClick={() => onAction(review, "reject")}><X size={16} />驳回</button>}</div></article>;
           })}
           {rows.length === 0 && <p className="empty-copy">暂无二次审核任务</p>}

@@ -79,7 +79,7 @@ test("member primary views and sheets fit the configured mobile viewport", async
   await navigation.getByRole("button", { name: "切片", exact: true }).click();
   await page.getByRole("button", { name: "提交切片", exact: true }).click();
   const submitDialog = await expectDialogViewport(page);
-  await submitDialog.getByLabel("快手链接或分享内容").focus();
+  await submitDialog.getByLabel("快手或抖音链接或分享内容").focus();
   await expect(submitDialog.getByRole("button", { name: "提交切片", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "关闭" }).click();
 

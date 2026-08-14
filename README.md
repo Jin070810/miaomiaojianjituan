@@ -25,9 +25,11 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 正式发布由 GitHub Actions 校验已合并的 release commit，在隔离的 Actions runner 构建 App/Worker 镜像并推送 GHCR。生产服务器只按不可变 digest 拉取镜像并校验 OCI revision，不执行应用构建；镜像验证成功后才生成发布前备份、执行 migration、切换 Web/Worker 并刷新 Nginx。详细设计和耗时目标见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)。
 
-## 快手视频抓取
+## 快手与抖音视频抓取
 
-成员可以粘贴短链接、长链接或包含链接的分享文本。服务端只接受 `kuaishou.com` 域名，Worker 使用参数数组调用 `curl -sS -L -A "Mozilla/5.0" --max-time 10`，从页面源码解析 `likeCount`、`viewCount`、`photoId` 和 `userName`。
+成员可以粘贴快手或抖音的短链接、长链接或包含链接的分享文本。快手仍使用页面源码抓取；抖音短链先由 Worker 内置 Chromium 完成跳转，再监听抖音页面返回的公开视频详情/作品列表接口，从目标 `aweme_id` 对应对象的 `statistics.digg_count` 读取精确点赞数。页面上的“1.9万”等展示缩写不会直接用于积分计算，未拿到精确详情时会自动驳回，避免近似数据入账。
+
+抖音支持普通视频和图文作品，提交时记录 `aweme_id` 到现有 `photoId` 字段，后续点赞变化不回溯、不重算历史积分；同一 `photoId` 在处理中、待审核和已通过记录中仍然全局去重。Worker 镜像需要 Chromium，默认路径为 `/usr/bin/chromium`，如部署环境不同可设置 `DOUYIN_BROWSER_EXECUTABLE_PATH`。本次不需要数据库 migration。
 
 作者名会先做 NFKC 规范化、去除 emoji/符号、团名标记和常见装饰差异，再按双向包含、团名别名和有限编辑距离判断。匹配成功会自动入账并进入二次审核池；作者不一致、低赞、超期、重复、字段缺失或链接失效都会自动驳回，不进入普通人工队列。快手页面抓取使用 5 次递增退避，耗尽后才判定链接不可用。
 

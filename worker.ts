@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import "dotenv/config";
-import { connection, processVideoSubmission, recoverStaleVideoSubmissions } from "./lib/video-jobs";
+import { closeDouyinBrowser, connection, processVideoSubmission, recoverStaleVideoSubmissions } from "./lib/video-jobs";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
 import { sendOperationalAlert } from "./lib/alerts";
@@ -127,6 +127,7 @@ async function shutdown(signal: string) {
     weeklyChallengeWorker.close(),
     closeWeeklyChallengeQueue(),
     closeWorkerHealth(),
+    closeDouyinBrowser(),
     db.$disconnect(),
   ]);
   process.exit(0);

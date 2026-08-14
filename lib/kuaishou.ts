@@ -4,6 +4,7 @@ import { canonicalKuaishouVideoUrl } from "./kuaishou-url";
 export type KuaishouSourceKind = "short-link" | "long-link" | "share-text";
 
 export type NormalizedKuaishouLink = {
+  platform: "kuaishou";
   sourceUrl: string;
   requestUrl: string;
   shortCode?: string;
@@ -37,6 +38,7 @@ export function normalizeKuaishouLink(input: string): NormalizedKuaishouLink {
   const shortMatch = sourceUrl.match(SHORT_LINK_PATTERN);
   if (shortMatch) {
     return {
+      platform: "kuaishou",
       sourceUrl,
       requestUrl: `https://v.kuaishou.com/${shortMatch[1]}`,
       shortCode: shortMatch[1],
@@ -48,6 +50,7 @@ export function normalizeKuaishouLink(input: string): NormalizedKuaishouLink {
   if (longMatch) {
     const extractedUrl = `https://www.kuaishou.com/short-video/${longMatch[1]}`;
     return {
+      platform: "kuaishou",
       sourceUrl,
       requestUrl: extractedUrl,
       shortCode: longMatch[1],
@@ -58,6 +61,7 @@ export function normalizeKuaishouLink(input: string): NormalizedKuaishouLink {
   const direct = asUrl(sourceUrl);
   if (direct && /(^|\.)kuaishou\.com$/i.test(direct.hostname)) {
     return {
+      platform: "kuaishou",
       sourceUrl,
       requestUrl: direct.toString(),
       sourceKind: "long-link",

@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { normalizeKuaishouLink } from "@/lib/kuaishou";
+import { normalizeVideoLink } from "@/lib/video-links";
 import { enqueueVideo } from "@/lib/video-jobs";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     await enforceRateLimit(`video-submit:${user.id}`, 10, 60);
     const idempotencyKey = requireIdempotency(request);
     const input = schema.parse(await request.json());
-    const normalized = normalizeKuaishouLink(input.link);
+    const normalized = normalizeVideoLink(input.link);
     const existing = await db.videoSubmission.findUnique({ where: { idempotencyKey } });
     if (existing) {
       if (existing.status === "PROCESSING") {
@@ -113,7 +113,7 @@ export async function POST(request: Request) {
         if (existing) return NextResponse.json({ video: existing, duplicate: true }, { status: 200 });
       }
     }
-    const message = error instanceof z.ZodError ? "请输入快手视频链接或分享文本" : error instanceof Error ? error.message : "提交失败";
+    const message = error instanceof z.ZodError ? "请输入快手或抖音视频链接或分享文本" : error instanceof Error ? error.message : "提交失败";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

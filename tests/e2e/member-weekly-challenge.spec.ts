@@ -130,7 +130,7 @@ test("member video clipboard and submission feedback fit 390x844", async ({ page
   let dialog = page.getByRole("dialog");
   await setClipboard("success");
   await dialog.getByRole("button", { name: "粘贴" }).click();
-  await expect(dialog.getByLabel("快手链接或分享内容")).toHaveValue(/v\.kuaishou\.com\/e2e-clipboard/);
+  await expect(dialog.getByLabel("快手或抖音链接或分享内容")).toHaveValue(/v\.kuaishou\.com\/e2e-clipboard/);
   await expect(page.getByText(/\/ 2,000 字/)).toBeVisible();
 
   let releaseSubmit: (() => void) | undefined;
@@ -163,7 +163,7 @@ test("member video clipboard and submission feedback fit 390x844", async ({ page
   await expect(page.locator(".form-error")).toContainText("超过 2,000 字");
   await expect(dialog.getByRole("button", { name: "提交切片", exact: true })).toBeDisabled();
 
-  await dialog.getByLabel("快手链接或分享内容").fill("https://v.kuaishou.com/e2e-failure");
+  await dialog.getByLabel("快手或抖音链接或分享内容").fill("https://v.kuaishou.com/e2e-failure");
   await page.route("**/api/videos", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "处理队列暂时不可用" }) });

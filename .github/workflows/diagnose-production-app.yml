@@ -1,0 +1,50 @@
+name: Diagnose Production App Health
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Read production app diagnostics
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+        run: |
+          set +e
+          ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "
+            cd '$PRODUCTION_PATH'
+            echo '--- compose ps ---'
+            docker compose --env-file .env.production --profile production ps
+            echo '--- app health state ---'
+            app_container=\$(docker ps -aq --filter label=com.docker.compose.project=miaomiao-points --filter label=com.docker.compose.service=app | head -n 1)
+            if [ -n \"\$app_container\" ]; then
+              docker inspect --format '{{json .State.Health}}' \"\$app_container\"
+            fi
+            echo '--- app logs ---'
+            docker compose --env-file .env.production logs --tail=200 app
+            echo '--- worker logs ---'
+            docker compose --env-file .env.production logs --tail=120 worker
+            echo '--- nginx logs ---'
+            docker compose --env-file .env.production logs --tail=80 nginx
+            echo '--- app local health ---'
+            curl --max-time 15 -i http://127.0.0.1:3000/api/health
+          "

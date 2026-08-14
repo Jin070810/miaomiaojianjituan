@@ -27,6 +27,11 @@ on:
         required: true
         default: false
         type: boolean
+      recover_from_failed_release:
+        description: "确认当前线上是已知失败发布，允许跳过切换前健康门禁"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -163,8 +168,12 @@ jobs:
             fi
             sleep 10
           done
-          echo "当前生产环境未通过切换前健康检查，拒绝发布" >&2
-          exit 1
+          if [[ "${{ inputs.recover_from_failed_release }}" == "true" ]]; then
+            echo "::warning::当前生产环境健康检查失败；已明确确认这是已知失败发布，本次继续执行恢复切换"
+          else
+            echo "当前生产环境未通过切换前健康检查，拒绝发布" >&2
+            exit 1
+          fi
 
       - name: Configure SSH
         env:

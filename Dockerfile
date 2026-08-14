@@ -29,6 +29,10 @@ ENV APP_BUILD_TIME=$APP_BUILD_TIME
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+# Next's standalone tracer keeps the Playwright runtime because server routes
+# share the video job module; retain its registry metadata so app health checks
+# do not fail while the browser is only used by the Worker image.
+COPY --from=builder /app/node_modules/playwright-core/browsers.json ./node_modules/playwright-core/browsers.json
 COPY --from=builder /app/prisma ./prisma
 EXPOSE 3000
 CMD ["node", "server.js"]

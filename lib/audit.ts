@@ -47,6 +47,7 @@ const actionLabels: Record<string, string> = {
   MEMBER_REJOIN_REQUESTED: "提交重新加入申请",
   MEMBER_REJOIN_APPROVED: "批准重新加入申请",
   MEMBER_REJOIN_REJECTED: "驳回重新加入申请",
+  MEMBER_VOLUNTARILY_LEFT: "成员主动退团",
   VIDEO_APPROVED: "视频审核通过",
   VIDEO_APPEAL_APPROVED: "通过视频申诉",
   VIDEO_APPEAL_CREATED: "提交视频申诉",

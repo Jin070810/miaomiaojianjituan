@@ -61,7 +61,7 @@ import BirthdayView, { BirthdayEntry } from "./member/birthday-view";
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "achievements" | "birthday" | "ledger" | "transfers" | "orders";
 
-type DialogType = "submit" | "transfer" | "redeem" | "profile" | "recipient" | "password" | null;
+type DialogType = "submit" | "transfer" | "redeem" | "profile" | "recipient" | "password" | "leave" | null;
 
 type DashboardData = {
   user: {
@@ -1420,6 +1420,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
         <div className="journal-section-heading ruled"><h2>账号</h2></div>
         <div className="journal-menu">
           <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
+          <button className="danger-menu-item" aria-label="主动退团" onClick={() => onOpen("leave")}><span><WarningCircle size={19} />主动退团</span><ChevronRight size={18} /></button>
           {data.user.role === "REVIEWER" && <Link href="/reviewer" aria-label="视频二次审核台"><span><ClipboardCheck size={19} />视频二次审核台</span><ChevronRight size={18} /></Link>}
           {data.user.role === "REVIEWER" && <Link href="/password-support" aria-label="密码协助中心"><span><ShieldCheck size={19} />密码协助中心</span><ChevronRight size={18} /></Link>}
         </div>
@@ -1606,6 +1607,69 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
       <div className="field"><label htmlFor="confirm-password">确认新密码</label><input id="confirm-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></div>
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="primary-button full-button modal-submit" disabled={saving || !currentPassword || !newPassword || !confirmPassword} onClick={save}>{saving ? "保存中..." : "确认修改"}</button>
+    </ModalShell>
+  );
+}
+
+function VoluntaryExitDialog({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
+  const [reason, setReason] = useState("");
+  const [step, setStep] = useState<"reason" | "confirm">("reason");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const reasons = [
+    "对剪辑团目前的待遇不满意",
+    "因学业等原因没有时间继续剪辑",
+    "不喜欢妙妙了",
+    "其他原因",
+  ];
+
+  async function leave() {
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/member/leave", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason, confirmed: true }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "退团失败");
+      onComplete();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "退团失败");
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <ModalShell title={step === "reason" ? "主动退团" : "确认退团"} eyebrow="这项操作不需要审批" onClose={onClose}>
+      {step === "reason" ? (
+        <>
+          <p className="modal-lead">请告诉我们你想离开的原因，选择后进入二次确认。</p>
+          <div className="exit-reason-list" role="radiogroup" aria-label="退团原因">
+            {reasons.map((item) => (
+              <label key={item} className={`exit-reason-option ${reason === item ? "selected" : ""}`}>
+                <input type="radio" name="voluntary-exit-reason" value={item} checked={reason === item} onChange={() => setReason(item)} />
+                <span>{item}</span>
+              </label>
+            ))}
+          </div>
+          <button className="primary-button full-button modal-submit" disabled={!reason} onClick={() => setStep("confirm")}>继续</button>
+        </>
+      ) : (
+        <>
+          <div className="exit-warning" role="alert">
+            <strong>退团后将立即清空</strong>
+            <span>现有积分和全部兑换订单；未完成的视频也不会继续处理。账号会退出登录，此操作不能撤销。</span>
+          </div>
+          <div className="exit-selected-reason"><span>退团原因</span><strong>{reason}</strong></div>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <div className="exit-confirm-actions">
+            <button className="secondary-button full-button" disabled={submitting} onClick={() => setStep("reason")}>返回修改</button>
+            <button className="danger-button full-button" disabled={submitting} onClick={() => void leave()}>{submitting ? "处理中..." : "确认退团"}</button>
+          </div>
+        </>
+      )}
     </ModalShell>
   );
 }
@@ -2273,6 +2337,7 @@ export default function MemberApp() {
       {dialog === "profile" && <ProfileEditDialog user={dashboard.user} onClose={closeDialog} />}
       {dialog === "recipient" && <RecipientProfileDialog onClose={closeDialog} />}
       {dialog === "password" && <PasswordDialog onClose={closeDialog} />}
+      {dialog === "leave" && <VoluntaryExitDialog onClose={closeDialog} onComplete={() => { clearNotificationPromptSession(); window.location.assign("/login"); }} />}
       {clearanceOnboardingOpen && dashboard.eligibility && <ClearanceOnboardingDialog eligibility={dashboard.eligibility} onClose={() => setClearanceOnboardingOpen(false)} onConfirm={() => void acknowledgeClearanceOnboarding()} />}
     </main>
   );

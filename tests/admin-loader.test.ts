@@ -47,6 +47,20 @@ describe("admin section loader", () => {
     expect(paths.some((value) => value.includes("take=10000"))).toBe(false);
   });
 
+  it("loads the member directory and voluntary exits together for the users module", async () => {
+    const paths: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      paths.push(String(input));
+      return jsonResponse(String(input).includes("member-exits") ? { exits: [] } : { users: [] });
+    }) as unknown as typeof fetch;
+    const result = await loadAdminSection("users", fetcher);
+    expect(paths.sort()).toEqual([
+      "/api/admin/member-exits?page=1&take=50",
+      "/api/admin/users?page=1&take=50",
+    ]);
+    expect(result).toEqual({ users: { users: [] }, voluntaryExits: { exits: [] } });
+  });
+
   it("loads compact order pages and ranking summaries", async () => {
     const paths: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {

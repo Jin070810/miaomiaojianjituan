@@ -7,6 +7,7 @@ import { closeVideoQueue, getVideoQueueMetrics } from "../lib/video-jobs";
 import { checkRateLimitStore, closeRateLimitStore } from "../lib/rate-limit";
 import { checkWorkerHeartbeat, closeWorkerHealthConnection } from "../lib/worker-health";
 import { sendOperationalAlert } from "../lib/alerts";
+import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "../lib/member-clearance-operations";
 import { shanghaiWeekBounds } from "../lib/weekly-challenges";
 
 async function main() {
@@ -36,7 +37,7 @@ async function main() {
     where: { key: "WEEKLY_CHALLENGES" },
     select: { enabled: true },
   });
-  const [currentChallengePeriod, failedChallengePeriods, challengeBudgets, challengeRewardTotals, recentModelAttempts] = await Promise.all([
+  const [currentChallengePeriod, failedChallengePeriods, latestHealthyChallengePeriod, challengeBudgets, challengeRewardTotals, recentModelAttempts, memberClearance] = await Promise.all([
     db.weeklyChallengePeriod.findUnique({
       where: { periodStart: currentWeek.start },
       select: { id: true, status: true, audienceCount: true, _count: { select: { assignments: true } } },
@@ -48,6 +49,11 @@ async function main() {
       },
       select: { id: true, periodStart: true, failureReason: true },
       take: 20,
+    }),
+    db.weeklyChallengePeriod.findFirst({
+      where: { status: { in: ["READY", "ACTIVE", "CLOSED"] } },
+      orderBy: { periodStart: "desc" },
+      select: { periodStart: true },
     }),
     db.weeklyChallengePeriod.findMany({
       select: { id: true, personalRewardBudget: true },
@@ -61,7 +67,10 @@ async function main() {
       take: 3,
       select: { id: true, status: true, periodId: true, error: true },
     }),
+    getMemberClearanceOperationalSnapshot(),
   ]);
+  const unrecoveredFailedChallengePeriods = failedChallengePeriods.filter((period) =>
+    !latestHealthyChallengePeriod || period.periodStart > latestHealthyChallengePeriod.periodStart);
   const rewardTotals = new Map(challengeRewardTotals.map((row) => [row.periodId, row._sum.rewardPoints ?? 0]));
   const challengeBudgetOverflows = challengeBudgets.filter((period) =>
     (rewardTotals.get(period.id) ?? 0) > period.personalRewardBudget);
@@ -97,6 +106,7 @@ async function main() {
   `;
   const consecutiveModelFailures = recentModelAttempts.length === 3
     && recentModelAttempts.every((attempt) => attempt.status === "FAILED");
+  const memberClearanceIssues = memberClearanceOperationalIssues(memberClearance);
   const backupDirectory = path.resolve(process.env.BACKUP_DIRECTORY ?? "backups");
   const backups = fs.existsSync(backupDirectory)
     ? fs.readdirSync(backupDirectory).filter((file) => file.endsWith(".dump")).sort().reverse()
@@ -119,10 +129,11 @@ async function main() {
     ...(currentChallengePeriod && currentChallengePeriod.status === "ACTIVE"
       && currentChallengePeriod._count.assignments !== currentChallengePeriod.audienceCount
       ? [`当前周挑战覆盖异常：${currentChallengePeriod._count.assignments}/${currentChallengePeriod.audienceCount}`] : []),
-    ...(failedChallengePeriods.length ? [`近 21 天有 ${failedChallengePeriods.length} 个周挑战生成失败周期`] : []),
+    ...(unrecoveredFailedChallengePeriods.length ? [`有 ${unrecoveredFailedChallengePeriods.length} 个周挑战失败周期尚未被后续健康周期恢复`] : []),
     ...(challengeBudgetOverflows.length ? [`${challengeBudgetOverflows.length} 个周挑战周期理论奖励超出预算`] : []),
     ...(pendingChallengeReversals.length ? [`${pendingChallengeReversals.length} 笔周挑战奖励待冲正`] : []),
     ...(consecutiveModelFailures ? ["DeepSeek 最近 3 次周挑战调用连续失败"] : []),
+    ...memberClearanceIssues,
     ...(!newestBackup ? ["未找到数据库备份"] : []),
     ...(backupAgeHours !== null && backupAgeHours > Number(process.env.BACKUP_MAX_AGE_HOURS ?? 26) ? [`最新备份已 ${Math.floor(backupAgeHours)} 小时未更新`] : []),
     ...(backupHash && checksum && backupHash !== checksum ? ["最新备份 SHA-256 校验失败"] : []),
@@ -139,10 +150,12 @@ async function main() {
       enabled: weeklyChallengeSetting?.enabled ?? false,
       currentPeriod: currentChallengePeriod,
       failedPeriods: failedChallengePeriods,
+      unrecoveredFailedPeriods: unrecoveredFailedChallengePeriods,
       budgetOverflows: challengeBudgetOverflows.map((period) => period.id),
       pendingReversals: pendingChallengeReversals,
       consecutiveModelFailures,
     },
+    memberClearance,
     newestBackup,
     backupAgeHours,
     issues,

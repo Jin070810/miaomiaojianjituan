@@ -40,7 +40,13 @@ export async function loadAdminSection(section: AdminSection, fetcher: Fetcher =
     ]);
     return { reviews, appeals, videos };
   }
-  if (section === "users") return { users: await fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher) };
+  if (section === "users") {
+    const [users, voluntaryExits] = await Promise.all([
+      fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher),
+      fetchJson("/api/admin/member-exits?page=1&take=50", "主动退团记录加载失败", fetcher),
+    ]);
+    return { users, voluntaryExits };
+  }
   if (section === "points") {
     const [users, points, pointRules] = await Promise.all([
       fetchJson(buildAdminUsersPath(), "成员列表加载失败", fetcher),

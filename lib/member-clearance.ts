@@ -2,6 +2,7 @@ import { MemberEligibilityStatus, Prisma, PrismaClient, RejoinRequestStatus, Rol
 import { db } from "./db";
 import { createNotification } from "./notifications";
 import { writeAuditLog } from "./audit";
+import { getMemberClearanceOperationalSnapshot } from "./member-clearance-operations";
 
 type Tx = Prisma.TransactionClient;
 
@@ -13,6 +14,11 @@ export const CLEARANCE_DEFAULTS = {
 } as const;
 const REJOIN_RETRY_DAYS = 7;
 const DAY = 86_400_000;
+const MAINTENANCE_PAGE_SIZE = 200;
+
+type MaintenanceEligibility = Prisma.MemberEligibilityGetPayload<{ include: { policyVersion: true } }>;
+type MaintenanceRowResult = { warned: number; cleared: number };
+type MaintenanceFailure = { eligibilityId: string; error: string };
 
 function plusDays(value: Date, days: number) {
   return new Date(value.getTime() + days * DAY);
@@ -241,44 +247,86 @@ async function clearMember(eligibilityId: string, now: Date) {
   });
 }
 
-export async function runMemberClearanceMaintenance(now = new Date()) {
-  if (!(await db.$transaction((tx) => clearanceEnabled(tx)))) return { initialized: 0, warned: 0, cleared: 0 };
-  const initialized = await initialiseMemberClearanceProgram(now);
-  const rows = await db.memberEligibility.findMany({
-    where: { status: "ACTIVE", user: { active: true, role: "MEMBER" } },
-    include: { policyVersion: true },
-    orderBy: { cycleStartedAt: "asc" },
-    take: 500,
-  });
+async function processMaintenanceEligibility(row: MaintenanceEligibility, now: Date): Promise<MaintenanceRowResult> {
   let warned = 0;
-  let cleared = 0;
-  for (const row of rows) {
-    const base = row.lastOutputAt ?? row.cycleStartedAt;
-    const deadline = plusDays(base, row.policyVersion.inactivityDays);
-    if (now >= deadline) {
-      if (await clearMember(row.id, now)) cleared += 1;
-      continue;
-    }
-    const warnings = [...row.policyVersion.warningDays].sort((a, b) => b - a);
-    for (const warning of warnings) {
-      const sentAt = warning === warnings[0] ? row.warning14SentAt : row.warning3SentAt;
-      if (sentAt || now < plusDays(deadline, -warning)) continue;
-      await db.$transaction(async (tx) => {
+  const base = row.lastOutputAt ?? row.cycleStartedAt;
+  const deadline = plusDays(base, row.policyVersion.inactivityDays);
+  if (now >= deadline) {
+    return { warned: 0, cleared: await clearMember(row.id, now) ? 1 : 0 };
+  }
+  const warnings = [...row.policyVersion.warningDays].sort((a, b) => b - a);
+  for (const warning of warnings) {
+    const sentAt = warning === warnings[0] ? row.warning14SentAt : row.warning3SentAt;
+    if (sentAt || now < plusDays(deadline, -warning)) continue;
+    const sent = await db.$transaction(async (tx) => {
         const claimed = await tx.memberEligibility.updateMany({
           where: { id: row.id, ...(warning === warnings[0] ? { warning14SentAt: null } : { warning3SentAt: null }) },
           data: warning === warnings[0] ? { warning14SentAt: now } : { warning3SentAt: now },
         });
-        if (claimed.count !== 1) return;
+        if (claimed.count !== 1) return false;
         await createNotification(tx, {
           userId: row.userId, type: "MEMBER_CLEARANCE", title: "成员资格即将到期",
           body: `再过 ${warning} 天仍没有审核通过的视频，账号将被自动清退。请尽快提交有效切片。`,
           entityType: "MemberEligibility", entityId: row.id, metadata: { daysRemaining: warning, deadline: deadline.toISOString() }, dedupeKey: `member-clearance:${row.id}:warning:${warning}`,
         });
+        return true;
       });
-      warned += 1;
-    }
+    if (sent) warned += 1;
   }
-  return { initialized: initialized.initialized, warned, cleared };
+  return { warned, cleared: 0 };
+}
+
+async function runCursorMaintenance<T extends { id: string }>(input: {
+  fetchPage: (cursor: string | null) => Promise<T[]>;
+  processRow: (row: T) => Promise<MaintenanceRowResult>;
+}) {
+  let cursor: string | null = null;
+  let scanned = 0;
+  let warned = 0;
+  let cleared = 0;
+  const failures: MaintenanceFailure[] = [];
+  while (true) {
+    const rows = await input.fetchPage(cursor);
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      scanned += 1;
+      try {
+        const result = await input.processRow(row);
+        warned += result.warned;
+        cleared += result.cleared;
+      } catch (error) {
+        failures.push({
+          eligibilityId: row.id,
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        });
+      }
+    }
+    cursor = rows.at(-1)!.id;
+  }
+  return { scanned, warned, cleared, failures };
+}
+
+export async function runMemberClearanceMaintenance(now = new Date()) {
+  if (!(await db.$transaction((tx) => clearanceEnabled(tx)))) {
+    return { enabled: false, initialized: 0, scanned: 0, warned: 0, cleared: 0, failed: 0, failures: [] as MaintenanceFailure[] };
+  }
+  const initialized = await initialiseMemberClearanceProgram(now);
+  const result = await runCursorMaintenance<MaintenanceEligibility>({
+    fetchPage: (cursor) => db.memberEligibility.findMany({
+      where: { status: "ACTIVE", user: { active: true, role: "MEMBER" } },
+      include: { policyVersion: true },
+      orderBy: { id: "asc" },
+      take: MAINTENANCE_PAGE_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    }),
+    processRow: (row) => processMaintenanceEligibility(row, now),
+  });
+  return {
+    enabled: true,
+    initialized: initialized.initialized,
+    ...result,
+    failed: result.failures.length,
+  };
 }
 
 export async function getLoginClearanceStatus(userId: string) {
@@ -328,29 +376,40 @@ export async function reviewRejoin(input: { requestId: string; reviewerId: strin
 }
 
 export async function listMemberClearanceAdmin() {
-  const [policy, program, eligibilities, requests, activeMemberCount, clearedHistoryCount, currentClearanceCount, clearedMembers] = await Promise.all([
+  const autoClearEvents = await db.auditLog.findMany({
+    where: { action: "MEMBER_AUTO_CLEARED", entity: "MemberEligibility", entityId: { not: null } },
+    select: { entityId: true },
+    distinct: ["entityId"],
+  });
+  const autoClearedEligibilityIds = autoClearEvents.flatMap((event) => event.entityId ? [event.entityId] : []);
+  const [policy, program, eligibilities, requests, activeMemberCount, currentClearanceCount, clearedMembers, operations] = await Promise.all([
     getClearancePolicy(),
     db.memberClearanceProgram.findUnique({ where: { id: "default" } }),
     db.memberEligibility.findMany({ include: { user: { select: { id: true, nickname: true, kuaishouId: true, active: true } }, policyVersion: true }, orderBy: { updatedAt: "desc" }, take: 200 }),
     db.rejoinRequest.findMany({ where: { status: "PENDING" }, include: { user: { select: { nickname: true, kuaishouId: true } } }, orderBy: { requestedAt: "asc" }, take: 100 }),
     db.memberEligibility.count({ where: { status: "ACTIVE", user: { active: true, role: "MEMBER" } } }),
-    db.memberEligibility.count({ where: { clearedAt: { not: null } } }),
     db.memberEligibility.count({ where: { status: { in: ["COOLDOWN", "REJOIN_PENDING", "REJOIN_REJECTED"] } } }),
     db.memberEligibility.findMany({
-      where: { clearedAt: { not: null } },
+      where: {
+        id: { in: autoClearedEligibilityIds },
+        status: { not: "EXEMPT" },
+        clearedAt: { not: null },
+      },
       include: { user: { select: { nickname: true, kuaishouId: true, active: true } } },
       orderBy: [{ clearedAt: "desc" }, { id: "desc" }],
       take: 200,
     }),
+    getMemberClearanceOperationalSnapshot(),
   ]);
   return {
     policy,
     program,
     eligibilities,
     requests,
-    summary: { activeMemberCount, clearedHistoryCount, currentClearanceCount },
+    summary: { activeMemberCount, clearedHistoryCount: autoClearedEligibilityIds.length, currentClearanceCount },
     clearedMembers,
+    operations,
   };
 }
 
-export const memberClearanceInternals = { activePolicy, clearMember };
+export const memberClearanceInternals = { activePolicy, clearMember, runCursorMaintenance };

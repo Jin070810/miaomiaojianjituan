@@ -14,6 +14,7 @@ import {
   ensureWeeklyChallengeScheduler,
 } from "./lib/weekly-challenge-jobs";
 import { runMemberClearanceMaintenance } from "./lib/member-clearance";
+import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "./lib/member-clearance-operations";
 import { runMemberGrowthMonthlyMaintenance } from "./lib/member-achievements";
 import { runBirthdayMaintenance } from "./lib/birthdays";
 
@@ -76,7 +77,7 @@ async function maintenance() {
   if (closing || maintenanceRunning) return;
   maintenanceRunning = true;
   try {
-    const [recovery, , challengeMaintenance] = await Promise.all([
+    const [recovery, , challengeMaintenance, clearanceMaintenance] = await Promise.all([
       recoverStaleVideoSubmissions(),
       db.session.deleteMany({ where: { expiresAt: { lt: new Date() } } }),
       runWeeklyChallengeMaintenance(),
@@ -89,6 +90,35 @@ async function maintenance() {
     }
     if (recovery.found > 0) {
       console.log(`[video-worker] recovery scanned=${recovery.found} enqueued=${recovery.enqueued}`);
+    }
+    if (clearanceMaintenance.initialized || clearanceMaintenance.warned || clearanceMaintenance.cleared || clearanceMaintenance.failed) {
+      console.log("[member-clearance] maintenance", JSON.stringify({
+        initialized: clearanceMaintenance.initialized,
+        scanned: clearanceMaintenance.scanned,
+        warned: clearanceMaintenance.warned,
+        cleared: clearanceMaintenance.cleared,
+        failed: clearanceMaintenance.failed,
+      }));
+    }
+    if (clearanceMaintenance.failed) {
+      await sendOperationalAlert({
+        source: "member-clearance",
+        severity: "warning",
+        message: "成员清退维护存在单条失败",
+        details: { failed: clearanceMaintenance.failed, failures: clearanceMaintenance.failures.slice(0, 20) },
+      });
+    }
+    if (clearanceMaintenance.cleared) {
+      const snapshot = await getMemberClearanceOperationalSnapshot();
+      const issues = memberClearanceOperationalIssues(snapshot);
+      if (issues.length) {
+        await sendOperationalAlert({
+          source: "member-clearance",
+          severity: "critical",
+          message: "成员清退后数据核对失败",
+          details: { snapshot, issues },
+        });
+      }
     }
   } catch (error) {
     console.error("[worker-maintenance] failed", error);

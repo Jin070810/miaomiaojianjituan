@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { voluntarilyExitMember } from "@/lib/member-voluntary-exit";
+import { listMemberClearanceAdmin } from "@/lib/member-clearance";
+import { listVoluntaryMemberExits, voluntarilyExitMember } from "@/lib/member-voluntary-exit";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 
@@ -9,6 +10,8 @@ describe.skipIf(!enabled)("member voluntary exit database integration", () => {
   let userId = "";
   let accountId = "";
   let giftId = "";
+  let eligibilityId = "";
+  let policyId = "";
 
   beforeAll(async () => {
     const user = await db.user.create({
@@ -22,6 +25,15 @@ describe.skipIf(!enabled)("member voluntary exit database integration", () => {
     });
     userId = user.id;
     accountId = user.account!.id;
+    const latest = await db.membershipClearancePolicyVersion.aggregate({ _max: { version: true } });
+    const policy = await db.membershipClearancePolicyVersion.create({
+      data: { version: (latest._max.version ?? 0) + 1, inactivityDays: 30, warningDays: [7, 3], cooldownDays: 15 },
+    });
+    policyId = policy.id;
+    const eligibility = await db.memberEligibility.create({
+      data: { userId, policyVersionId: policyId, cycleStartedAt: new Date() },
+    });
+    eligibilityId = eligibility.id;
     const gift = await db.gift.create({ data: { name: `主动退团礼品-${suffix}`, pointsCost: 100, stock: 0 } });
     giftId = gift.id;
     await db.redemptionOrder.create({
@@ -41,9 +53,10 @@ describe.skipIf(!enabled)("member voluntary exit database integration", () => {
   });
 
   afterAll(async () => {
-    await db.auditLog.deleteMany({ where: { entityId: userId } });
+    await db.auditLog.deleteMany({ where: { entityId: { in: [userId, eligibilityId] } } });
     await db.gift.deleteMany({ where: { id: giftId } });
     await db.user.deleteMany({ where: { id: userId } });
+    await db.membershipClearancePolicyVersion.deleteMany({ where: { id: policyId } });
     await db.$disconnect();
   });
 
@@ -62,5 +75,22 @@ describe.skipIf(!enabled)("member voluntary exit database integration", () => {
     expect(await db.pointLedger.count({ where: { accountId, type: "MEMBER_VOLUNTARY_EXIT_FORFEIT" } })).toBe(1);
     expect(await db.videoSubmission.findFirstOrThrow({ where: { userId } })).toMatchObject({ status: "REJECTED", points: 0 });
     expect(await db.auditLog.findFirstOrThrow({ where: { action: "MEMBER_VOLUNTARILY_LEFT", entityId: userId } })).toMatchObject({ reason: "其他原因" });
+    expect(await db.memberEligibility.findUniqueOrThrow({ where: { id: eligibilityId } })).toMatchObject({ status: "EXEMPT", clearedAt: null });
+
+    const clearanceAdmin = await listMemberClearanceAdmin();
+    expect(clearanceAdmin.clearedMembers.some((row) => row.id === eligibilityId)).toBe(false);
+    const voluntaryExits = await listVoluntaryMemberExits({ skip: 0, take: 50, search: `voluntary-exit-${suffix}` });
+    expect(voluntaryExits.exits).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId, reason: "其他原因", forfeitedPoints: 200, clearedOrders: 1 }),
+    ]));
+
+    // A member who was auto-cleared in an older cycle still belongs only to the
+    // voluntary-exit list after their current eligibility becomes exempt.
+    await db.memberEligibility.update({ where: { id: eligibilityId }, data: { clearedAt: new Date() } });
+    await db.auditLog.create({
+      data: { action: "MEMBER_AUTO_CLEARED", entity: "MemberEligibility", entityId: eligibilityId },
+    });
+    const clearanceAfterHistoricalAutoEvent = await listMemberClearanceAdmin();
+    expect(clearanceAfterHistoricalAutoEvent.clearedMembers.some((row) => row.id === eligibilityId)).toBe(false);
   });
 });

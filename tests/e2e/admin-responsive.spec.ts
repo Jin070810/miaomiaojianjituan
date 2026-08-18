@@ -78,3 +78,81 @@ test("gift action menu renders above neighboring cards", async ({ page }, testIn
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: `output/playwright/admin-gift-menu-${testInfo.project.name}.png`, fullPage: false });
 });
+
+test("voluntary exits are separated from automatic clearance history", async ({ page }, testInfo) => {
+  await page.route("**/api/admin/member-exits?*", (route) => {
+    const search = new URL(route.request().url()).searchParams.get("search");
+    if (search === "接口失败") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "主动退团记录加载失败" }) });
+    }
+    const exits = search === "无结果" ? [] : [{
+      id: "voluntary-exit-audit-1",
+      userId: "voluntary-exit-user-1",
+      reason: "因学业等原因没有时间继续剪辑",
+      exitedAt: "2026-08-16T13:21:00.000Z",
+      forfeitedPoints: 180,
+      clearedOrders: 1,
+      restoredStockOrders: 1,
+      member: { id: "voluntary-exit-user-1", nickname: "E2E主动退团成员", kuaishouId: "e2e-voluntary-exit", active: false },
+    }];
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ exits, pagination: { page: 1, take: 50, total: exits.length, pages: exits.length ? 1 : 0 } }),
+    });
+  });
+  await page.route("**/api/admin/operation-switches", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ switches: [] }),
+  }));
+  await page.route("**/api/admin/member-clearance", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      policy: { version: 1, inactivityDays: 30, warningDays: [7, 3], cooldownDays: 15 },
+      program: { firstEnabledAt: "2026-07-31T02:38:54.174Z" },
+      eligibilities: [],
+      requests: [],
+      summary: { activeMemberCount: 381, clearedHistoryCount: 0, currentClearanceCount: 0 },
+      clearedMembers: [],
+      operations: { dueWithin7Days: 295, dueBalanceTotal: 39786, dueOpenOrders: 0, overdueActive: 0, missedWarnings: 0 },
+    }),
+  }));
+
+  await login(page, e2eIds.admin);
+  if (testInfo.project.name.includes("mobile")) {
+    await page.getByRole("button", { name: "打开菜单" }).click();
+    await page.getByRole("navigation", { name: "管理后台导航" }).getByRole("button", { name: "用户与公会" }).click();
+  } else {
+    await page.locator(".admin-sidebar").getByRole("button", { name: "用户与公会" }).click();
+  }
+  await expect(page.getByRole("heading", { name: "用户与公会" })).toBeVisible();
+  await page.getByRole("button", { name: /主动退团/ }).click();
+  await expect(page.getByRole("heading", { name: "主动退团记录" })).toBeVisible();
+  await expect(page.getByText("E2E主动退团成员")).toBeVisible();
+  await expect(page.getByText("因学业等原因没有时间继续剪辑")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: `output/playwright/admin-voluntary-exits-${testInfo.project.name}.png`, fullPage: true });
+
+  const exitSearch = page.getByPlaceholder("搜索快手 ID 或昵称");
+  await exitSearch.fill("无结果");
+  await page.getByRole("button", { name: "搜索主动退团记录" }).click();
+  await expect(page.getByText("暂无主动退团记录")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await exitSearch.fill("接口失败");
+  await page.getByRole("button", { name: "搜索主动退团记录" }).click();
+  await expect(page.getByText("主动退团记录加载失败")).toBeVisible();
+
+  if (testInfo.project.name.includes("mobile")) {
+    await page.getByRole("button", { name: "打开菜单" }).click();
+    await page.getByRole("navigation", { name: "管理后台导航" }).getByRole("button", { name: "系统设置" }).click();
+  } else {
+    await page.locator(".admin-sidebar").getByRole("button", { name: "系统设置" }).click();
+  }
+  await expect(page.getByRole("heading", { name: "自动清退与冷却名单" })).toBeVisible();
+  await expect(page.getByText("暂无自动清退成员。")).toBeVisible();
+  await expect(page.getByText("E2E主动退团成员")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});

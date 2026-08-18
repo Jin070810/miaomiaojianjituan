@@ -116,6 +116,17 @@ type AdminUserRow = {
   _count: { videos: number; redemptions: number };
 };
 
+type AdminVoluntaryExitRow = {
+  id: string;
+  userId: string | null;
+  reason: string | null;
+  exitedAt: string;
+  forfeitedPoints: number;
+  clearedOrders: number;
+  restoredStockOrders: number;
+  member: { id: string; nickname: string; kuaishouId: string; active: boolean } | null;
+};
+
 type AdminGiftRow = { id: string; name: string; kind: GiftKindValue; category: string; tags: string[]; fulfillmentFields: MembershipFieldDefinition[] | null; pointsCost: number; stock: number; imageUrl: string | null; description: string | null; active: boolean; pinned: boolean; displayOrder: number; salesCount: number };
 type GiftEditorInput = {
   name: string;
@@ -325,6 +336,7 @@ type AdminData = {
   appeals: AdminAppeal[];
   secondaryReviews: AdminSecondaryReview[];
   users: AdminUserRow[];
+  voluntaryExits: AdminVoluntaryExitRow[];
   pointUsers: AdminUserRow[];
   announcementUsers: AdminUserRow[];
   gifts: AdminGiftRow[];
@@ -339,6 +351,7 @@ type AdminData = {
   appealsPagination: AdminPagination;
   secondaryReviewsPagination: AdminPagination;
   usersPagination: AdminPagination;
+  voluntaryExitPagination: AdminPagination;
   pointUsersPagination: AdminPagination;
   ordersPagination: AdminPagination;
   orderStatusCounts: AdminOrderStatusCounts;
@@ -374,6 +387,7 @@ function initialAdminData(dashboard: {
     appeals: [],
     secondaryReviews: [],
     users: [],
+    voluntaryExits: [],
     pointUsers: [],
     announcementUsers: [],
     gifts: [],
@@ -388,6 +402,7 @@ function initialAdminData(dashboard: {
     appealsPagination: emptyPagination,
     secondaryReviewsPagination: emptyPagination,
     usersPagination: emptyPagination,
+    voluntaryExitPagination: emptyPagination,
     pointUsersPagination: emptyPagination,
     ordersPagination: emptyPagination,
     orderStatusCounts: { all: 0, pending: 0, fulfilled: 0 },
@@ -860,15 +875,42 @@ function VideoManagement({
   );
 }
 
-function UsersAdmin({ rows, pagination, onToggle, onUpdate, onResetPassword, onLoadMore, onSearch, onFilter }: { rows: AdminUserRow[]; pagination: AdminPagination; onToggle: (user: AdminUserRow) => void; onUpdate: (user: AdminUserRow, input: { role?: "MEMBER" | "REVIEWER" | "ADMIN"; guildStatus?: string }) => void; onResetPassword: (user: AdminUserRow) => void; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (filter: "all" | "joined" | "pending") => Promise<void> }) {
-  const [filter, setFilter] = useState<"all" | "joined" | "pending">("all");
+function UsersAdmin({
+  rows,
+  pagination,
+  voluntaryExits,
+  voluntaryExitPagination,
+  onToggle,
+  onUpdate,
+  onResetPassword,
+  onLoadMore,
+  onSearch,
+  onFilter,
+  onLoadMoreExits,
+  onSearchExits,
+}: {
+  rows: AdminUserRow[];
+  pagination: AdminPagination;
+  voluntaryExits: AdminVoluntaryExitRow[];
+  voluntaryExitPagination: AdminPagination;
+  onToggle: (user: AdminUserRow) => void;
+  onUpdate: (user: AdminUserRow, input: { role?: "MEMBER" | "REVIEWER" | "ADMIN"; guildStatus?: string }) => void;
+  onResetPassword: (user: AdminUserRow) => void;
+  onLoadMore: () => Promise<void>;
+  onSearch: (query: string) => Promise<void>;
+  onFilter: (filter: "all" | "joined" | "pending") => Promise<void>;
+  onLoadMoreExits: () => Promise<void>;
+  onSearchExits: (query: string) => Promise<void>;
+}) {
+  const [filter, setFilter] = useState<"all" | "joined" | "pending" | "exits">("all");
   const [query, setQuery] = useState("");
+  const [exitQuery, setExitQuery] = useState("");
   async function submitSearch() {
     await onSearch(query.trim());
   }
-  function changeFilter(next: "all" | "joined" | "pending") {
+  function changeFilter(next: "all" | "joined" | "pending" | "exits") {
     setFilter(next);
-    void onFilter(next);
+    if (next !== "exits") void onFilter(next);
   }
   return (
     <>
@@ -876,12 +918,47 @@ function UsersAdmin({ rows, pagination, onToggle, onUpdate, onResetPassword, onL
         <div><span className="eyebrow">MEMBER DIRECTORY</span><h1>用户与公会</h1><p>管理成员身份、邀请状态和积分档案。</p></div>
         <button className="primary-button"><Users size={16} />邀请成员</button>
       </div>
-      <div className="admin-tabs"><button className={filter === "all" ? "active" : ""} onClick={() => changeFilter("all")}>全部成员{filter === "all" && <span>{pagination.total}</span>}</button><button className={filter === "joined" ? "active" : ""} onClick={() => changeFilter("joined")}>已入会{filter === "joined" && <span>{pagination.total}</span>}</button><button className={filter === "pending" ? "active" : ""} onClick={() => changeFilter("pending")}>待处理{filter === "pending" && <span>{pagination.total}</span>}</button></div>
-      <section className="admin-panel audit-panel">
+      <div className="admin-tabs">
+        <button className={filter === "all" ? "active" : ""} onClick={() => changeFilter("all")}>全部成员{filter === "all" && <span>{pagination.total}</span>}</button>
+        <button className={filter === "joined" ? "active" : ""} onClick={() => changeFilter("joined")}>已入会{filter === "joined" && <span>{pagination.total}</span>}</button>
+        <button className={filter === "pending" ? "active" : ""} onClick={() => changeFilter("pending")}>待处理{filter === "pending" && <span>{pagination.total}</span>}</button>
+        <button className={filter === "exits" ? "active" : ""} onClick={() => changeFilter("exits")}>主动退团<span>{voluntaryExitPagination.total}</span></button>
+      </div>
+      {filter === "exits" ? (
+        <section className="admin-panel audit-panel voluntary-exit-panel">
+          <div className="admin-panel-head">
+            <div><h2>主动退团记录</h2><p>成员主动结束成员关系的独立审计记录，不计入自动清退与冷却名单</p></div>
+            <form className="admin-search" onSubmit={(event) => { event.preventDefault(); void onSearchExits(exitQuery.trim()); }}>
+              <Search size={16} />
+              <input value={exitQuery} onChange={(event) => setExitQuery(event.target.value)} placeholder="搜索快手 ID 或昵称" />
+              <button className="table-more" title="执行搜索" aria-label="搜索主动退团记录" type="submit"><Search size={16} /></button>
+            </form>
+          </div>
+          {voluntaryExits.length === 0 ? <p className="empty-copy">暂无主动退团记录</p> : (
+            <div className="voluntary-exit-list">
+              {voluntaryExits.map((row) => (
+                <article className="voluntary-exit-row" key={row.id}>
+                  <div className="voluntary-exit-member">
+                    <span className="table-avatar"><UserRound size={16} /></span>
+                    <div><strong>{row.member?.nickname ?? "历史成员"}</strong><small>{row.member?.kuaishouId ?? row.userId ?? "身份记录不可用"}</small></div>
+                  </div>
+                  <div className="voluntary-exit-reason"><span>退团原因</span><strong>{row.reason ?? "历史原因未记录"}</strong></div>
+                  <dl>
+                    <div><dt>清零积分</dt><dd>{row.forfeitedPoints.toLocaleString()}</dd></div>
+                    <div><dt>处理订单</dt><dd>{row.clearedOrders}</dd></div>
+                  </dl>
+                  <div className="voluntary-exit-time"><span className="status-chip neutral">主动退团</span><small>{formatAdminDate(row.exitedAt)}</small></div>
+                </article>
+              ))}
+            </div>
+          )}
+          {voluntaryExitPagination.page < voluntaryExitPagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMoreExits()}>加载更多记录 <ChevronDown size={15} /></button></div>}
+        </section>
+      ) : <section className="admin-panel audit-panel">
         <div className="admin-panel-head"><div><h2>成员列表</h2><p>显示 {rows.length} 名已加载成员，共 {pagination.total} 名，快手 ID 是唯一身份标识</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索快手 ID 或昵称" /></div><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>
         <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>角色</th><th>公会状态</th><th>当前积分</th><th>有效视频</th><th>注册时间</th><th /></tr></thead><tbody>{rows.map((user) => <tr key={user.id}><td><div className="table-main"><span className="table-avatar"><img src={user.avatarUrl || "/avatars/default.webp"} alt="" /></span><div><strong>{user.nickname}</strong><small>{user.kuaishouId}</small></div></div></td><td><select value={user.role} onChange={(event) => onUpdate(user, { role: event.target.value as "MEMBER" | "REVIEWER" | "ADMIN" })} aria-label={`${user.nickname}角色`}><option value="MEMBER">普通成员</option><option value="REVIEWER">审核员</option><option value="ADMIN">管理员</option></select></td><td><select value={user.guildStatus ?? "未设置"} onChange={(event) => onUpdate(user, { guildStatus: event.target.value })} aria-label={`${user.nickname}公会状态`}><option>未设置</option><option>已邀请</option><option>已入会</option><option>已绑定</option><option>未绑定</option></select></td><td>{(user.account?.balance ?? 0).toLocaleString()}</td><td>{user._count.videos}</td><td>{formatAdminDate(user.createdAt)}</td><td><div className="table-actions-inline"><button className="table-more" title="重置密码" aria-label={`重置${user.nickname}密码`} onClick={() => onResetPassword(user)}><KeyRound size={15} /></button><button className="table-more" title={user.active ? "停用账号" : "启用账号"} aria-label={user.active ? "停用账号" : "启用账号"} onClick={() => onToggle(user)}>{user.active ? <X size={16} /> : <Check size={16} />}</button></div></td></tr>)}{rows.length === 0 && <tr><td colSpan={7}>没有匹配的成员</td></tr>}</tbody></table></div>
         {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多成员 <ChevronDown size={15} /></button></div>}
-      </section>
+      </section>}
     </>
   );
 }
@@ -1650,6 +1727,7 @@ type ClearanceAdminData = {
   requests: Array<{ id: string; requestedAt: string; user: { nickname: string; kuaishouId: string } }>;
   summary: { activeMemberCount: number; clearedHistoryCount: number; currentClearanceCount: number };
   clearedMembers: Array<{ id: string; status: string; clearedAt: string | null; cooldownEndsAt: string | null; rejoinRetryAt: string | null; user: { nickname: string; kuaishouId: string; active: boolean } }>;
+  operations: { dueWithin7Days: number; dueBalanceTotal: number; dueOpenOrders: number; overdueActive: number; missedWarnings: number };
 };
 
 function clearanceStatusLabel(status: string) {
@@ -1701,7 +1779,11 @@ function MemberClearanceSettings() {
         <div><span>当前规则版本</span><strong>v{data.policy.version}</strong><small>{data.program?.firstEnabledAt ? `首次启用：${formatAdminDate(data.program.firstEnabledAt)}` : "尚未启用"}</small></div>
         <div><span>正在预警/计时</span><strong>{data.summary.activeMemberCount}</strong><small>活跃普通成员资格周期</small></div>
         <div><span>待审核恢复</span><strong>{data.requests.length}</strong><small>冷却结束后的申请</small></div>
+        <div><span>未来 7 天到期</span><strong>{data.operations.dueWithin7Days}</strong><small>按当前有效产出时间计算</small></div>
+        <div><span>到期成员当前积分</span><strong>{data.operations.dueBalanceTotal.toLocaleString()}</strong><small>执行时按事务内余额为准</small></div>
+        <div><span>到期成员未完成订单</span><strong>{data.operations.dueOpenOrders}</strong><small>清退时自动取消并恢复库存</small></div>
       </div>
+      {(data.operations.overdueActive > 0 || data.operations.missedWarnings > 0) && <p className="form-error" role="alert">执行异常：{data.operations.overdueActive} 人已到期未清退，{data.operations.missedWarnings} 人预警未按时发送。系统巡检已同步告警。</p>}
       <div className="admin-form-grid">
         <label>无产出清退天数<input type="number" min={1} value={form.inactivityDays} onChange={(event) => setForm({ ...form, inactivityDays: Number(event.target.value) })} /></label>
         <label>首次预警（剩余天数）<input type="number" min={1} value={form.warning14} onChange={(event) => setForm({ ...form, warning14: Number(event.target.value) })} /></label>
@@ -1711,9 +1793,9 @@ function MemberClearanceSettings() {
       <div className="admin-panel-actions"><button className="secondary-button" disabled={saving} onClick={() => void save()}>{saving ? "保存中..." : "创建后续周期规则"}</button></div>
       <h3>重新加入申请</h3>
       {data.requests.length === 0 ? <p className="empty-copy">暂无待审核申请。</p> : <div className="journal-menu">{data.requests.map((row) => <article className="password-support-request" key={row.id}><div><strong>{row.user.nickname}</strong><small>{row.user.kuaishouId} · 申请于 {formatAdminDate(row.requestedAt)}</small></div><div className="table-actions-inline"><button className="secondary-button compact-button" disabled={saving} onClick={() => void review(row.id, "REJECT")}>驳回</button><button className="primary-button compact-button" disabled={saving} onClick={() => void review(row.id, "APPROVE")}>恢复资格</button></div></article>)}</div>}
-      <h3>已清退与冷却名单</h3>
-      <p className="empty-copy">累计清退 {data.summary.clearedHistoryCount} 人；当前处于冷却或等待恢复状态 {data.summary.currentClearanceCount} 人。展示最近 200 条记录。</p>
-      {data.clearedMembers.length === 0 ? <p className="empty-copy">暂无成员被清退。</p> : <div className="journal-menu">{data.clearedMembers.map((row) => <article className="password-support-request" key={row.id}><div><strong>{row.user.nickname}</strong><small>{row.user.kuaishouId} · 清退于 {row.clearedAt ? formatAdminDate(row.clearedAt) : "—"}</small><small>{row.status === "COOLDOWN" && row.cooldownEndsAt ? `冷却至 ${formatAdminDate(row.cooldownEndsAt)}` : row.status === "REJOIN_REJECTED" && row.rejoinRetryAt ? `可再次申请：${formatAdminDate(row.rejoinRetryAt)}` : ""}</small></div><span className={`status-chip ${row.status === "ACTIVE" ? "success" : "warning"}`}>{clearanceStatusLabel(row.status)}</span></article>)}</div>}
+      <h3>自动清退与冷却名单</h3>
+      <p className="empty-copy">累计自动清退 {data.summary.clearedHistoryCount} 人；当前处于冷却或等待恢复状态 {data.summary.currentClearanceCount} 人。主动退团记录请前往“用户与公会”查看。</p>
+      {data.clearedMembers.length === 0 ? <p className="empty-copy">暂无自动清退成员。</p> : <div className="journal-menu">{data.clearedMembers.map((row) => <article className="password-support-request" key={row.id}><div><strong>{row.user.nickname}</strong><small>{row.user.kuaishouId} · 自动清退于 {row.clearedAt ? formatAdminDate(row.clearedAt) : "—"}</small><small>{row.status === "COOLDOWN" && row.cooldownEndsAt ? `冷却至 ${formatAdminDate(row.cooldownEndsAt)}` : row.status === "REJOIN_REJECTED" && row.rejoinRetryAt ? `可再次申请：${formatAdminDate(row.rejoinRetryAt)}` : ""}</small></div><span className={`status-chip ${row.status === "ACTIVE" ? "success" : "warning"}`}>{clearanceStatusLabel(row.status)}</span></article>)}</div>}
     </>}
   </section>;
 }
@@ -1858,6 +1940,7 @@ export default function AdminPage() {
   const [secondaryReviewStatus, setSecondaryReviewStatus] = useState<"PENDING" | "APPROVED" | "REJECTED">("PENDING");
   const [appealSearch, setAppealSearch] = useState("");
   const [userFilters, setUserFilters] = useState({ search: "", guild: "" });
+  const [voluntaryExitSearch, setVoluntaryExitSearch] = useState("");
   const [pointUserSearch, setPointUserSearch] = useState("");
   const [orderFilters, setOrderFilters] = useState({ search: "", status: "" });
   const [auditSearch, setAuditSearch] = useState("");
@@ -1938,7 +2021,14 @@ export default function AdminPage() {
         }
         if (section === "users") {
           const users = payload.users as { users?: AdminUserRow[]; pagination?: AdminPagination };
-          return { ...current, users: users.users ?? [], usersPagination: users.pagination ?? emptyPagination };
+          const voluntaryExits = payload.voluntaryExits as { exits?: AdminVoluntaryExitRow[]; pagination?: AdminPagination };
+          return {
+            ...current,
+            users: users.users ?? [],
+            usersPagination: users.pagination ?? emptyPagination,
+            voluntaryExits: voluntaryExits.exits ?? [],
+            voluntaryExitPagination: voluntaryExits.pagination ?? emptyPagination,
+          };
         }
         if (section === "points") {
           const users = payload.users as { users?: AdminUserRow[]; pagination?: AdminPagination };
@@ -2117,6 +2207,28 @@ export default function AdminPage() {
   async function loadMoreUsers() {
     if (!data || data.usersPagination.page >= data.usersPagination.pages) return;
     await loadUsers({ page: data.usersPagination.page + 1, append: true });
+  }
+  async function loadVoluntaryExits(input: { page?: number; search?: string; append?: boolean }) {
+    if (!data) return;
+    const search = input.search ?? voluntaryExitSearch;
+    const page = input.page ?? 1;
+    const params = new URLSearchParams({ page: String(page), take: String(data.voluntaryExitPagination.take) });
+    if (search) params.set("search", search);
+    try {
+      const result = await fetchAdminPage(`/api/admin/member-exits?${params}`, "主动退团记录加载失败");
+      setVoluntaryExitSearch(search);
+      setData((current) => current ? {
+        ...current,
+        voluntaryExits: input.append ? [...current.voluntaryExits, ...(result.exits ?? [])] : (result.exits ?? []),
+        voluntaryExitPagination: result.pagination,
+      } : current);
+    } catch (loadError) {
+      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "主动退团记录加载失败" });
+    }
+  }
+  async function loadMoreVoluntaryExits() {
+    if (!data || data.voluntaryExitPagination.page >= data.voluntaryExitPagination.pages) return;
+    await loadVoluntaryExits({ page: data.voluntaryExitPagination.page + 1, append: true });
   }
   async function loadPointUsers(input: { page?: number; search?: string; append?: boolean }) {
     if (!data) return;
@@ -2695,7 +2807,7 @@ export default function AdminPage() {
       return <AdminModuleState loading={Boolean(status.loading)} error={status.error} onRetry={() => void ensureSectionLoaded(active, true)} />;
     }
     if (active === "videos") return <VideoManagement secondaryReviews={data.secondaryReviews} videos={data.videos} appeals={data.appeals} secondaryReviewsPagination={data.secondaryReviewsPagination} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onSecondaryReviewAction={handleSecondaryReviewAction} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreSecondaryReviews={loadMoreSecondaryReviews} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onFilterSecondaryReviews={(status) => loadSecondaryReviews({ status })} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} onVideoActivity={(video) => setActivityTarget({ entity: "VideoSubmission", entityId: video.id, title: video.photoId ?? `${video.user.nickname} 的视频` })} />;
-    if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} />;
+    if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} voluntaryExits={data.voluntaryExits} voluntaryExitPagination={data.voluntaryExitPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} onLoadMoreExits={loadMoreVoluntaryExits} onSearchExits={(search) => loadVoluntaryExits({ search })} />;
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} statusCounts={data.orderStatusCounts} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;

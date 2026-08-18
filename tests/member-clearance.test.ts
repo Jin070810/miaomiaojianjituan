@@ -24,4 +24,24 @@ describe("member clearance policy", () => {
     await memberClearanceInternals.activePolicy(tx as never);
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { version: 1 }, update: {} }));
   });
+
+  it("scans every cursor page and isolates a single member failure", async () => {
+    const rows = Array.from({ length: 501 }, (_, index) => ({ id: `eligibility-${String(index + 1).padStart(3, "0")}` }));
+    const visited: string[] = [];
+    const result = await memberClearanceInternals.runCursorMaintenance({
+      fetchPage: async (cursor) => {
+        const start = cursor ? rows.findIndex((row) => row.id === cursor) + 1 : 0;
+        return rows.slice(start, start + 200);
+      },
+      processRow: async (row) => {
+        visited.push(row.id);
+        if (row.id === "eligibility-250") throw new Error("isolated failure");
+        return { warned: 0, cleared: 1 };
+      },
+    });
+
+    expect(visited).toHaveLength(501);
+    expect(result).toMatchObject({ scanned: 501, cleared: 500, warned: 0 });
+    expect(result.failures).toEqual([{ eligibilityId: "eligibility-250", error: "isolated failure" }]);
+  });
 });

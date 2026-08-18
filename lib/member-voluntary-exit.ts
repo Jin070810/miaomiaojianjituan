@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { db } from "./db";
 import { isMemberParticipantRole } from "./member-roles";
 import { writeAuditLog } from "./audit";
@@ -16,6 +17,60 @@ const activeVideoStatuses = ["PROCESSING", "PENDING_REVIEW", "FAILED"] as const;
 
 function isVoluntaryExitReason(value: string): value is VoluntaryExitReason {
   return (VOLUNTARY_EXIT_REASONS as readonly string[]).includes(value);
+}
+
+function jsonNumber(value: Prisma.JsonValue | null, key: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const candidate = value[key];
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : 0;
+}
+
+export async function listVoluntaryMemberExits(input: { skip: number; take: number; search?: string }) {
+  const search = input.search?.trim();
+  const where: Prisma.AuditLogWhereInput = {
+    action: "MEMBER_VOLUNTARILY_LEFT",
+    ...(search ? {
+      actor: {
+        is: {
+          OR: [
+            { kuaishouId: { contains: search, mode: "insensitive" } },
+            { nickname: { contains: search, mode: "insensitive" } },
+          ],
+        },
+      },
+    } : {}),
+  };
+  const [rows, total] = await Promise.all([
+    db.auditLog.findMany({
+      where,
+      select: {
+        id: true,
+        entityId: true,
+        reason: true,
+        beforeValue: true,
+        afterValue: true,
+        createdAt: true,
+        actor: { select: { id: true, nickname: true, kuaishouId: true, active: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: input.skip,
+      take: input.take,
+    }),
+    db.auditLog.count({ where }),
+  ]);
+  return {
+    exits: rows.map((row) => ({
+      id: row.id,
+      userId: row.entityId,
+      reason: row.reason,
+      exitedAt: row.createdAt,
+      forfeitedPoints: jsonNumber(row.beforeValue, "balance"),
+      clearedOrders: jsonNumber(row.beforeValue, "orderCount"),
+      restoredStockOrders: jsonNumber(row.afterValue, "restoredStockOrderCount"),
+      member: row.actor,
+    })),
+    total,
+  };
 }
 
 export async function voluntarilyExitMember(input: {
@@ -119,7 +174,8 @@ export async function voluntarilyExitMember(input: {
     await tx.session.deleteMany({ where: { userId: input.userId } });
     await tx.memberEligibility.updateMany({
       where: { userId: input.userId },
-      data: { status: "EXEMPT", clearedAt: now, cooldownEndsAt: null, rejoinRetryAt: null },
+      // clearedAt is reserved for automatic inactivity clearance history.
+      data: { status: "EXEMPT", cooldownEndsAt: null, rejoinRetryAt: null },
     });
     await writeAuditLog(tx, {
       actorId: input.userId,

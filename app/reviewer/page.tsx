@@ -105,7 +105,7 @@ export default function ReviewerPage() {
       <section className="reviewer-page">
         <header className="reviewer-header">
           <Link href="/" className="reviewer-back" aria-label="返回成员首页"><ArrowLeft size={18} />返回</Link>
-          <div><span className="eyebrow">SECOND REVIEW</span><h1>视频二次审核台</h1><p>逐条打开视频核查；驳回会自动扣回已到账积分。</p></div>
+          <div><span className="eyebrow">SECOND REVIEW</span><h1>视频二次审核台</h1><p>逐条打开视频核查；驳回会自动扣回已到账积分。</p><Link className="reviewer-back" href="/registration-support">入团申请审核</Link></div>
           <button className="icon-button" title="刷新" aria-label="刷新二次审核池" onClick={() => void load(status)}><RefreshCw size={18} /></button>
         </header>
         <div className="reviewer-tabs">

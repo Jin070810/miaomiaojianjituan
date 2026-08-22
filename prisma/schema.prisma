@@ -20,6 +20,12 @@ enum PasswordResetRequestStatus {
   EXPIRED
 }
 
+enum RegistrationApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum VideoStatus {
   PROCESSING
   PENDING_REVIEW
@@ -190,52 +196,55 @@ enum AnnouncementAudience {
 }
 
 model User {
-  id                            String                             @id @default(cuid())
-  kuaishouId                    String                             @unique
-  nickname                      String
-  avatarUrl                     String?
-  passwordHash                  String
-  role                          Role                               @default(MEMBER)
-  active                        Boolean                            @default(true)
-  guildStatus                   String?
-  boundPhoneEnc                 String?
-  invited                       Boolean                            @default(false)
-  createdAt                     DateTime                           @default(now())
-  updatedAt                     DateTime                           @updatedAt
-  account                       PointAccount?
-  recipientProfile              RecipientProfile?
-  videos                        VideoSubmission[]
-  videoAppeals                  VideoAppeal[]                      @relation("AppealRequester")
-  reviewedAppeals               VideoAppeal[]                      @relation("AppealReviewer")
-  secondaryVideoReviews         VideoSecondaryReview[]             @relation("SecondaryVideoReviewer")
-  rankingEntries                RankingEntry[]
-  rankingAwards                 RankingAward[]
-  outgoing                      Transfer[]                         @relation("sender")
-  incoming                      Transfer[]                         @relation("receiver")
-  redemptions                   RedemptionOrder[]
-  auditLogs                     AuditLog[]                         @relation("actor")
-  notifications                 Notification[]
-  announcements                 Announcement[]                     @relation("AnnouncementCreator")
-  announcementRecipients        AnnouncementRecipient[]
-  guildHistory                  GuildStatusHistory[]
-  sessions                      Session[]
-  operationSettings             SystemSetting[]                    @relation("OperationSettingUpdater")
-  weeklyChallengeAssignments    WeeklyChallengeAssignment[]
-  weeklyRaceWins                WeeklyRaceWinner[]
-  passwordResetRequests         PasswordResetRequest[]             @relation("PasswordResetTarget")
-  reviewedPasswordResetRequests PasswordResetRequest[]             @relation("PasswordResetReviewer")
-  eligibility                   MemberEligibility?
-  clearancePolicyVersions       MembershipClearancePolicyVersion[] @relation("ClearancePolicyCreator")
-  rejoinRequests                RejoinRequest[]
-  reviewedRejoinRequests        RejoinRequest[]                    @relation("RejoinReviewer")
-  growthProfile                 MemberGrowthProfile?
-  achievements                  MemberAchievement[]
-  monthlyGoals                  MemberMonthlyGoal[]
-  monthlyReviews                MemberMonthlyReview[]
-  birthdayProfile               MemberBirthdayProfile?
-  birthdayBenefits              BirthdayAnnualBenefit[]
-  birthdayWishesSent            BirthdayWish[]                     @relation("BirthdayWishSender")
-  birthdayWishesReceived        BirthdayWish[]                     @relation("BirthdayWishRecipient")
+  id                               String                             @id @default(cuid())
+  kuaishouId                       String                             @unique
+  nickname                         String
+  avatarUrl                        String?
+  passwordHash                     String
+  role                             Role                               @default(MEMBER)
+  active                           Boolean                            @default(true)
+  guildStatus                      String?
+  boundPhoneEnc                    String?
+  invited                          Boolean                            @default(false)
+  createdAt                        DateTime                           @default(now())
+  updatedAt                        DateTime                           @updatedAt
+  account                          PointAccount?
+  recipientProfile                 RecipientProfile?
+  videos                           VideoSubmission[]
+  videoAppeals                     VideoAppeal[]                      @relation("AppealRequester")
+  reviewedAppeals                  VideoAppeal[]                      @relation("AppealReviewer")
+  secondaryVideoReviews            VideoSecondaryReview[]             @relation("SecondaryVideoReviewer")
+  rankingEntries                   RankingEntry[]
+  rankingAwards                    RankingAward[]
+  outgoing                         Transfer[]                         @relation("sender")
+  incoming                         Transfer[]                         @relation("receiver")
+  redemptions                      RedemptionOrder[]
+  auditLogs                        AuditLog[]                         @relation("actor")
+  notifications                    Notification[]
+  announcements                    Announcement[]                     @relation("AnnouncementCreator")
+  announcementRecipients           AnnouncementRecipient[]
+  guildHistory                     GuildStatusHistory[]
+  sessions                         Session[]
+  operationSettings                SystemSetting[]                    @relation("OperationSettingUpdater")
+  weeklyChallengeAssignments       WeeklyChallengeAssignment[]
+  weeklyRaceWins                   WeeklyRaceWinner[]
+  passwordResetRequests            PasswordResetRequest[]             @relation("PasswordResetTarget")
+  reviewedPasswordResetRequests    PasswordResetRequest[]             @relation("PasswordResetReviewer")
+  registrationApplicationsReviewed RegistrationApplication[]          @relation("RegistrationApplicationReviewer")
+  approvedRegistrationApplication  RegistrationApplication?           @relation("RegistrationApplicationApprovedUser")
+  registrationInviteLinksCreated   RegistrationInviteLink[]           @relation("RegistrationInviteLinkCreator")
+  eligibility                      MemberEligibility?
+  clearancePolicyVersions          MembershipClearancePolicyVersion[] @relation("ClearancePolicyCreator")
+  rejoinRequests                   RejoinRequest[]
+  reviewedRejoinRequests           RejoinRequest[]                    @relation("RejoinReviewer")
+  growthProfile                    MemberGrowthProfile?
+  achievements                     MemberAchievement[]
+  monthlyGoals                     MemberMonthlyGoal[]
+  monthlyReviews                   MemberMonthlyReview[]
+  birthdayProfile                  MemberBirthdayProfile?
+  birthdayBenefits                 BirthdayAnnualBenefit[]
+  birthdayWishesSent               BirthdayWish[]                     @relation("BirthdayWishSender")
+  birthdayWishesReceived           BirthdayWish[]                     @relation("BirthdayWishRecipient")
 }
 
 model MemberClearanceProgram {
@@ -314,6 +323,45 @@ model PasswordResetRequest {
 
   @@index([status, expiresAt])
   @@index([userId, status])
+}
+
+model RegistrationInviteLink {
+  id           String                    @id @default(cuid())
+  tokenHash    String                    @unique
+  active       Boolean                   @default(true)
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  createdById  String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  createdBy    User?                     @relation("RegistrationInviteLinkCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  applications RegistrationApplication[]
+
+  @@index([active, expiresAt])
+}
+
+model RegistrationApplication {
+  id                   String                        @id @default(cuid())
+  inviteLinkId         String
+  kuaishouId           String
+  nickname             String
+  guildStatus          String?
+  boundPhoneEnc        String?
+  proposedPasswordHash String?
+  queryTokenHash       String                        @unique
+  status               RegistrationApplicationStatus @default(PENDING)
+  reviewReason         String?
+  reviewedAt           DateTime?
+  reviewedById         String?
+  approvedUserId       String?                       @unique
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
+  inviteLink           RegistrationInviteLink        @relation(fields: [inviteLinkId], references: [id], onDelete: Restrict)
+  reviewedBy           User?                         @relation("RegistrationApplicationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  approvedUser         User?                         @relation("RegistrationApplicationApprovedUser", fields: [approvedUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([kuaishouId, status])
 }
 
 model Session {

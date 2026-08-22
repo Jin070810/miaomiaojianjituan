@@ -29,6 +29,7 @@ import {
   Pin,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Settings2,
   ShieldCheck,
@@ -543,6 +544,7 @@ function AdminSidebar({
         ))}
       </nav>
       <div className="admin-sidebar-footer">
+        <button onClick={() => window.location.assign("/registration-support")}><UserRound size={17} />入团申请审核</button>
         <button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button>
         <button className={active === "settings" ? "active" : ""} onClick={() => onChange("settings")}><Settings2 size={17} />系统设置</button>
         <button onClick={onLogout}><LogOut size={17} />退出后台</button>
@@ -1800,6 +1802,57 @@ function MemberClearanceSettings() {
   </section>;
 }
 
+function RegistrationInviteSettings() {
+  const [link, setLink] = useState<{ id: string; active: boolean; expiresAt: string | null; createdAt: string } | null>(null);
+  const [newUrl, setNewUrl] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState("");
+
+  async function load() {
+    setLoading(true); setError("");
+    try {
+      const response = await fetch("/api/admin/registration-link", { cache: "no-store" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "入团链接加载失败");
+      setLink(result.link ?? null);
+    } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "入团链接加载失败"); } finally { setLoading(false); }
+  }
+
+  useEffect(() => { void load(); }, []);
+
+  async function create() {
+    setSaving(true); setError(""); setFeedback("");
+    try {
+      const response = await fetch("/api/admin/registration-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59+08:00`).toISOString() : null }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "入团链接生成失败");
+      setLink(result.link); setNewUrl(result.link.url); setFeedback("新链接已生成，请立即复制保存；页面离开后不会再次显示完整链接。");
+    } catch (createError) { setError(createError instanceof Error ? createError.message : "入团链接生成失败"); } finally { setSaving(false); }
+  }
+
+  async function revoke() {
+    if (!link || !window.confirm("停用当前入团链接？已有申请不受影响。")) return;
+    setSaving(true); setError(""); setFeedback("");
+    try {
+      const response = await fetch(`/api/admin/registration-link/${link.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: "{}" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "链接停用失败");
+      setLink(result.link); setNewUrl(""); setFeedback("入团链接已停用。");
+    } catch (revokeError) { setError(revokeError instanceof Error ? revokeError.message : "链接停用失败"); } finally { setSaving(false); }
+  }
+
+  async function copy() {
+    if (!newUrl) return;
+    await navigator.clipboard.writeText(newUrl);
+    setFeedback("链接已复制。");
+  }
+
+  return <section className="admin-panel operation-settings-panel"><div className="admin-panel-head"><div><h2>入团申请链接</h2><p>申请链接只显示一次；停用或轮换不会影响已经提交的申请。</p></div><button className="secondary-button" disabled={loading} onClick={() => void load()}><RefreshCw size={16} />刷新</button></div>{loading ? <p className="empty-copy">正在加载链接状态...</p> : <><div className="operation-switch-row"><div><strong>{link?.active ? "当前有启用链接" : "当前没有启用链接"}</strong><span>{link?.expiresAt ? `失效时间：${formatAdminDate(link.expiresAt)}` : "未设置失效时间"}</span><small>{link?.createdAt ? `生成于 ${formatAdminDate(link.createdAt)}` : "请生成专属链接后发给申请人"}</small></div>{link?.active && <button className="danger-button compact-button" disabled={saving} onClick={() => void revoke()}>停用链接</button>}</div><div className="admin-form-grid"><label><span>失效日期（可选）</span><input type="date" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label><div className="admin-panel-actions"><button className="primary-button" disabled={saving} onClick={() => void create()}>{saving ? "处理中..." : link?.active ? "轮换链接" : "生成链接"}</button></div></div>{newUrl && <div className="field-hint"><strong>本次完整链接</strong><input readOnly value={newUrl} aria-label="本次完整入团链接" /><button className="secondary-button compact-button" onClick={() => void copy()}>复制链接</button></div>}</>}{feedback && <p className="form-success" role="status">{feedback}</p>}{error && <p className="form-error" role="alert">{error}</p>}</section>;
+}
+
 function SettingsAdmin() {
   const [rows, setRows] = useState<OperationSwitchRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1866,6 +1919,7 @@ function SettingsAdmin() {
         ))}</div>}
       </section>
       <MemberClearanceSettings />
+      <RegistrationInviteSettings />
       <section className="admin-panel operation-settings-panel">
         <div className="admin-panel-head"><div><h2>脱敏数据导出</h2><p>导出文件不包含手机号、地址、收款码、密码或原始抓取数据。</p></div></div>
         <div className="export-link-grid">
@@ -1889,7 +1943,7 @@ function AdminMobileNav({ active, open, pendingVideos, pendingOrders, onClose, o
   const items: Array<{ id: AdminSection; label: string; badge?: number }> = [
     { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉", badge: pendingVideos }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单", badge: pendingOrders }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "birthdays", label: "生日运营" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
   ];
-  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}><span>{item.label}</span>{Boolean(item.badge) && <b>{item.badge}</b>}</button>)}<div className="admin-mobile-nav-footer"><button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button><button onClick={onLogout}><LogOut size={17} />退出后台</button></div></nav></div>;
+  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}><span>{item.label}</span>{Boolean(item.badge) && <b>{item.badge}</b>}</button>)}<div className="admin-mobile-nav-footer"><button onClick={() => window.location.assign("/registration-support")}><UserRound size={17} />入团申请审核</button><button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button><button onClick={onLogout}><LogOut size={17} />退出后台</button></div></nav></div>;
 }
 
 function auditActorLabel(row: AdminAuditRow) {

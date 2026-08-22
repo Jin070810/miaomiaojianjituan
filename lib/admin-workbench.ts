@@ -43,6 +43,7 @@ export async function getAdminWorkbench(range: AdminWorkbenchRange, reference = 
     pendingAppeals,
     pendingOrders,
     pendingPasswordResets,
+    pendingRegistrationApplications,
     failedChallenges,
     lowStockGifts,
     videos,
@@ -65,6 +66,7 @@ export async function getAdminWorkbench(range: AdminWorkbenchRange, reference = 
     db.videoAppeal.count({ where: { status: "PENDING" } }),
     db.redemptionOrder.count({ where: { status: { in: ["PENDING", "APPROVED"] } } }),
     db.passwordResetRequest.count({ where: { status: "PENDING", expiresAt: { gt: reference } } }),
+    db.registrationApplication.count({ where: { status: "PENDING" } }),
     db.weeklyChallengePeriod.count({ where: { status: "FAILED" } }),
     db.gift.count({ where: { active: true, deletedAt: null, stock: { lte: 3 } } }),
     db.videoSubmission.findMany({
@@ -121,6 +123,7 @@ export async function getAdminWorkbench(range: AdminWorkbenchRange, reference = 
       { id: "appeals", label: "待复查申诉", count: pendingAppeals, section: "videos", filter: "appeals", tone: "warning" },
       { id: "orders", label: "待履约订单", count: pendingOrders, section: "orders", filter: "PENDING_SHIPMENT", tone: "warning" },
       { id: "password-resets", label: "密码找回申请", count: pendingPasswordResets, href: "/password-support", tone: "neutral" },
+      { id: "registration-applications", label: "入团申请", count: pendingRegistrationApplications, href: "/registration-support", tone: "warning" },
       { id: "challenge-failures", label: "失败的周挑战", count: failedChallenges, section: "challenges", filter: "FAILED", tone: "danger" },
       { id: "disabled-switches", label: "已关闭运营入口", count: disabledSwitches.length, section: "settings", filter: "disabled", tone: disabledSwitches.length ? "danger" : "success" },
     ],

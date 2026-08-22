@@ -112,7 +112,7 @@ test("member primary views and sheets fit the configured mobile viewport", async
   });
 });
 
-test("login, register, and password reset remain within the configured mobile viewport", async ({ page }) => {
+test("login, controlled join entry, and password reset remain within the configured mobile viewport", async ({ page }) => {
   await page.goto("/login");
   const expectAuthViewport = async () => {
     await expectNoHorizontalOverflow(page);
@@ -121,9 +121,11 @@ test("login, register, and password reset remain within the configured mobile vi
 
   await expect(page.getByRole("heading", { name: "欢迎回来" })).toBeVisible();
   await expectAuthViewport();
-  await page.getByRole("button", { name: "注册" }).click();
-  await expect(page.getByRole("heading", { name: "加入剪辑团" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "注册" })).toHaveCount(0);
+  await page.goto("/join/invalid-registration-token");
+  await expect(page.getByText("链接已失效")).toBeVisible();
   await expectAuthViewport();
+  await page.goto("/login");
   await page.getByRole("button", { name: "登录" }).click();
   await page.getByRole("button", { name: "忘记密码？提交找回申请" }).click();
   await expect(page.getByRole("heading", { name: "找回账号" })).toBeVisible();

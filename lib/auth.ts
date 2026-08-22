@@ -58,6 +58,12 @@ export async function requirePasswordResetApprover() {
   return user;
 }
 
+export async function requireRegistrationApprover() {
+  const user = await requireUser();
+  if (!isPasswordResetApproverRole(user.role)) throw new Error("无权执行此操作");
+  return user;
+}
+
 export async function requireVideoReviewOperator() {
   const user = await requireUser();
   if (!isVideoReviewOperatorRole(user.role)) throw new Error("无权执行此操作");

@@ -2096,6 +2096,10 @@
   padding: 28px 0 18px;
 }
 
+.support-profile-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .journal-profile-head .avatar {
   width: 76px;
   height: 76px;

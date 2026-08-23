@@ -1,0 +1,247 @@
+/* Admin component isolation. Member theme is loaded globally for member routes,
+   so shared class names must be restored inside the admin shell. */
+
+.admin-shell .primary-button,
+.admin-shell .secondary-button,
+.admin-shell .danger-button {
+  min-height: 46px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: none;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-shell .primary-button {
+  border-color: var(--brand);
+  color: #fff;
+  background: var(--brand);
+}
+
+.admin-shell .primary-button:hover {
+  border-color: var(--brand-strong);
+  background: var(--brand-strong);
+}
+
+.admin-shell .secondary-button {
+  border-color: var(--line);
+  color: var(--ink);
+  background: #fff;
+}
+
+.admin-shell .secondary-button:hover {
+  background: #f8f8f9;
+}
+
+.admin-shell .danger-button {
+  border-color: #f2ced1;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.admin-shell .danger-button:hover {
+  border-color: #e8aeb3;
+  background: #ffe4e7;
+}
+
+.admin-shell .primary-button:disabled,
+.admin-shell .secondary-button:disabled,
+.admin-shell .danger-button:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.admin-shell .primary-button:focus-visible,
+.admin-shell .secondary-button:focus-visible,
+.admin-shell .danger-button:focus-visible,
+.admin-shell .icon-button:focus-visible,
+.admin-shell .text-button:focus-visible {
+  outline: 3px solid rgba(255, 90, 61, 0.24);
+  outline-offset: 2px;
+}
+
+.admin-shell .icon-button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+}
+
+.admin-shell .icon-button:hover {
+  background: #f0f1f3;
+}
+
+.admin-shell .text-button {
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  color: var(--brand-strong);
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-shell .status-chip {
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  background: #f0f1f2;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.admin-shell .status-chip.success { color: var(--success); background: var(--success-soft); }
+.admin-shell .status-chip.warning { color: var(--warning); background: var(--warning-soft); }
+.admin-shell .status-chip.danger { color: var(--danger); background: var(--danger-soft); }
+.admin-shell .status-chip.teal { color: var(--teal); background: var(--teal-soft); }
+
+.admin-shell .field-hint {
+  color: var(--muted);
+}
+
+.admin-shell .form-error {
+  color: var(--danger);
+}
+
+.admin-action-dialog {
+  width: min(100%, 620px);
+}
+
+.admin-confirm-description {
+  margin: 0 0 16px;
+  color: var(--muted);
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.admin-action-impact {
+  margin: 0 0 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.admin-action-impact > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 3px solid #cbd0d6;
+  display: grid;
+  grid-template-columns: minmax(92px, 0.4fr) minmax(0, 1fr);
+  gap: 12px;
+  background: #f7f8f9;
+}
+
+.admin-action-impact > div.is-warning {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.admin-action-impact > div.is-danger {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.admin-action-impact dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-action-impact dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.admin-action-dialog.is-danger .eyebrow,
+.admin-action-dialog.is-danger .modal-head h2 {
+  color: var(--danger);
+}
+
+.admin-shell .admin-task-tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.admin-shell .admin-task-tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.admin-shell .points-task-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.points-balance-preview {
+  display: grid !important;
+  justify-content: stretch !important;
+  gap: 5px !important;
+}
+
+.points-balance-preview > span {
+  padding: 6px 8px;
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) auto;
+  gap: 10px;
+  border-radius: 5px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.points-balance-preview > span.is-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.challenge-technical-detail {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.challenge-technical-detail summary {
+  width: max-content;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.challenge-technical-detail small {
+  margin-top: 6px;
+  padding: 8px;
+  display: block;
+  overflow-wrap: anywhere;
+  border-radius: 5px;
+  background: #f4f5f6;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (max-width: 640px) {
+  .admin-action-impact > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .points-balance-preview > span {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}

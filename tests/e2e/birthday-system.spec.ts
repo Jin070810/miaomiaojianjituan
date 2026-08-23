@@ -57,9 +57,12 @@ test("birthday admin operations render with server-side admin access", async ({ 
     await page.locator(".admin-sidebar").getByRole("button").filter({ hasText: "生日运营" }).click();
   }
   await expect(page.getByRole("heading", { name: "生日运营" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "商城商品奖池" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "近期寿星" })).toBeVisible();
+  await page.getByRole("button", { name: /奖池库存/ }).click();
+  await expect(page.getByRole("heading", { name: "商城商品奖池" })).toBeVisible();
+  await page.getByRole("button", { name: "生日纠错" }).click();
   await expect(page.getByRole("heading", { name: "生日纠错" })).toBeVisible();
+  await page.getByRole("button", { name: /待处理窗口/ }).click();
   await expect(page.getByRole("heading", { name: "待处理窗口" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await expectElementsWithinViewport(page, ".admin-shell, .admin-main, .admin-page, .birthday-correction-form, .birthday-window-controls");

@@ -85,7 +85,7 @@ export default defineConfig({
       testMatch: /birthday-system\.spec\.ts/,
     },
   ],
-  webServer: {
+  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER === "1" ? undefined : {
     command: "npm run dev -- --hostname 127.0.0.1 --port 3213",
     url: "http://127.0.0.1:3213/login",
     reuseExistingServer: false,

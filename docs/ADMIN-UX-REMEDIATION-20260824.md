@@ -42,6 +42,6 @@
 - Compose 配置：`docker compose config --quiet`，通过。
 - 容器构建：`docker compose build app` 与 `docker build --target worker -t miaomiao-points-worker:verify .`，通过。
 - UI：Playwright 在 `1440×900`、`390×844` 验证后台导航、按钮对比度、邀请入口、密码协助布局、积分任务、周挑战和生日任务；相关用例全部通过。
-- staging：待 PR 审查后执行并补充截图、验收人和时间。
+- staging：PR CI 在 `staging` GitHub environment 中构建带完整 commit SHA 的 App/Worker 镜像，使用隔离 PostgreSQL/Redis 应用 migration，校验健康与版本一致性，并对容器运行 `1440×900`、`390×844` 管理后台 Playwright；截图和容器日志保留 14 天。
 
-当前状态：开发分支验证中；在 staging 验收和 PR 审查完成前仅可标记为 `Ready for review`。
+当前状态：PR 验证中；在 staging job 和 PR 审查完成前仅可标记为 `Ready for review`。

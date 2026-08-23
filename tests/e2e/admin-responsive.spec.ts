@@ -36,6 +36,40 @@ test("admin navigation resets scroll and responsive pages do not overflow", asyn
   await page.screenshot({ path: `output/playwright/admin-responsive-${testInfo.project.name}.png`, fullPage: true });
 });
 
+test("admin primary actions keep readable contrast and invite entry opens registration settings", async ({ page }, testInfo) => {
+  await login(page, e2eIds.admin);
+
+  if (testInfo.project.name.includes("mobile")) {
+    await page.getByRole("button", { name: "打开菜单" }).click();
+    await page.getByRole("navigation", { name: "管理后台导航" }).getByRole("button", { name: "用户与公会" }).click();
+  } else {
+    await page.locator(".admin-sidebar").getByRole("button", { name: "用户与公会" }).click();
+  }
+
+  const inviteButton = page.getByRole("button", { name: "邀请成员" });
+  await expect(inviteButton).toBeVisible();
+  const inviteStyle = await inviteButton.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return { backgroundColor: style.backgroundColor, color: style.color };
+  });
+  expect(inviteStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(inviteStyle.backgroundColor).not.toBe(inviteStyle.color);
+
+  await inviteButton.click();
+  await expect(page.getByRole("heading", { name: "系统设置" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "入团申请链接" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("password support heading keeps usable width without an avatar column", async ({ page }) => {
+  await login(page, e2eIds.admin);
+  await page.goto("/password-support");
+  await expect(page.getByRole("heading", { name: "密码协助中心" })).toBeVisible();
+  const headingWidth = await page.locator(".support-profile-head .profile-copy").evaluate((element) => element.getBoundingClientRect().width);
+  expect(headingWidth).toBeGreaterThan(180);
+  await expectNoHorizontalOverflow(page);
+});
+
 test("gift action menu renders above neighboring cards", async ({ page }, testInfo) => {
   await login(page, e2eIds.admin);
 

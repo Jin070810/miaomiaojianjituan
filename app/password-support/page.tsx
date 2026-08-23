@@ -78,7 +78,7 @@ export default function PasswordSupportPage() {
     <main className="member-shell">
       <div className="member-app secondary-page">
         <div className="member-content journal-page">
-          <section className="journal-profile-head">
+          <section className="journal-profile-head support-profile-head">
             <div className="profile-copy"><span className="eyebrow">PASSWORD SUPPORT</span><h1>密码协助中心</h1><p>线下核验身份后再批准申请；新密码不会在这里显示。</p></div>
             <Link className="journal-text-action" href="/">返回成员端</Link>
           </section>

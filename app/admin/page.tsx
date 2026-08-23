@@ -50,6 +50,7 @@ import { WorkbenchAdmin } from "./modules/workbench";
 import { AdminGlobalSearch } from "./modules/admin-search";
 import { ActivityDrawer } from "./modules/activity-drawer";
 import { BirthdayAdmin, type BirthdayAdminData } from "./modules/birthday-admin";
+import { useAdminActionDialog } from "./modules/admin-action-dialog";
 import { isMemberParticipantRole } from "@/lib/member-roles";
 import { canonicalVideoUrl } from "@/lib/kuaishou-url";
 import {
@@ -882,6 +883,7 @@ function UsersAdmin({
   pagination,
   voluntaryExits,
   voluntaryExitPagination,
+  onInvite,
   onToggle,
   onUpdate,
   onResetPassword,
@@ -895,6 +897,7 @@ function UsersAdmin({
   pagination: AdminPagination;
   voluntaryExits: AdminVoluntaryExitRow[];
   voluntaryExitPagination: AdminPagination;
+  onInvite: () => void;
   onToggle: (user: AdminUserRow) => void;
   onUpdate: (user: AdminUserRow, input: { role?: "MEMBER" | "REVIEWER" | "ADMIN"; guildStatus?: string }) => void;
   onResetPassword: (user: AdminUserRow) => void;
@@ -918,7 +921,7 @@ function UsersAdmin({
     <>
       <div className="admin-page-title">
         <div><span className="eyebrow">MEMBER DIRECTORY</span><h1>用户与公会</h1><p>管理成员身份、邀请状态和积分档案。</p></div>
-        <button className="primary-button"><Users size={16} />邀请成员</button>
+        <button className="primary-button" onClick={onInvite}><Users size={16} />邀请成员</button>
       </div>
       <div className="admin-tabs">
         <button className={filter === "all" ? "active" : ""} onClick={() => changeFilter("all")}>全部成员{filter === "all" && <span>{pagination.total}</span>}</button>
@@ -1153,74 +1156,6 @@ function OrderRecipientDetails({ order, loading, onLoad, onViewQr }: { order: Ad
   );
 }
 
-type AdminPromptOptions = {
-  title: string;
-  label: string;
-  description?: string;
-  initialValue?: string;
-  placeholder?: string;
-  confirmLabel?: string;
-  inputType?: "text" | "password" | "number";
-  multiline?: boolean;
-  required?: boolean;
-  confirmationOnly?: boolean;
-};
-
-function AdminPromptDialog({
-  options,
-  onCancel,
-  onConfirm,
-}: {
-  options: AdminPromptOptions;
-  onCancel: () => void;
-  onConfirm: (value: string) => void;
-}) {
-  const [value, setValue] = useState(options.initialValue ?? "");
-  const invalid = !options.confirmationOnly && options.required !== false && !value.trim();
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
-      <section className="modal-sheet admin-prompt-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-prompt-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-head">
-          <div><span className="eyebrow">CONFIRM ACTION</span><h2 id="admin-prompt-title">{options.title}</h2></div>
-          <button className="icon-button" aria-label="取消操作" onClick={onCancel}><X size={20} /></button>
-        </div>
-        {options.description && <p className="admin-confirm-description">{options.description}</p>}
-        {!options.confirmationOnly && <div className="field">
-          <label htmlFor="admin-prompt-value">{options.label}</label>
-          {options.multiline
-            ? <textarea id="admin-prompt-value" autoFocus rows={4} value={value} placeholder={options.placeholder} onChange={(event) => setValue(event.target.value)} />
-            : <input id="admin-prompt-value" autoFocus type={options.inputType ?? "text"} value={value} placeholder={options.placeholder} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !invalid) onConfirm(value); }} />}
-        </div>}
-        <div className="admin-panel-actions">
-          <button className="secondary-button" onClick={onCancel}>取消</button>
-          <button className="primary-button" disabled={invalid} onClick={() => onConfirm(value)}>{options.confirmLabel ?? "确认"}</button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function useAdminPrompt() {
-  const [request, setRequest] = useState<{
-    options: AdminPromptOptions;
-    resolve: (value: string | null) => void;
-  } | null>(null);
-  function ask(options: AdminPromptOptions) {
-    return new Promise<string | null>((resolve) => setRequest({ options, resolve }));
-  }
-  function finish(value: string | null) {
-    const current = request;
-    setRequest(null);
-    current?.resolve(value);
-  }
-  return {
-    ask,
-    dialog: request
-      ? <AdminPromptDialog options={request.options} onCancel={() => finish(null)} onConfirm={(value) => finish(value)} />
-      : null,
-  };
-}
-
 function OrdersAdmin({ rows, pagination, statusCounts, onAction, onLoadMore, onSearch, onFilter, onActivity }: { rows: AdminOrderRow[]; pagination: AdminPagination; statusCounts: AdminOrderStatusCounts; onAction: (order: AdminOrderRow, action: "approve" | "fulfill" | "update_tracking" | "reject" | "refund", input?: { trackingNumber?: string | null }) => Promise<boolean>; onLoadMore: () => Promise<void>; onSearch: (query: string) => Promise<void>; onFilter: (status: "ALL" | "PENDING" | "FULFILLED") => Promise<void>; onActivity: (order: AdminOrderRow) => void }) {
   const [status, setStatus] = useState<"ALL" | "PENDING" | "FULFILLED">("ALL");
   const [query, setQuery] = useState("");
@@ -1229,7 +1164,7 @@ function OrdersAdmin({ rows, pagination, statusCounts, onAction, onLoadMore, onS
   const [qrPreview, setQrPreview] = useState<{ url: string; giftName: string; memberName: string } | null>(null);
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
-  const { ask, dialog } = useAdminPrompt();
+  const { ask, dialog } = useAdminActionDialog();
   const loadDetails = async (order: AdminOrderRow) => {
     setDetailsLoadingId(order.id);
     try {
@@ -1343,6 +1278,7 @@ function RankingsAdmin({
   const [awardDetails, setAwardDetails] = useState<Record<string, Pick<AdminRankingAward, "recipientName" | "recipientPhone" | "recipientAddress">>>({});
   const [visibleAwardId, setVisibleAwardId] = useState<string | null>(null);
   const [loadingAwardId, setLoadingAwardId] = useState<string | null>(null);
+  const { ask, dialog } = useAdminActionDialog();
   function updateReward(periodId: string, rank: number, field: "title" | "description", value: string) {
     setRewards((current) => ({ ...current, [periodId]: { ...(current[periodId] ?? {}), [rank]: { ...(current[periodId]?.[rank] ?? { title: "", description: "" }), [field]: value } } }));
   }
@@ -1354,6 +1290,22 @@ function RankingsAdmin({
       setError(`请填写第 ${missing.rank} 名的奖励名称`);
       return;
     }
+    const confirmed = await ask({
+      title: "确认结算本期榜单",
+      label: "结算确认短语",
+      description: "结算会保存奖励快照、生成获奖记录并通知成员，完成后不能重新编辑本期名次。",
+      impact: [
+        { label: "结算周期", value: `${new Date(period.periodStart).toLocaleDateString("zh-CN")} 至 ${new Date(period.periodEnd).toLocaleDateString("zh-CN")}` },
+        { label: "获奖成员", value: preview.length ? `${preview.length} 名成员` : "本期暂无有效成绩", tone: preview.length ? "warning" : "default" },
+        { label: "奖励快照", value: preview.length ? preview.map((row) => `第 ${row.rank} 名：${draft[row.rank].title.trim()}`).join("；") : "发送暂无有效成绩通知" },
+        { label: "不可逆影响", value: "名次、奖励文字与通知结果将写入审计记录", tone: "danger" },
+      ],
+      expectedValue: "确认结算",
+      placeholder: "请输入确认结算",
+      confirmLabel: "执行结算",
+      tone: "danger",
+    });
+    if (confirmed === null) return;
     setSettling(period.id);
     setError("");
     try {
@@ -1363,6 +1315,23 @@ function RankingsAdmin({
     } finally {
       setSettling("");
     }
+  }
+  async function completeAward(award: AdminRankingAward) {
+    const confirmed = await ask({
+      title: `确认完成 ${award.user.nickname} 的奖励发放`,
+      label: "确认奖励状态",
+      description: "仅在礼品、现金或权益已经实际交付后执行。",
+      impact: [
+        { label: "成员", value: `${award.user.nickname} · ${award.user.kuaishouId}` },
+        { label: "奖励", value: award.rewardTitle ?? "榜单奖励" },
+        { label: "状态变化", value: "已填写领奖资料 → 已完成发放", tone: "warning" },
+      ],
+      confirmationOnly: true,
+      required: false,
+      confirmLabel: "确认已发放",
+    });
+    if (confirmed === null) return;
+    await onAwardUpdate(award, { status: "FULFILLED" });
   }
   function togglePeriod(id: string) {
     setExpandedPeriods((current) => {
@@ -1422,7 +1391,7 @@ function RankingsAdmin({
                     <td><strong>{award.rewardTitle ?? "榜单奖励"}</strong>{award.rewardDescription && <small>{award.rewardDescription}</small>}</td>
                     <td><span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "待领奖" : award.status === "CLAIMED" ? "已填写" : award.status === "FULFILLED" ? "已完成" : award.status}</span></td>
                     <td>{award.hasRecipientDetails ? <div className="ranking-recipient-summary"><span>资料已填写</span><button className="text-button" disabled={loadingAwardId === award.id} onClick={() => void viewAwardDetails(award)}>{loadingAwardId === award.id ? "读取中..." : visibleAwardId === award.id ? "收起" : "查看收货信息"}</button>{visibleAwardId === award.id && awardDetails[award.id] && <div className="ranking-recipient-details"><strong>{awardDetails[award.id].recipientName}</strong><small>{awardDetails[award.id].recipientPhone}<br />{awardDetails[award.id].recipientAddress}</small></div>}</div> : "尚未填写"}</td>
-                    <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" onClick={() => onAwardUpdate(award, { status: "FULFILLED" })}>完成发放</button>}</td>
+                    <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" onClick={() => void completeAward(award)}>完成发放</button>}</td>
                   </tr>
                 ))}
                 {period.awards.length === 0 && <tr><td colSpan={6}>本期暂无获奖成员</td></tr>}
@@ -1433,6 +1402,7 @@ function RankingsAdmin({
         </section>
       );})}
       {periods.length === 0 && <section className="admin-panel audit-panel"><p className="empty-copy">尚无已创建的榜单周期</p></section>}
+      {dialog}
     </>
   );
 }
@@ -1459,6 +1429,7 @@ function AnnouncementsAdmin({
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
   const [expandedAnnouncements, setExpandedAnnouncements] = useState<Set<string>>(new Set());
+  const { ask, dialog } = useAdminActionDialog();
 
   const activeMembers = users.filter((user) => user.active && isMemberParticipantRole(user.role));
   const filteredMembers = activeMembers.filter((user) => {
@@ -1496,6 +1467,23 @@ function AnnouncementsAdmin({
       setError(audience === "SELECTED" ? "请填写标题、正文并选择至少一名有效成员" : "请填写公告标题和正文");
       return;
     }
+    if (publish) {
+      const recipientCount = audience === "ALL" ? activeMembers.length : selectedIds.length;
+      const confirmed = await ask({
+        title: "发布前预览",
+        label: "确认发布",
+        description: content.trim().slice(0, 180) + (content.trim().length > 180 ? "…" : ""),
+        impact: [
+          { label: "公告标题", value: title.trim() },
+          { label: "发送范围", value: audience === "ALL" ? `全体有效普通成员（当前 ${recipientCount} 人）` : `定向 ${recipientCount} 人`, tone: "warning" },
+          { label: "发布结果", value: "保存内容、生成站内通知并写入审计记录" },
+        ],
+        confirmationOnly: true,
+        required: false,
+        confirmLabel: "确认发布",
+      });
+      if (confirmed === null) return;
+    }
     setSaving(true);
     setError("");
     setFeedback("");
@@ -1505,8 +1493,8 @@ function AnnouncementsAdmin({
       if (publish) {
         setActionId(saved.id);
         await onAction(saved.id, "publish");
-        setFeedback("公告已发布，通知已在同一事务内发送给目标成员。");
         resetEditor();
+        setFeedback("公告已发布，通知已在同一事务内发送给目标成员。");
       } else {
         setFeedback("草稿已保存。");
       }
@@ -1519,13 +1507,32 @@ function AnnouncementsAdmin({
   }
 
   async function action(id: string, next: "publish" | "withdraw") {
+    const row = rows.find((item) => item.id === id);
+    if (!row) return;
+    const confirmed = await ask({
+      title: next === "publish" ? "确认发布公告" : "确认撤回公告",
+      label: next === "withdraw" ? "撤回确认短语" : "确认公告状态",
+      description: next === "publish" ? "发布后正文不可编辑，并会向目标成员生成通知。" : "撤回后成员端正文将隐藏，历史通知与审计记录仍会保留。",
+      impact: [
+        { label: "公告", value: row.title },
+        { label: "发送范围", value: row.audience === "ALL" ? "全体有效普通成员" : `定向 ${row.recipients.length} 人`, tone: "warning" },
+        { label: "状态变化", value: next === "publish" ? "草稿 → 已发布" : "已发布 → 已撤回", tone: next === "withdraw" ? "danger" : "warning" },
+      ],
+      confirmationOnly: next === "publish",
+      required: next === "withdraw",
+      expectedValue: next === "withdraw" ? "确认撤回" : undefined,
+      placeholder: next === "withdraw" ? "请输入确认撤回" : undefined,
+      confirmLabel: next === "publish" ? "确认发布" : "执行撤回",
+      tone: next === "withdraw" ? "danger" : "default",
+    });
+    if (confirmed === null) return;
     setActionId(id);
     setError("");
     setFeedback("");
     try {
       await onAction(id, next);
-      setFeedback(next === "publish" ? "公告已发布。" : "公告已撤回，未读提醒已关闭。");
       if (editingId === id) resetEditor();
+      setFeedback(next === "publish" ? "公告已发布。" : "公告已撤回，未读提醒已关闭。");
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "公告操作失败");
     } finally {
@@ -1570,6 +1577,7 @@ function AnnouncementsAdmin({
           </div>
         </section>
       </div>
+      {dialog}
     </>
   );
 }
@@ -1713,7 +1721,7 @@ function WeeklyChallengesAdmin({
             </div>
             <div className="challenge-attempt-list">
               <h3>模型生成记录</h3>
-              {detail.attempts.map((attempt) => <div key={attempt.id}><span>批次 {attempt.batchNumber + 1} / 尝试 {attempt.attemptNumber}</span><b>{attempt.source === "DETERMINISTIC" ? "稳定模板" : attemptStatusLabel[attempt.status] ?? attempt.status}</b><span>{attempt.latencyMs ?? "—"} ms</span><span>{(attempt.inputTokens ?? 0) + (attempt.outputTokens ?? 0)} tokens</span>{attempt.error && <small>{attempt.error}</small>}</div>)}
+              {detail.attempts.map((attempt) => <div key={attempt.id}><span>批次 {attempt.batchNumber + 1} / 尝试 {attempt.attemptNumber}</span><b>{attempt.source === "DETERMINISTIC" ? "稳定模板" : attemptStatusLabel[attempt.status] ?? "未知结果"}</b><span>{attempt.latencyMs ?? "—"} 毫秒</span><span>用量 {(attempt.inputTokens ?? 0) + (attempt.outputTokens ?? 0)}</span>{attempt.error && <details className="challenge-technical-detail"><summary>查看技术错误</summary><small>{attempt.error}</small></details>}</div>)}
             </div>
           </section>
         </div>
@@ -1810,6 +1818,7 @@ function RegistrationInviteSettings() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
+  const { ask, dialog } = useAdminActionDialog();
 
   async function load() {
     setLoading(true); setError("");
@@ -1834,7 +1843,21 @@ function RegistrationInviteSettings() {
   }
 
   async function revoke() {
-    if (!link || !window.confirm("停用当前入团链接？已有申请不受影响。")) return;
+    if (!link) return;
+    const confirmed = await ask({
+      title: "停用当前入团链接",
+      label: "确认链接状态变更",
+      description: "停用后尚未提交的申请人将无法继续使用该链接，已经提交的申请不受影响。",
+      impact: [
+        { label: "当前状态", value: "链接可用于提交入团申请" },
+        { label: "变更后", value: "链接立即失效", tone: "danger" },
+      ],
+      confirmationOnly: true,
+      required: false,
+      confirmLabel: "确认停用",
+      tone: "danger",
+    });
+    if (confirmed === null) return;
     setSaving(true); setError(""); setFeedback("");
     try {
       const response = await fetch(`/api/admin/registration-link/${link.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: "{}" });
@@ -1850,7 +1873,7 @@ function RegistrationInviteSettings() {
     setFeedback("链接已复制。");
   }
 
-  return <section className="admin-panel operation-settings-panel"><div className="admin-panel-head"><div><h2>入团申请链接</h2><p>申请链接只显示一次；停用或轮换不会影响已经提交的申请。</p></div><button className="secondary-button" disabled={loading} onClick={() => void load()}><RefreshCw size={16} />刷新</button></div>{loading ? <p className="empty-copy">正在加载链接状态...</p> : <><div className="operation-switch-row"><div><strong>{link?.active ? "当前有启用链接" : "当前没有启用链接"}</strong><span>{link?.expiresAt ? `失效时间：${formatAdminDate(link.expiresAt)}` : "未设置失效时间"}</span><small>{link?.createdAt ? `生成于 ${formatAdminDate(link.createdAt)}` : "请生成专属链接后发给申请人"}</small></div>{link?.active && <button className="danger-button compact-button" disabled={saving} onClick={() => void revoke()}>停用链接</button>}</div><div className="admin-form-grid"><label><span>失效日期（可选）</span><input type="date" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label><div className="admin-panel-actions"><button className="primary-button" disabled={saving} onClick={() => void create()}>{saving ? "处理中..." : link?.active ? "轮换链接" : "生成链接"}</button></div></div>{newUrl && <div className="field-hint"><strong>本次完整链接</strong><input readOnly value={newUrl} aria-label="本次完整入团链接" /><button className="secondary-button compact-button" onClick={() => void copy()}>复制链接</button></div>}</>}{feedback && <p className="form-success" role="status">{feedback}</p>}{error && <p className="form-error" role="alert">{error}</p>}</section>;
+  return <section id="registration-invite-settings" className="admin-panel operation-settings-panel"><div className="admin-panel-head"><div><h2>入团申请链接</h2><p>申请链接只显示一次；停用或轮换不会影响已经提交的申请。</p></div><button className="secondary-button" disabled={loading} onClick={() => void load()}><RefreshCw size={16} />刷新</button></div>{loading ? <p className="empty-copy">正在加载链接状态...</p> : <><div className="operation-switch-row"><div><strong>{link?.active ? "当前有启用链接" : "当前没有启用链接"}</strong><span>{link?.expiresAt ? `失效时间：${formatAdminDate(link.expiresAt)}` : "未设置失效时间"}</span><small>{link?.createdAt ? `生成于 ${formatAdminDate(link.createdAt)}` : "请生成专属链接后发给申请人"}</small></div>{link?.active && <button className="danger-button compact-button" disabled={saving} onClick={() => void revoke()}>停用链接</button>}</div><div className="admin-form-grid"><label><span>失效日期（可选）</span><input type="date" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label><div className="admin-panel-actions"><button className="primary-button" disabled={saving} onClick={() => void create()}>{saving ? "处理中..." : link?.active ? "轮换链接" : "生成链接"}</button></div></div>{newUrl && <div className="field-hint"><strong>本次完整链接</strong><input readOnly value={newUrl} aria-label="本次完整入团链接" /><button className="secondary-button compact-button" onClick={() => void copy()}>复制链接</button></div>}</>}{feedback && <p className="form-success" role="status">{feedback}</p>}{error && <p className="form-error" role="alert">{error}</p>}{dialog}</section>;
 }
 
 function SettingsAdmin() {
@@ -1858,7 +1881,7 @@ function SettingsAdmin() {
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const { ask, dialog } = useAdminPrompt();
+  const { ask, dialog } = useAdminActionDialog();
 
   useEffect(() => {
     fetch("/api/admin/operation-switches", { cache: "no-store" })
@@ -1876,10 +1899,17 @@ function SettingsAdmin() {
     const confirmed = await ask({
       title: `${nextState}${row.label}`,
       label: "确认运营开关变更",
-      description: `变更前：${row.enabled ? "已开启" : "已暂停"}\n变更后：${row.enabled ? "已暂停" : "已开启"}\n影响：${row.description}`,
+      description: "运营开关由服务端强制执行，保存后立即影响成员端写入入口。",
+      impact: [
+        { label: "开关", value: row.label },
+        { label: "状态变化", value: `${row.enabled ? "已开启" : "已暂停"} → ${row.enabled ? "已暂停" : "已开启"}`, tone: row.enabled ? "danger" : "warning" },
+        { label: "影响范围", value: row.description, tone: row.enabled ? "danger" : "default" },
+        { label: "历史数据", value: "不删除历史记录，后台处理能力保持可用" },
+      ],
       confirmationOnly: true,
       required: false,
       confirmLabel: `确认${nextState}`,
+      tone: row.enabled ? "danger" : "default",
     });
     if (confirmed === null) return;
     setSavingKey(row.key);
@@ -2003,7 +2033,7 @@ export default function AdminPage() {
   const [loadedSections, setLoadedSections] = useState<Partial<Record<AdminSection, boolean>>>({});
   const [sectionStatus, setSectionStatus] = useState<Partial<Record<AdminSection, { loading: boolean; error: string }>>>({});
   const loadingSections = useRef(new Set<AdminSection>());
-  const { ask: askAdminValue, dialog: adminPromptDialog } = useAdminPrompt();
+  const { ask: askAdminValue, dialog: adminPromptDialog } = useAdminActionDialog();
   const router = useRouter();
   function changeSection(section: AdminSection, filter?: string) {
     const params = new URLSearchParams();
@@ -2019,7 +2049,7 @@ export default function AdminPage() {
     const syncLocation = () => {
       const params = new URLSearchParams(window.location.search);
       const requested = params.get("section");
-      const section = adminSections.includes(requested as AdminSection) ? requested as AdminSection : "workbench";
+      const section = requested === "overview" ? "workbench" : adminSections.includes(requested as AdminSection) ? requested as AdminSection : "workbench";
       setActive(section);
       const filter = params.get("filter")?.trim() || undefined;
       setNavigationTarget(filter ? { section, filter } : null);
@@ -2498,6 +2528,12 @@ export default function AdminPage() {
       title: action === "approve" ? "确认通过视频申诉" : "确认驳回视频申诉",
       label: "确认申诉结果",
       description: action === "approve" ? `将为 ${appeal.user.nickname} 入账 ${points ?? appeal.video.points ?? 0} 积分，并写入审计记录。` : "将保留原自动驳回结果，并向成员发送处理结果。",
+      impact: [
+        { label: "成员", value: `${appeal.user.nickname} · ${appeal.user.kuaishouId}` },
+        { label: "申诉结果", value: action === "approve" ? "通过申诉并恢复视频奖励" : "维持原自动驳回结果", tone: action === "approve" ? "warning" : "default" },
+        { label: "积分影响", value: action === "approve" ? `入账 ${points ?? appeal.video.points ?? 0} 分` : "不产生积分变动", tone: action === "approve" ? "danger" : "default" },
+        { label: "审计", value: "处理结果、复查说明和积分流水在同一事务留痕" },
+      ],
       confirmationOnly: true,
       required: false,
       confirmLabel: action === "approve" ? "确认通过并入账" : "确认驳回",
@@ -2534,10 +2570,18 @@ export default function AdminPage() {
       const confirmed = await askAdminValue({
         title: action === "fulfill" ? "确认完成订单履约" : action === "reject" ? "确认驳回订单" : "确认退款订单",
         label: "确认订单状态变更",
-        description: action === "fulfill" ? `变更后：将“${order.gift.name}”标记为已履约。` : `变更后：将更新“${order.gift.name}”的订单状态，并退回积分与库存。`,
+        description: "请核对对象、积分和库存影响后再执行。",
+        impact: [
+          { label: "订单", value: `${order.user.nickname} · ${order.gift.name} · 尾号 ${order.id.slice(-8)}` },
+          { label: "当前状态", value: orderStatusLabel(order.status, order.gift.kind) },
+          { label: "变更后", value: action === "fulfill" ? "标记为已履约" : action === "reject" ? "订单驳回" : "订单退款", tone: action === "fulfill" ? "warning" : "danger" },
+          { label: "资金与库存", value: action === "fulfill" ? `${order.totalCost.toLocaleString()} 积分维持扣除，库存维持占用` : `退回 ${order.totalCost.toLocaleString()} 积分并恢复库存`, tone: action === "fulfill" ? "default" : "danger" },
+          ...(reason ? [{ label: "处理原因", value: reason }] : []),
+        ],
         confirmationOnly: true,
         required: false,
-        confirmLabel: "确认操作",
+        confirmLabel: action === "fulfill" ? "确认已履约" : action === "reject" ? "确认驳回并退回" : "确认退款并退回",
+        tone: action === "fulfill" ? "default" : "danger",
       });
       if (confirmed === null) return false;
     }
@@ -2578,7 +2622,13 @@ export default function AdminPage() {
       const confirmed = await askAdminValue({
         title: `变更 ${user.nickname} 的角色`,
         label: "确认角色变更",
-        description: `变更前：${roleLabels[user.role as keyof typeof roleLabels] ?? user.role}\n变更后：${roleLabels[input.role]}\n影响：新角色会立即改变该成员可访问的后台功能与管理权限。`,
+        description: "角色变更会立即影响该成员可访问的功能与管理权限。",
+        impact: [
+          { label: "成员", value: `${user.nickname} · ${user.kuaishouId}` },
+          { label: "变更前", value: roleLabels[user.role as keyof typeof roleLabels] ?? user.role },
+          { label: "变更后", value: roleLabels[input.role], tone: input.role === "ADMIN" ? "danger" : "warning" },
+          { label: "权限影响", value: input.role === "ADMIN" ? "获得完整管理后台权限" : input.role === "REVIEWER" ? "获得视频复查权限" : "仅保留普通成员权限", tone: input.role === "ADMIN" ? "danger" : "default" },
+        ],
         confirmationOnly: true,
         required: false,
         confirmLabel: "确认变更",
@@ -2589,10 +2639,16 @@ export default function AdminPage() {
       const confirmed = await askAdminValue({
         title: `${input.active ? "启用" : "停用"} ${user.nickname} 的账号`,
         label: "确认账号状态变更",
-        description: `变更前：${user.active ? "已启用" : "已停用"}\n变更后：${input.active ? "已启用" : "已停用"}\n影响：停用后成员将无法继续使用账号；历史积分与审计记录保留。`,
+        description: "历史积分、业务记录和审计日志不会删除。",
+        impact: [
+          { label: "成员", value: `${user.nickname} · ${user.kuaishouId}` },
+          { label: "状态变化", value: `${user.active ? "已启用" : "已停用"} → ${input.active ? "已启用" : "已停用"}`, tone: input.active ? "warning" : "danger" },
+          { label: "登录影响", value: input.active ? "恢复账号访问" : "成员将无法继续登录和使用成员功能", tone: input.active ? "default" : "danger" },
+        ],
         confirmationOnly: true,
         required: false,
         confirmLabel: `确认${input.active ? "启用" : "停用"}`,
+        tone: input.active ? "default" : "danger",
       });
       if (confirmed === null) return;
     }
@@ -2827,7 +2883,23 @@ export default function AdminPage() {
     }
   }
   async function handleGiftDelete(gift: AdminGiftRow) {
-    if (giftActionId || !window.confirm(`确认删除“${gift.name}”？历史兑换和榜单记录仍会保留。`)) return;
+    if (giftActionId) return;
+    const confirmed = await askAdminValue({
+      title: "确认删除商城礼品",
+      label: "确认口令",
+      description: "礼品会从商城目录移除，但历史兑换、榜单和审计记录仍会保留。",
+      impact: [
+        { label: "礼品", value: gift.name },
+        { label: "当前库存", value: `${gift.stock} 份` },
+        { label: "历史兑换", value: `${gift.salesCount} 笔记录继续保留` },
+        { label: "目录影响", value: "成员将无法再查看或兑换", tone: "danger" },
+      ],
+      expectedValue: "确认删除",
+      placeholder: "输入“确认删除”",
+      confirmLabel: "确认删除",
+      tone: "danger",
+    });
+    if (confirmed === null) return;
     setGiftActionId(gift.id);
     try {
       const response = await fetch(`/api/admin/gifts/${gift.id}`, { method: "DELETE" });
@@ -2851,6 +2923,9 @@ export default function AdminPage() {
     if (section === "videos") { if (!loadedSections.videos) return; if (search) void loadVideos({ search }); }
     if (section === "orders") { if (!loadedSections.orders) return; void loadOrders(search ? { search } : { status: filter }); }
     if (section === "logs") { if (!loadedSections.logs) return; if (search) void loadAudit({ search }); }
+    if (section === "settings" && filter === "registration-invite") {
+      window.requestAnimationFrame(() => document.getElementById("registration-invite-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
     setNavigationTarget(null);
   }, [navigationTarget, data, loadedSections.users, loadedSections.videos, loadedSections.orders, loadedSections.logs]);
   const render = () => {
@@ -2861,7 +2936,7 @@ export default function AdminPage() {
       return <AdminModuleState loading={Boolean(status.loading)} error={status.error} onRetry={() => void ensureSectionLoaded(active, true)} />;
     }
     if (active === "videos") return <VideoManagement secondaryReviews={data.secondaryReviews} videos={data.videos} appeals={data.appeals} secondaryReviewsPagination={data.secondaryReviewsPagination} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onSecondaryReviewAction={handleSecondaryReviewAction} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreSecondaryReviews={loadMoreSecondaryReviews} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onFilterSecondaryReviews={(status) => loadSecondaryReviews({ status })} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} onVideoActivity={(video) => setActivityTarget({ entity: "VideoSubmission", entityId: video.id, title: video.photoId ?? `${video.user.nickname} 的视频` })} />;
-    if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} voluntaryExits={data.voluntaryExits} voluntaryExitPagination={data.voluntaryExitPagination} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} onLoadMoreExits={loadMoreVoluntaryExits} onSearchExits={(search) => loadVoluntaryExits({ search })} />;
+    if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} voluntaryExits={data.voluntaryExits} voluntaryExitPagination={data.voluntaryExitPagination} onInvite={() => changeSection("settings", "registration-invite")} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} onLoadMoreExits={loadMoreVoluntaryExits} onSearchExits={(search) => loadVoluntaryExits({ search })} />;
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} statusCounts={data.orderStatusCounts} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;

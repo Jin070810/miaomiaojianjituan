@@ -5,6 +5,7 @@ import "@fontsource/noto-serif-sc/600.css";
 import "@fontsource/noto-serif-sc/700.css";
 import "./globals.css";
 import "./member/member-theme.css";
+import "./admin/admin-theme.css";
 
 export const metadata: Metadata = {
   title: "妙妙剪辑团积分中心",

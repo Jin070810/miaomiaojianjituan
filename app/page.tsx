@@ -54,6 +54,7 @@ import { BrandMark, PageScene, StateMessage } from "./member/brand";
 import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
 import { miaoAssets } from "./member/visual-assets";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
+import { ledgerLabel } from "@/lib/labels";
 import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
 import { fetchMemberJson, MemberFetchError } from "@/lib/member-fetch";
 import { AchievementSummaryCard, AchievementView, type AchievementData } from "./member/achievement-view";
@@ -292,85 +293,10 @@ function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; load
   );
 }
 
-function ledgerLabel(type: string, note: string | null) {
-  if (note) return note;
-  const labels: Record<string, string> = {
-    VIDEO_REWARD: "切片奖励",
-    TRANSFER_IN: "团友送来的积分",
-    TRANSFER_OUT: "送给团友的积分",
-    REDEMPTION: "礼品兑换",
-    ADMIN_ADJUSTMENT: "管理员调整",
-    REVERSAL: "积分冲正",
-  };
-  return labels[type] ?? "积分变动";
-}
+// 礼品缺图时的品牌占位图：不再使用 unsplash 外域图（国内不可达会裂图）。
+const GIFT_PLACEHOLDER_IMAGE = "/brand/miaomiao/v3/character-gift.webp";
+const GIFT_PLACEHOLDER_TONES = ["orange", "teal", "purple", "green"];
 
-const gifts: DisplayGift[] = [
-  {
-    id: "g1",
-    name: "剪辑团定制保温杯",
-    points: 680,
-    stock: 38,
-    image:
-      "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&w=900&q=85",
-    tag: "人气礼品",
-    tone: "orange",
-    kind: "PHYSICAL" as const,
-    category: "实用好物",
-    tags: ["实用好物", "实物商品"],
-    fulfillmentFields: [],
-    salesCount: 0,
-    pinned: false,
-  },
-  {
-    id: "g2",
-    name: "创作者桌面收纳套装",
-    points: 420,
-    stock: 12,
-    image:
-      "https://images.unsplash.com/photo-1586953208448-b95a79798f07?auto=format&fit=crop&w=900&q=85",
-    tag: "限量",
-    tone: "teal",
-    kind: "PHYSICAL" as const,
-    category: "实用好物",
-    tags: ["实用好物", "实物商品"],
-    fulfillmentFields: [],
-    salesCount: 0,
-    pinned: false,
-  },
-  {
-    id: "g3",
-    name: "视频剪辑会员月卡",
-    points: 260,
-    stock: 86,
-    image:
-      "https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=900&q=85",
-    tag: "实用兑换",
-    tone: "purple",
-    kind: "MEMBERSHIP" as const,
-    category: "会员权益",
-    tags: ["会员权益", "权益兑换"],
-    fulfillmentFields: [{ key: "membership_account", label: "会员账号", type: "TEXT", required: true }],
-    salesCount: 0,
-    pinned: false,
-  },
-  {
-    id: "g4",
-    name: "创作灵感便签礼盒",
-    points: 180,
-    stock: 64,
-    image:
-      "https://images.unsplash.com/photo-1455390582262-044cdead277a?auto=format&fit=crop&w=900&q=85",
-    tag: "新品",
-    tone: "green",
-    kind: "PHYSICAL" as const,
-    category: "实用好物",
-    tags: ["实用好物", "实物商品"],
-    fulfillmentFields: [],
-    salesCount: 0,
-    pinned: false,
-  },
-];
 
 function Avatar({ text = "妙", tone = "coral", imageUrl }: { text?: string; tone?: string; imageUrl?: string | null }) {
   return <span className={`avatar avatar-${tone}`}><img src={imageUrl || "/avatars/default.webp"} alt={`${text}的头像`} /></span>;
@@ -2205,9 +2131,9 @@ export default function MemberApp() {
       points: gift.pointsCost,
       stock: gift.stock,
       kind: gift.kind,
-      image: gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl) ? gift.imageUrl : gifts[index % gifts.length].image,
+      image: gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl) ? gift.imageUrl : GIFT_PLACEHOLDER_IMAGE,
       tag: gift.stock > 0 ? "可兑换" : "已售罄",
-      tone: gifts[index % gifts.length].tone,
+      tone: GIFT_PLACEHOLDER_TONES[index % GIFT_PLACEHOLDER_TONES.length],
       salesCount: gift.salesCount ?? 0,
       pinned: gift.pinned ?? false,
       category: gift.category || "实用好物",

@@ -14,7 +14,7 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchMemberJson } from "@/lib/member-fetch";
 
 type NotificationRow = {
@@ -71,16 +71,28 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [page, setPage] = useState(1);
   const [data, setData] = useState<NotificationResponse | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [popupRows, setPopupRows] = useState<NotificationRow[]>([]);
   const [popupOpen, setPopupOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (nextPage = page, nextFilter = filter, showPrompt = false) => {
+  // 轻量角标刷新：面板关闭时只取未读数，不再每 30 秒拉取全量通知列表。
+  const refreshBadge = useCallback(async () => {
+    try {
+      const parsed = await fetchMemberJson<NotificationResponse>("/api/notifications?status=unread&page=1&take=1", "通知加载失败");
+      setUnreadCount(parsed.unreadCount);
+    } catch {
+      // 角标轮询失败保持现状，等下一轮或用户操作时恢复。
+    }
+  }, []);
+
+  const load = useCallback(async (nextPage: number, nextFilter: "all" | "unread", showPrompt = false) => {
     setLoading(true);
     try {
       const parsed = await fetchMemberJson<NotificationResponse>(`/api/notifications?status=${nextFilter}&page=${nextPage}&take=20`, "通知加载失败");
       setData(parsed);
+      setUnreadCount(parsed.unreadCount);
       setError("");
       if (showPrompt && parsed.unreadCount > 0 && !window.sessionStorage.getItem(PROMPT_SESSION_KEY)) {
         const unreadResult = await fetchMemberJson<NotificationResponse>("/api/notifications?status=unread&page=1&take=10", "通知加载失败").catch(() => null);
@@ -95,11 +107,23 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
     } finally {
       setLoading(false);
     }
-  }, [filter, page]);
+  }, []);
+
+  const pollingRef = useRef({ open, page, filter });
+  pollingRef.current = { open, page, filter };
 
   useEffect(() => {
     void load(1, "unread", true);
-    const refresh = () => void load(page, filter, false);
+  }, [load]);
+
+  useEffect(() => {
+    const refresh = () => {
+      // 后台标签页暂停轮询，回到前台立即补一次。
+      if (document.visibilityState !== "visible") return;
+      const current = pollingRef.current;
+      if (current.open) void load(current.page, current.filter);
+      else void refreshBadge();
+    };
     const timer = window.setInterval(refresh, 30_000);
     const onVisibility = () => {
       if (document.visibilityState === "visible") refresh();
@@ -111,9 +135,7 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", refresh);
     };
-  }, [load, page, filter]);
-
-  const unreadCount = data?.unreadCount ?? 0;
+  }, [load, refreshBadge]);
 
   async function markRead(id: string) {
     const response = await fetch(`/api/notifications/${id}`, {
@@ -122,6 +144,8 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
       body: JSON.stringify({ read: true }),
     });
     if (!response.ok) return;
+    const wasUnread = Boolean(data?.notifications.find((row) => row.id === id && !row.readAt));
+    if (wasUnread) setUnreadCount((value) => Math.max(0, value - 1));
     setData((current) => current ? {
       ...current,
       unreadCount: Math.max(0, current.unreadCount - (current.notifications.find((row) => row.id === id)?.readAt ? 0 : 1)),
@@ -137,6 +161,7 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
       body: JSON.stringify({ action: "read-all" }),
     });
     if (!response.ok) return;
+    setUnreadCount(0);
     setData((current) => current ? {
       ...current,
       unreadCount: 0,
@@ -193,7 +218,7 @@ export default function NotificationCenter({ onOpenDetail }: NotificationCenterP
               <button className="text-button" onClick={() => void markAllRead()} disabled={!unreadCount}><CheckCheck size={15} />全部已读</button>
             </div>
             {loading && <div className="notification-loading">正在找新消息...</div>}
-            {error && <div className="notification-error" role="alert">{error}<button className="secondary-button compact-button" onClick={() => void load()}>重试</button></div>}
+            {error && <div className="notification-error" role="alert">{error}<button className="secondary-button compact-button" onClick={() => void load(page, filter)}>重试</button></div>}
             {!loading && !error && rows.length === 0 && <div className="empty-state notification-empty"><Bell size={25} /><strong>暂无通知</strong><span>{filter === "unread" ? "所有通知都已读" : "新的进度和公告会显示在这里"}</span></div>}
             {!loading && !error && rows.length > 0 && <div className="notification-list">{rows.map((row) => renderRow(row))}</div>}
             {data && data.pagination.pages > 1 && (

@@ -133,6 +133,13 @@ services:
         condition: service_healthy
     volumes:
       - ./backups:/app/backups
+    healthcheck:
+      # 复用 worker 写入 Redis 的心跳 key，假死由 restart 策略自动恢复。
+      test: ["CMD", "node", "scripts/worker-healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     stop_grace_period: 75s
     logging: *default-logging

@@ -78,7 +78,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 ## v1.3 AI 个性化周挑战
 
-- Worker 使用 BullMQ 持久调度器在周日 18:00（`Asia/Shanghai`）冻结下一周 audience，并由周期巡检补齐丢失、失败或租约过期的生成任务；队列任务三次指数退避，重复入队按周期去重。
+- Worker 使用 BullMQ 持久调度器在周日 18:00（`Asia/Shanghai`）冻结下一周 audience，并由周期巡检补齐丢失、失败或租约过期的生成任务；队列任务三次指数退避，重复入队按周期去重。若周日晚 Worker 缺席导致调度错过，周期巡检会在周一整天（上海时间）把本周缺失或失败的周期按“迟到补跑”重新入队并发出告警，`allowLateGeneration` 会把发布截止放宽到周期开始后 24 小时内，避免整周挑战被静默跳过。
 - 只有上周提交过非失败视频的成员才进入 audience。每批最多处理 8 名匿名成员；DeepSeek 只接收匿名引用、最近两周聚合数据和服务端确定的目标，不接收昵称、快手 ID、手机号、地址、余额或视频链接。
 - 视频数、点赞数、基线、难度和三档整数奖励全部由服务端确定并校验，模型只返回 `memberRef`、标题、说明和原因。提示词版本为 `weekly-challenge-v5-deterministic-targets`，严格拒绝模型提供数值业务字段。
 - 每批 AI 文案最多尝试三次；连续失败后改用已审核的稳定模板，仍在事务中完整发布并记录 `AI`、`HYBRID` 或 `DETERMINISTIC` 模式。已校验批次按输入哈希保存，Worker 重启或人工重试不会重复调用已完成批次。

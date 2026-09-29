@@ -48,12 +48,13 @@ test("member growth loads locally, retries, and fits the configured viewport", a
       { id: "top-2", sourceUrl: "https://v.kuaishou.com/member-growth-second", submittedAt: "2026-07-26T03:00:00.000Z", likes: 8000, points: 4000 },
     ],
   };
-  let attempts = 0;
+  // Next dev 模式 StrictMode 会双触发挂载效果（第一次失败被 remount 丢弃），
+  // 生产模式只有单次请求，因此用“剩余失败次数”计数：初始加载吃掉失败额度并
+  // 稳定渲染出错误态，点击重试前把额度清零，两种模式下重试都必然拿到成功数据。
+  let remainingFailures = 2;
   await page.route("**/api/member/growth", async (route) => {
-    attempts += 1;
-    // Next 16.3 起 dev 模式 StrictMode 会双触发挂载效果：第一次请求的失败会被
-    // remount 丢弃。前两次都失败才能保证错误态在单次/双次挂载下都稳定可见。
-    if (attempts <= 2) {
+    if (remainingFailures > 0) {
+      remainingFailures -= 1;
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "模拟成长接口失败" }) });
       return;
     }
@@ -65,6 +66,7 @@ test("member growth loads locally, retries, and fits the configured viewport", a
   await expect(page.getByRole("heading", { name: "本周成长" })).toBeVisible();
   await expect(page.getByText("模拟成长接口失败")).toBeVisible();
   // 定位器限定在成长卡片内，避免其他卡片的错误态（如有）造成严格模式冲突。
+  remainingFailures = 0;
   await growthCard.getByRole("button", { name: "重新加载" }).click();
   await expect(page.getByText("9,999,999,999").first()).toBeVisible();
   await expect(page.getByText("本周开始有记录").first()).toBeVisible();

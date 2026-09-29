@@ -85,7 +85,14 @@ export default defineConfig({
       testMatch: /birthday-system\.spec\.ts/,
     },
   ],
-  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER === "1" ? undefined : {
+  // CI 用生产构建跑 e2e（next start），与发布的 standalone 行为一致；
+  // 本地默认仍是 dev server，便于断点调试。生产模式需要先执行 npm run build。
+  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER === "1" ? undefined : process.env.PLAYWRIGHT_PROD_SERVER === "1" ? {
+    command: "npx next start --hostname 127.0.0.1 --port 3213",
+    url: "http://127.0.0.1:3213/login",
+    reuseExistingServer: false,
+    timeout: 300_000,
+  } : {
     command: "npm run dev -- --hostname 127.0.0.1 --port 3213",
     url: "http://127.0.0.1:3213/login",
     reuseExistingServer: false,

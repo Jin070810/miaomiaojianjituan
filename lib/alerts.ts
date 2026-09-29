@@ -179,6 +179,22 @@ async function sendEmail(payload: AlertPayload, config: Extract<EmailConfigurati
   return "email-send-failed";
 }
 
+// 相同 source+severity+message 的告警在冷却窗口内只发送一次，避免故障期间
+// 的告警风暴（例如恢复循环每分钟重入队、Redis 每次报错各发一条）。窗口期内的
+// 重复条数会被计数，并在下一次真正发送时随 details 附带出去。
+const DEFAULT_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+type AlertCooldownEntry = { lastSentAt: number; suppressed: number };
+const alertCooldown = new Map<string, AlertCooldownEntry>();
+
+function alertCooldownMs() {
+  const value = Number(process.env.ALERT_COOLDOWN_MS);
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_ALERT_COOLDOWN_MS;
+}
+
+export function resetOperationalAlertCooldownForTests() {
+  alertCooldown.clear();
+}
+
 export async function sendOperationalAlert(input: {
   source: string;
   severity: AlertSeverity;
@@ -191,11 +207,23 @@ export async function sendOperationalAlert(input: {
   if (!webhook && email.state === "absent") {
     return { sent: false, reason: "not-configured" as const };
   }
+  const cooldownKey = `${input.source}|${input.severity}|${input.message}`;
+  const cooldownEntry = alertCooldown.get(cooldownKey);
+  const now = Date.now();
+  if (cooldownEntry && now - cooldownEntry.lastSentAt < alertCooldownMs()) {
+    cooldownEntry.suppressed += 1;
+    console.warn(`[alerts] 冷却期内抑制重复告警：${cooldownKey}（已累计 ${cooldownEntry.suppressed} 条）`);
+    return { sent: false, reason: "cooldown" as const };
+  }
+  const suppressed = cooldownEntry?.suppressed ?? 0;
+  alertCooldown.set(cooldownKey, { lastSentAt: now, suppressed: 0 });
   const payload: AlertPayload = {
     source: input.source,
     severity: input.severity,
     message: input.message,
-    details: safeDetails(input.details),
+    details: suppressed > 0
+      ? { ...safeDetails(input.details), suppressedDuringCooldown: suppressed }
+      : safeDetails(input.details),
     occurredAt: new Date().toISOString(),
   };
   const channels: Array<"webhook" | "email"> = [];
@@ -209,7 +237,10 @@ export async function sendOperationalAlert(input: {
     deliveries.push(sendEmail(payload, email));
   }
   const failures = (await Promise.all(deliveries)).filter((reason): reason is string => Boolean(reason));
-  return failures.length
-    ? { sent: false, reason: failures.join(",") }
-    : { sent: true as const, channels };
+  if (failures.length) {
+    // 投递失败时撤销冷却，保证下一次同类告警能立即重试。
+    alertCooldown.delete(cooldownKey);
+    return { sent: false, reason: failures.join(",") };
+  }
+  return { sent: true as const, channels };
 }

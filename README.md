@@ -70,7 +70,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 ## v1.2.1 稳定性增强
 
 - 管理后台“系统设置”提供视频提交、积分转账和礼品兑换三个服务端运营开关；关闭入口不影响后台处理已有数据。
-- 告警支持二选一或同时配置：`ALERT_WEBHOOK_URL` 接入外部 HTTP 系统；或者使用 `ALERT_EMAIL_TO`、`ALERT_SMTP_HOST`、`ALERT_SMTP_USER`、`ALERT_SMTP_PASSWORD` 配置 SMTP 邮件。Worker 失败、Redis/Worker 不可用、队列滞留、每日对账异常和备份异常都会发送递归脱敏后的告警。163 邮箱使用 `smtp.163.com:465`、`ALERT_SMTP_SECURE=true`，密码必须填写客户端授权码而不是网页登录密码。
+- 告警支持二选一或同时配置：`ALERT_WEBHOOK_URL` 接入外部 HTTP 系统；或者使用 `ALERT_EMAIL_TO`、`ALERT_SMTP_HOST`、`ALERT_SMTP_USER`、`ALERT_SMTP_PASSWORD` 配置 SMTP 邮件。Worker 失败、Redis/Worker 不可用、队列滞留、每日对账异常和备份异常都会发送递归脱敏后的告警；相同来源与消息的告警在冷却窗口（默认 10 分钟，`ALERT_COOLDOWN_MS` 可调）内只发送一次，窗口内的重复条数会在下一次发送时附带，投递失败会立即撤销冷却以便重试。Worker 每分钟维护循环的六个子系统彼此隔离，单个任务失败按各自来源告警，不再吞掉其余任务的结果。163 邮箱使用 `smtp.163.com:465`、`ALERT_SMTP_SECURE=true`，密码必须填写客户端授权码而不是网页登录密码。
 - 每日巡检执行 `npm run ops:daily-check`，备份校验执行 `npm run ops:verify-backups`；建议由 cron/任务计划程序运行并保留输出。
 - 管理后台系统设置可导出订单、积分、视频和审计四类脱敏 CSV；CSV 已防止公式注入，手机号、地址、收款码、密码和原始抓取 payload 不导出。
 

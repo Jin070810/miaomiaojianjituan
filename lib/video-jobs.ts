@@ -8,6 +8,17 @@ import { videoEligibilityError } from "./kuaishou";
 import { creditVideoReward } from "./points";
 import { getVideoPointRule } from "./point-rules";
 import { createNotification } from "./notifications";
+import { isPermanentFetchError } from "./fetch-errors";
+
+export type VideoFetchFailureAction = "reject-permanent" | "reject-final" | "retry";
+
+// 抓取失败的处理决策：确定性失败直接驳回；瞬时错误在还有队列重试机会时抛回重试，
+// 到了最后一次尝试则按“抓取暂时失败”驳回，成员之后仍可重新提交或申诉。
+export function resolveFetchFailureAction(error: unknown, finalAttempt: boolean): VideoFetchFailureAction {
+  if (isPermanentFetchError(error)) return "reject-permanent";
+  if (finalAttempt) return "reject-final";
+  return "retry";
+}
 
 function connection() {
   const url = new URL(process.env.REDIS_URL ?? "redis://127.0.0.1:6379");
@@ -76,7 +87,12 @@ async function autoRejectVideo(
   });
 }
 
-export async function processVideoSubmission(videoId: string) {
+const TRANSIENT_FETCH_REJECT_REASON = "视频抓取暂时失败（已自动重试仍未成功），请稍后重新提交；如确认视频正常可提交申诉";
+
+export async function processVideoSubmission(
+  videoId: string,
+  options: { finalAttempt?: boolean } = {},
+) {
   const video = await db.videoSubmission.findUnique({ where: { id: videoId }, include: { user: true } });
   if (!video || !["PROCESSING", "FAILED", "PENDING_REVIEW"].includes(video.status)) return video;
   const pointRule = await getVideoPointRule();
@@ -86,11 +102,18 @@ export async function processVideoSubmission(videoId: string) {
         ? await fetchDouyinVideo(video.sourceUrl, video.submittedNickname, pointRule)
         : await fetchKuaishouVideo(video.sourceUrl, video.submittedNickname, pointRule);
     } catch (error) {
-      return autoRejectVideo(
-        video.id,
-        error instanceof Error ? `链接失效或视频不存在：${error.message}` : "链接失效或视频不存在，无法获取视频数据",
-        { rawPayload: { fetchFailed: true } },
-      );
+      const action = resolveFetchFailureAction(error, options.finalAttempt === true);
+      if (action === "reject-permanent") {
+        return autoRejectVideo(
+          video.id,
+          `链接失效或视频不存在：${error instanceof Error ? error.message : "无法获取视频数据"}`,
+          { rawPayload: { fetchFailed: true } },
+        );
+      }
+      if (action === "reject-final") {
+        return finalizeVideoFetchFailure(video.id);
+      }
+      throw error;
     }
     const duplicate = await db.videoSubmission.findFirst({
       where: { photoId: fetched.photoId, id: { not: video.id }, status: { in: ["APPROVED", "PENDING_REVIEW", "PROCESSING"] } },
@@ -206,6 +229,12 @@ export async function prepareVideoReprocess(input: { videoId: string; actorId: s
   });
 }
 
+export async function finalizeVideoFetchFailure(videoId: string) {
+  return autoRejectVideo(videoId, TRANSIENT_FETCH_REJECT_REASON, {
+    rawPayload: { fetchFailed: true, transient: true },
+  });
+}
+
 export async function enqueueVideo(videoId: string) {
   if (process.env.REDIS_URL) {
     const videoQueue = getQueue();
@@ -224,7 +253,20 @@ export async function enqueueVideo(videoId: string) {
       removeOnFail: 100,
     });
   } else {
-    void processVideoSubmission(videoId).catch(() => undefined);
+    void runInlineVideoSubmission(videoId).catch(() => undefined);
+  }
+}
+
+// 无 Redis 的回退模式没有队列重试，这里内联补一次重试，
+// 仍失败（瞬时错误）则按终局尝试自动驳回，避免视频永远卡在 PROCESSING。
+async function runInlineVideoSubmission(videoId: string) {
+  try {
+    await processVideoSubmission(videoId, { finalAttempt: false });
+  } catch (error) {
+    if (error instanceof Error && error.name === "VideoFetchError") {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    await processVideoSubmission(videoId, { finalAttempt: true });
   }
 }
 

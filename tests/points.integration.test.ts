@@ -238,6 +238,61 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(250);
   });
 
+  it("serializes concurrent appeal approvals that share one photoId", async () => {
+    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
+    const photoId = `appeal-race-photo-${Date.now()}`;
+    const videoA = await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/integration-appeal-race-a",
+        requestUrl: "https://v.kuaishou.com/integration-appeal-race-a",
+        sourceKind: "short-link",
+        status: "REJECTED",
+        likes: 500,
+        photoId,
+        submittedNickname: "测试转出",
+        idempotencyKey: `integration-appeal-race-a-${photoId}`,
+      },
+    });
+    const videoB = await db.videoSubmission.create({
+      data: {
+        userId: senderId,
+        sourceUrl: "https://v.kuaishou.com/integration-appeal-race-b",
+        requestUrl: "https://v.kuaishou.com/integration-appeal-race-b",
+        sourceKind: "short-link",
+        status: "REJECTED",
+        likes: 500,
+        photoId,
+        submittedNickname: "测试转出",
+        idempotencyKey: `integration-appeal-race-b-${photoId}`,
+      },
+    });
+    const [appealA, appealB] = await Promise.all([
+      db.videoAppeal.create({ data: { videoId: videoA.id, userId: senderId, reason: "同一内容申诉A", idempotencyKey: `integration-appeal-race-a-appeal-${photoId}` } }),
+      db.videoAppeal.create({ data: { videoId: videoB.id, userId: senderId, reason: "同一内容申诉B", idempotencyKey: `integration-appeal-race-b-appeal-${photoId}` } }),
+    ]);
+    const [resultA, resultB] = await Promise.allSettled([
+      resolveVideoAppeal({ appealId: appealA.id, action: "approve", points: 250, actorId: receiverId }),
+      resolveVideoAppeal({ appealId: appealB.id, action: "approve", points: 250, actorId: receiverId }),
+    ]);
+    const fulfilled = [resultA, resultB].filter((item) => item.status === "fulfilled");
+    const rejected = [resultA, resultB].filter((item) => item.status === "rejected");
+    // 同一 photoId 只允许一条申诉入账，另一条必须被拒绝。
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    if (rejected[0].status === "rejected") {
+      expect(String(rejected[0].reason?.message ?? rejected[0].reason)).toContain("该视频已被其他记录结算");
+    }
+    const credited = await db.pointLedger.count({ where: { OR: [{ referenceId: videoA.id }, { referenceId: videoB.id }], type: "VIDEO_REWARD" } });
+    expect(credited).toBe(1);
+    const approvedIds = await db.videoSubmission.findMany({ where: { photoId, status: "APPROVED" }, select: { id: true } });
+    expect(approvedIds).toHaveLength(1);
+    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(250);
+    await db.videoAppeal.deleteMany({ where: { videoId: { in: [videoA.id, videoB.id] } } });
+    await db.pointLedger.deleteMany({ where: { OR: [{ referenceId: videoA.id }, { referenceId: videoB.id }] } });
+    await db.videoSubmission.deleteMany({ where: { id: { in: [videoA.id, videoB.id] } } });
+  });
+
   it("reverses an approved video exactly once", async () => {
     await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
     const video = await db.videoSubmission.create({

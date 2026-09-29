@@ -20,60 +20,67 @@ function getQueue() {
   return (queue ??= new Queue("kuaishou-video", { connection: connection() }));
 }
 
-async function autoRejectVideo(
+async function autoRejectVideoWithTx(
+  tx: Prisma.TransactionClient,
   videoId: string,
   reason: string,
   data: Prisma.VideoSubmissionUpdateInput = {},
 ) {
-  return db.$transaction(async (tx) => {
-    const current = await tx.videoSubmission.findUnique({ where: { id: videoId } });
-    if (!current) throw new Error("视频记录不存在");
-    if (["APPROVED", "REVOKED"].includes(current.status)) return current;
-    const claimed = await tx.videoSubmission.updateMany({
-      where: { id: videoId, status: { in: ["PROCESSING", "FAILED", "PENDING_REVIEW"] } },
-      data: {
-        ...data,
-        status: "REJECTED",
-        points: 0,
-        reviewReason: reason,
-        processedAt: new Date(),
-        reviewedAt: new Date(),
-      },
-    });
-    if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
-    const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
-    await tx.auditLog.create({
-      data: {
-        action: "VIDEO_AUTO_REJECTED",
-        entity: "VideoSubmission",
-        entityId: videoId,
-        beforeValue: {
-          status: current.status,
-          likes: current.likes,
-          photoId: current.photoId,
-          matchedOwner: current.matchedOwner,
-        },
-        afterValue: {
-          status: updated.status,
-          likes: updated.likes,
-          photoId: updated.photoId,
-          matchedOwner: updated.matchedOwner,
-        },
-        reason,
-      },
-    });
-    await createNotification(tx, {
-      userId: current.userId,
-      type: "VIDEO_RESULT",
-      title: "视频未通过校验",
-      body: reason,
-      entityType: "VideoSubmission",
-      entityId: videoId,
-      metadata: { status: "REJECTED" },
-      dedupeKey: `video:${videoId}:auto-rejected:${updated.reviewedAt?.toISOString() ?? "final"}`,
-    });
-    return updated;
+  const current = await tx.videoSubmission.findUnique({ where: { id: videoId } });
+  if (!current) throw new Error("视频记录不存在");
+  if (["APPROVED", "REVOKED"].includes(current.status)) return current;
+  const claimed = await tx.videoSubmission.updateMany({
+    where: { id: videoId, status: { in: ["PROCESSING", "FAILED", "PENDING_REVIEW"] } },
+    data: {
+      ...data,
+      status: "REJECTED",
+      points: 0,
+      reviewReason: reason,
+      processedAt: new Date(),
+      reviewedAt: new Date(),
+    },
   });
+  if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
+  const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
+  await tx.auditLog.create({
+    data: {
+      action: "VIDEO_AUTO_REJECTED",
+      entity: "VideoSubmission",
+      entityId: videoId,
+      beforeValue: {
+        status: current.status,
+        likes: current.likes,
+        photoId: current.photoId,
+        matchedOwner: current.matchedOwner,
+      },
+      afterValue: {
+        status: updated.status,
+        likes: updated.likes,
+        photoId: updated.photoId,
+        matchedOwner: updated.matchedOwner,
+      },
+      reason,
+    },
+  });
+  await createNotification(tx, {
+    userId: current.userId,
+    type: "VIDEO_RESULT",
+    title: "视频未通过校验",
+    body: reason,
+    entityType: "VideoSubmission",
+    entityId: videoId,
+    metadata: { status: "REJECTED" },
+    dedupeKey: `video:${videoId}:auto-rejected:${updated.reviewedAt?.toISOString() ?? "final"}`,
+  });
+  return updated;
+}
+
+export async function autoRejectVideo(
+  videoId: string,
+  reason: string,
+  data: Prisma.VideoSubmissionUpdateInput = {},
+) {
+  return db.$transaction((tx) => autoRejectVideoWithTx(tx, videoId, reason, data));
 }
 
 export async function processVideoSubmission(videoId: string) {
@@ -92,9 +99,6 @@ export async function processVideoSubmission(videoId: string) {
         { rawPayload: { fetchFailed: true } },
       );
     }
-    const duplicate = await db.videoSubmission.findFirst({
-      where: { photoId: fetched.photoId, id: { not: video.id }, status: { in: ["APPROVED", "PENDING_REVIEW", "PROCESSING"] } },
-    });
     const fetchedFields: Prisma.VideoSubmissionUpdateInput = {
       requestUrl: fetched.source.requestUrl,
       sourceKind: fetched.source.sourceKind,
@@ -115,49 +119,57 @@ export async function processVideoSubmission(videoId: string) {
         ...("rawPayload" in fetched ? fetched.rawPayload : {}),
       },
     };
-    if (duplicate) {
-      return autoRejectVideo(video.id, "该视频已提交过，不能重复兑换", {
-        ...fetchedFields,
-        rawPayload: { ...fetchedFields.rawPayload as object, duplicatePhotoId: fetched.photoId },
+    // 同一 photoId 的判重与占位必须在同一把事务级咨询锁内完成：两条并发提交各自
+    // findFirst 后再写入会双双入账（重复发积分）。photoId 没有数据库唯一约束
+    // （已驳回记录允许复用），只能靠这把锁串行化同一视频的全部入账路径。
+    const outcome = await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${fetched.photoId}`})::bigint)`;
+      const duplicate = await tx.videoSubmission.findFirst({
+        where: { photoId: fetched.photoId, id: { not: video.id }, status: { in: ["APPROVED", "PENDING_REVIEW", "PROCESSING"] } },
       });
-    }
-    const eligibilityError = videoEligibilityError(fetched.likes, fetched.publishedAt, video.submittedAt, pointRule);
-    if (eligibilityError) return autoRejectVideo(video.id, eligibilityError, fetchedFields);
-
-    if (!fetched.ownerMatches) {
-      return autoRejectVideo(
-        video.id,
-        `作者不一致：抓取到“${fetched.owner}”，提交昵称为“${video.submittedNickname}”`,
-        fetchedFields,
-      );
-    }
-
-    let updated;
-    try {
-      updated = await db.videoSubmission.update({
-        where: { id: video.id },
-        data: {
-          ...fetchedFields,
-          points: fetched.points,
-          status: "PROCESSING",
-          processedAt: new Date(),
-          reviewedAt: null,
-          reviewReason: null,
-        },
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        return autoRejectVideo(video.id, "该视频已被其他提交记录结算，不能重复兑换", {
+      if (duplicate) {
+        return { kind: "rejected" as const, result: await autoRejectVideoWithTx(tx, video.id, "该视频已提交过，不能重复兑换", {
           ...fetchedFields,
           rawPayload: { ...fetchedFields.rawPayload as object, duplicatePhotoId: fetched.photoId },
-        });
+        }) };
       }
-      throw error;
-    }
-    if (fetched.ownerMatches) {
-      return creditVideoReward({ videoId: video.id, userId: video.userId, points: fetched.points });
-    }
-  return updated;
+      const eligibilityError = videoEligibilityError(fetched.likes, fetched.publishedAt, video.submittedAt, pointRule);
+      if (eligibilityError) {
+        return { kind: "rejected" as const, result: await autoRejectVideoWithTx(tx, video.id, eligibilityError, fetchedFields) };
+      }
+      if (!fetched.ownerMatches) {
+        return { kind: "rejected" as const, result: await autoRejectVideoWithTx(
+          tx,
+          video.id,
+          `作者不一致：抓取到“${fetched.owner}”，提交昵称为“${video.submittedNickname}”`,
+          fetchedFields,
+        ) };
+      }
+      try {
+        const updated = await tx.videoSubmission.update({
+          where: { id: video.id },
+          data: {
+            ...fetchedFields,
+            points: fetched.points,
+            status: "PROCESSING",
+            processedAt: new Date(),
+            reviewedAt: null,
+            reviewReason: null,
+          },
+        });
+        return { kind: "claimed" as const, updated };
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          return { kind: "rejected" as const, result: await autoRejectVideoWithTx(tx, video.id, "该视频已被其他提交记录结算，不能重复兑换", {
+            ...fetchedFields,
+            rawPayload: { ...fetchedFields.rawPayload as object, duplicatePhotoId: fetched.photoId },
+          }) };
+        }
+        throw error;
+      }
+    });
+    if (outcome.kind === "rejected") return outcome.result;
+    return creditVideoReward({ videoId: video.id, userId: video.userId, points: fetched.points });
 }
 
 export async function prepareVideoReprocess(input: { videoId: string; actorId: string; ip?: string }) {

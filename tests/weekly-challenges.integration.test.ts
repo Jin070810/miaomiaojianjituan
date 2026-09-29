@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
   generateWeeklyChallengePeriod,
+  runWeeklyChallengeMaintenance,
   weeklyChallengeGenerationInternals,
 } from "@/lib/weekly-challenge-generation";
 import { prepareWeeklyChallengePeriodRegeneration } from "@/lib/weekly-challenge-upgrade";
@@ -102,6 +103,8 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS = "25";
     process.env.DEEPSEEK_IDLE_TIMEOUT_MS = "25";
     process.env.DEEPSEEK_RETRY_BASE_MS = "5";
+    // 迟到补跑窗口放大到 800 天，让用例可以用过去的周一验证补跑路径。
+    process.env.WEEKLY_CHALLENGE_LATE_GENERATION_WINDOW_MS = String(800 * 24 * 60 * 60 * 1000);
 
     const stalePeriods = await db.weeklyChallengePeriod.findMany({
       where: { periodStart: { in: [
@@ -173,6 +176,7 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
     delete process.env.DEEPSEEK_FIRST_BYTE_TIMEOUT_MS;
     delete process.env.DEEPSEEK_IDLE_TIMEOUT_MS;
     delete process.env.DEEPSEEK_RETRY_BASE_MS;
+    delete process.env.WEEKLY_CHALLENGE_LATE_GENERATION_WINDOW_MS;
     await db.$disconnect();
   });
 
@@ -650,4 +654,79 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       where: { type: "WEEKLY_RACE_REWARD", referenceId: initialWinner.id },
     })).toBe(2);
   }, 30_000);
+
+  it("recovers a missed Sunday generation window on Monday and reports it as late", async () => {
+    await db.systemSetting.upsert({
+      where: { key: "WEEKLY_CHALLENGES" },
+      create: { key: "WEEKLY_CHALLENGES", enabled: true },
+      update: { enabled: true },
+    });
+    // 2025-02-17（上海周一）08:00：周日晚调度缺席，本周周期缺失。
+    const mondayNow = new Date("2025-02-16T16:00:00.000Z").getTime() + 8 * 60 * 60 * 1000;
+    const monday = await runWeeklyChallengeMaintenance(new Date(mondayNow));
+    expect(monday.generationDue).toBe(true);
+    expect(monday.late).toBe(true);
+    expect(monday.periodStart?.toISOString()).toBe("2025-02-16T16:00:00.000Z");
+
+    // 周二窗口关闭：即使周期仍缺失也不再补跑。
+    const tuesdayNow = new Date("2025-02-17T16:00:00.000Z").getTime() + 8 * 60 * 60 * 1000;
+    const tuesday = await runWeeklyChallengeMaintenance(new Date(tuesdayNow));
+    expect(tuesday.generationDue).toBe(false);
+    expect(tuesday.periodStart).toBeNull();
+
+    // 周日 18:30 回归：仍按下一周周期判定，且不算迟到。
+    const sundayNow = new Date("2025-02-23T10:30:00.000Z").getTime();
+    const sunday = await runWeeklyChallengeMaintenance(new Date(sundayNow));
+    expect(sunday.generationDue).toBe(true);
+    expect(sunday.late).toBe(false);
+    expect(sunday.periodStart?.toISOString()).toBe("2025-02-23T16:00:00.000Z");
+  });
+
+  it("publishes a late generation for a period that already started when explicitly allowed", async () => {
+    responseMode = "valid";
+    const latePeriodStart = new Date("2025-02-02T16:00:00.000Z");
+    const members = await db.user.createManyAndReturn({
+      data: [1, 2].map((index) => ({
+        kuaishouId: `weekly-late-generation-${suffix}-${index}`,
+        nickname: `迟到补跑成员${index}`,
+        passwordHash: "test",
+        role: "MEMBER" as const,
+        active: true,
+        createdAt: new Date(latePeriodStart.getTime() - 7 * 24 * 60 * 60 * 1000),
+      })),
+    });
+    userIds.push(...members.map((member) => member.id));
+    await db.videoSubmission.createMany({
+      data: members.map((member, index) => ({
+        userId: member.id,
+        sourceUrl: `https://v.kuaishou.com/weekly-late-${suffix}-${index}`,
+        requestUrl: `https://v.kuaishou.com/weekly-late-${suffix}-${index}`,
+        sourceKind: "short-link",
+        status: "APPROVED" as const,
+        likes: 500,
+        submittedNickname: member.nickname,
+        submittedAt: new Date(latePeriodStart.getTime() - 24 * 60 * 60 * 1000),
+        idempotencyKey: `weekly-late-video-${suffix}-${index}`,
+      })),
+    });
+    const period = await generateWeeklyChallengePeriod({
+      periodStart: latePeriodStart,
+      allowLateGeneration: true,
+    });
+    periodIds.push(period.id);
+    expect(period.status).toBe("READY");
+    const assignments = await db.weeklyChallengeAssignment.findMany({ where: { periodId: period.id } });
+    expect(assignments).toHaveLength(2);
+  }, 30_000);
+
+  it("still refuses to generate a started period without the late flag", async () => {
+    const throwPeriodStart = new Date("2025-02-09T16:00:00.000Z");
+    await expect(generateWeeklyChallengePeriod({ periodStart: throwPeriodStart }))
+      .rejects.toThrow("周期已经开始，本周不再补发任务");
+    const orphan = await db.weeklyChallengePeriod.findUnique({ where: { periodStart: throwPeriodStart } });
+    if (orphan) {
+      await db.auditLog.deleteMany({ where: { entity: "WeeklyChallengePeriod", entityId: orphan.id } });
+      await db.weeklyChallengePeriod.delete({ where: { id: orphan.id } });
+    }
+  });
 });

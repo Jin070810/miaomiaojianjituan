@@ -8,6 +8,7 @@ import {
   activateAndCloseWeeklyChallenges,
   nextShanghaiWeekBounds,
   opaqueMemberRef,
+  shanghaiWeekBounds,
 } from "./weekly-challenges";
 import {
   buildRewardTiers,
@@ -25,6 +26,13 @@ const BATCH_SIZE = 8;
 const RACE_REWARD = 2_000;
 const PROMPT_VERSION = "weekly-challenge-v5-deterministic-targets";
 const DETERMINISTIC_MODEL = "deterministic-weekly-v1";
+// 周日晚调度缺席时允许在周期开始后补跑生成的最大时长（默认覆盖上海时间周一）。
+// 可用 WEEKLY_CHALLENGE_LATE_GENERATION_WINDOW_MS 覆盖，仅用于测试与应急。
+const DEFAULT_LATE_GENERATION_WINDOW_MS = DAY_MS;
+
+function lateGenerationWindowMs() {
+  return positiveIntegerEnv("WEEKLY_CHALLENGE_LATE_GENERATION_WINDOW_MS", DEFAULT_LATE_GENERATION_WINDOW_MS);
+}
 
 type MemberProfile = {
   userId: string;
@@ -715,11 +723,17 @@ export async function generateWeeklyChallengePeriod(input: {
   }
   if (period.generationRunId !== runId) return period;
   try {
-    if (Date.now() >= period.periodStart.getTime()) {
+    // 迟到补跑：允许在周期开始后 lateGenerationWindowMs 内补齐缺失/失败的周期，
+    // 否则周日晚 Worker 缺席会导致整周挑战被静默跳过。窗口外维持原有拒绝行为。
+    const publishCutoff = period.periodStart.getTime()
+      + (input.allowLateGeneration ? lateGenerationWindowMs() : 0);
+    if (Date.now() >= publishCutoff) {
       throw new Error("周期已经开始，本周不再补发任务");
     }
+    // 迟到补跑时补一段 1 小时的 AI 预算（原 deadline 已随周期开始而过期），
+    // 超出后仍未完成的批次照常降级为已审核的稳定模板。
     const providerDeadline = input.allowLateGeneration
-      ? new Date(period.periodStart.getTime() - 10 * 60 * 1000)
+      ? new Date(Date.now() + HOUR_MS)
       : generationDeadline(period.periodStart);
     const audience = z.array(z.string()).parse(period.audienceSnapshot);
     if (audience.length === 0) {
@@ -764,7 +778,7 @@ export async function generateWeeklyChallengePeriod(input: {
       tasks.push(...result.tasks);
       batchResults.push(result);
     }
-    if (Date.now() >= period.periodStart.getTime()) throw new Error("周期已经开始，本周不再补发任务");
+    if (Date.now() >= publishCutoff) throw new Error("周期已经开始，本周不再补发任务");
     const fallbackBatchCount = batchResults.filter((result) => result.source === "DETERMINISTIC").length;
     const generationMode = fallbackBatchCount === 0
       ? "AI" as const
@@ -872,10 +886,15 @@ export async function runWeeklyChallengeMaintenance(now = new Date()) {
   const lifecycle = await activateAndCloseWeeklyChallenges(now);
   const shifted = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   const isGenerationWindow = shifted.getUTCDay() === 0 && shifted.getUTCHours() >= 18;
-  if (!isGenerationWindow) return { ...lifecycle, generationDue: false, periodStart: null };
+  // 迟到补跑窗口：周日晚调度缺席（Worker 宕机、Redis 调度丢失）时，周一整天仍可
+  // 补齐本周缺失/失败的周期，否则本周挑战会被静默跳过整整一周。
+  const isLateRecoveryWindow = shifted.getUTCDay() === 1;
+  if (!isGenerationWindow && !isLateRecoveryWindow) {
+    return { ...lifecycle, generationDue: false, periodStart: null, late: false };
+  }
   const setting = await db.systemSetting.findUnique({ where: { key: "WEEKLY_CHALLENGES" }, select: { enabled: true } });
-  if (!setting?.enabled) return { ...lifecycle, generationDue: false, periodStart: null };
-  const bounds = nextShanghaiWeekBounds(now);
+  if (!setting?.enabled) return { ...lifecycle, generationDue: false, periodStart: null, late: false };
+  const bounds = isLateRecoveryWindow ? shanghaiWeekBounds(now) : nextShanghaiWeekBounds(now);
   const period = await db.weeklyChallengePeriod.findUnique({
     where: { periodStart: bounds.start },
     select: { id: true, status: true, generationStartedAt: true },
@@ -889,6 +908,7 @@ export async function runWeeklyChallengeMaintenance(now = new Date()) {
     periodStart: generationDue ? bounds.start : null,
     periodId: period?.id ?? null,
     status: period?.status ?? null,
+    late: isLateRecoveryWindow,
   };
 }
 

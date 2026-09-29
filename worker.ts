@@ -32,6 +32,8 @@ const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
     await generateWeeklyChallengePeriod({
       periodStart: maintenance.periodStart,
       retryFailed: true,
+      // 调度器周日触发、任务周一才被消费时，同样允许迟到补跑。
+      allowLateGeneration: maintenance.late === true,
     });
     return;
   }
@@ -86,7 +88,19 @@ async function maintenance() {
       runBirthdayMaintenance(),
     ]);
     if (challengeMaintenance.generationDue && challengeMaintenance.periodStart) {
-      await enqueueWeeklyChallengeGeneration(challengeMaintenance.periodStart, true, false);
+      const enqueued = await enqueueWeeklyChallengeGeneration(
+        challengeMaintenance.periodStart,
+        true,
+        challengeMaintenance.late === true,
+      );
+      if (!enqueued.reused && challengeMaintenance.late) {
+        await sendOperationalAlert({
+          source: "weekly-challenge-worker",
+          severity: "warning",
+          message: "周挑战错过周日生成窗口，已按迟到补跑重新入队",
+          details: { periodStart: challengeMaintenance.periodStart.toISOString() },
+        });
+      }
     }
     if (recovery.found > 0) {
       console.log(`[video-worker] recovery scanned=${recovery.found} enqueued=${recovery.enqueued}`);

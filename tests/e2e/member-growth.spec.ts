@@ -61,9 +61,11 @@ test("member growth loads locally, retries, and fits the configured viewport", a
   });
 
   await login(page, e2eIds.noTaskMember);
+  const growthCard = page.getByLabel("本周成长");
   await expect(page.getByRole("heading", { name: "本周成长" })).toBeVisible();
   await expect(page.getByText("模拟成长接口失败")).toBeVisible();
-  await page.getByRole("button", { name: "重新加载" }).click();
+  // 定位器限定在成长卡片内，避免其他卡片的错误态（如有）造成严格模式冲突。
+  await growthCard.getByRole("button", { name: "重新加载" }).click();
   await expect(page.getByText("9,999,999,999").first()).toBeVisible();
   await expect(page.getByText("本周开始有记录").first()).toBeVisible();
   await expectNoHorizontalOverflow(page);

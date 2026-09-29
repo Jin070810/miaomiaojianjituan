@@ -67,6 +67,9 @@ async function debit(
   return updated;
 }
 
+// 补偿性扣减（撤销视频奖励/冲正）允许把余额扣成负数：奖励可能已被成员花掉，
+// 但撤销必须完整执行。负余额是有意语义，由每日 data:reconcile 的 negativeBalances
+// 检查兜底发现；不要在这里加余额下限条件，否则撤销会静默失败。
 async function debitCompensating(
   tx: Prisma.TransactionClient,
   userId: string,
@@ -665,15 +668,14 @@ export async function creditVideoReward(input: {
       });
       return rejected;
     }
+    const claimedAt = new Date();
     const claimed = await tx.videoSubmission.updateMany({
       where: { id: video.id, status: { in: ["PROCESSING", "PENDING_REVIEW", "FAILED"] } },
-      data: { status: "APPROVED", points: input.points, processedAt: new Date(), reviewedAt: new Date() },
+      data: { status: "APPROVED", points: input.points, processedAt: claimedAt, reviewedAt: claimedAt },
     });
     if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
-    const updated = await tx.videoSubmission.update({
-      where: { id: video.id },
-      data: { points: input.points },
-    });
+    // updateMany 已写入状态、积分和时间戳，这里直接推导 updated，避免对同一行的第二次冗余 UPDATE。
+    const updated = { ...video, status: "APPROVED" as const, points: input.points, processedAt: claimedAt, reviewedAt: claimedAt };
     if (input.points > 0) {
       await credit(tx, input.userId, input.points, "VIDEO_REWARD", video.id, "视频审核通过");
     }
@@ -804,16 +806,19 @@ export async function resolveVideoAppeal(input: {
     }
 
     if (appeal.video.status !== "REJECTED") throw new Error("只有已自动驳回的视频可以通过申诉");
-    const duplicate = appeal.video.photoId
-      ? await tx.videoSubmission.findFirst({
+    if (appeal.video.photoId) {
+      // 与视频入账路径共用同一把 photoId 事务锁：两条并发申诉（或申诉与提交）
+      // 各自判重后再写入会双双入账，必须在锁内串行化后重新判重。
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${appeal.video.photoId}`})::bigint)`;
+      const duplicate = await tx.videoSubmission.findFirst({
           where: {
             photoId: appeal.video.photoId,
             id: { not: appeal.video.id },
             status: { in: ["PROCESSING", "PENDING_REVIEW", "APPROVED"] },
           },
-        })
-      : null;
-    if (duplicate) throw new Error("该视频已被其他记录结算，不能通过申诉");
+        });
+      if (duplicate) throw new Error("该视频已被其他记录结算，不能通过申诉");
+    }
     const rule = await getVideoPointRule(tx);
     const points = input.points ?? calculateVideoPoints(appeal.video.likes ?? 0, rule);
     if (!Number.isInteger(points) || points < 0 || points > rule.maximumPoints) {

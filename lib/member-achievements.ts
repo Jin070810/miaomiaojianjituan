@@ -87,9 +87,14 @@ async function approvedVideosFor(tx: Transaction, userId: string) {
 
 async function ensureMonthlyGoal(tx: Transaction, userId: string, videos: ApprovedVideo[], reference: Date) {
   const monthStart = periodBounds("month", reference).start;
-  const existing = await tx.memberMonthlyGoal.findUnique({ where: { userId_monthStart: { userId, monthStart } } });
-  if (existing) return existing;
-  return tx.memberMonthlyGoal.create({ data: { userId, monthStart, ...calculateMonthlyGoalTargets(videos, monthStart) } });
+  // 并发补齐（dev StrictMode 双请求、多标签页）会同时走到创建；原生 upsert 是
+  // 单条 ON CONFLICT 语句，竞态安全，且不会像 catch-then-replay 那样把事务置于
+  // 25P02 aborted 状态。
+  return tx.memberMonthlyGoal.upsert({
+    where: { userId_monthStart: { userId, monthStart } },
+    create: { userId, monthStart, ...calculateMonthlyGoalTargets(videos, monthStart) },
+    update: {},
+  });
 }
 
 async function syncAchievements(tx: Transaction, userId: string, videos: ApprovedVideo[], reference: Date) {
@@ -129,7 +134,12 @@ async function syncAchievements(tx: Transaction, userId: string, videos: Approve
   const revoked = existing.filter((achievement) => catalogCodes.has(achievement.code) && !qualifiedCodes.has(achievement.code)).map((achievement) => achievement.code);
   if (revoked.length) await tx.memberAchievement.deleteMany({ where: { userId, code: { in: revoked } } });
   for (const achievement of gained) {
-    await tx.memberAchievement.create({ data: { userId, code: achievement.code, metadata: { metric: achievement.kind, value: metrics[achievement.kind] } } });
+    // 并发补齐可能已为该成员创建过同一枚勋章；原生 upsert 单语句竞态安全。
+    await tx.memberAchievement.upsert({
+      where: { userId_code: { userId, code: achievement.code } },
+      create: { userId, code: achievement.code, metadata: { metric: achievement.kind, value: metrics[achievement.kind] } },
+      update: {},
+    });
     await createNotification(tx, {
       userId, type: "ACHIEVEMENT", title: `获得勋章：${achievement.title}`, body: achievement.description,
       entityType: "MemberAchievement", entityId: achievement.code, metadata: { code: achievement.code },
@@ -141,7 +151,11 @@ async function syncAchievements(tx: Transaction, userId: string, videos: Approve
 
 export async function reconcileMemberAchievements(tx: Transaction, userId: string, reference = new Date()) {
   const videos = await approvedVideosFor(tx, userId);
-  const [growth, goal] = await Promise.all([syncAchievements(tx, userId, videos, reference), ensureMonthlyGoal(tx, userId, videos, reference)]);
+  // 同一个交互式事务客户端上不要并发执行两条写语句流：并发管线会把唯一约束
+  // 冲突错误归因到错误的请求上（实测 P2002 被抛给并发的 profile upsert）。
+  // 补齐本身是幂等读多写少的路径，串行的额外开销可以忽略。
+  const growth = await syncAchievements(tx, userId, videos, reference);
+  const goal = await ensureMonthlyGoal(tx, userId, videos, reference);
   const monthVideos = videos.filter((video) => video.submittedAt >= goal.monthStart && video.submittedAt <= reference);
   const progress = { videos: monthVideos.length, engagement: monthVideos.reduce((total, video) => total + calculateGoalEngagement(video), 0) };
   if (!goal.completedAt && progress.videos >= goal.targetVideos && progress.engagement >= goal.targetEngagement) {

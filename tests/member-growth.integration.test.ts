@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
+import { getMemberAchievements } from "@/lib/member-achievements";
 import { getAdminMemberGrowth, getMemberGrowth, growthWindows } from "@/lib/member-growth";
 import { periodBounds } from "@/lib/rankings";
 
@@ -118,5 +119,21 @@ describe.skipIf(!enabled)("member growth database integration", () => {
       videoPoints: 200,
     });
     expect(growth.challenge).toEqual({ covered: 2, completed: 2, claimed: 1 });
+  });
+
+  it("creates the monthly goal and achievements exactly once under concurrent archive loads", async () => {
+    const results = await Promise.all([
+      getMemberAchievements(memberAId, reference),
+      getMemberAchievements(memberAId, reference),
+      getMemberAchievements(memberBId, reference),
+    ]);
+    // 并发补齐（如 dev StrictMode 双请求、多标签页）不得让任一请求撞唯一约束失败。
+    const goals = await db.memberMonthlyGoal.findMany({ where: { userId: { in: [memberAId, memberBId] } } });
+    expect(goals.filter((goal) => goal.userId === memberAId)).toHaveLength(1);
+    expect(goals.filter((goal) => goal.userId === memberBId)).toHaveLength(1);
+    const achievements = await db.memberAchievement.findMany({ where: { userId: { in: [memberAId, memberBId] } } });
+    const achievementKeys = new Set(achievements.map((item) => `${item.userId}:${item.code}`));
+    expect(achievementKeys.size).toBe(achievements.length);
+    expect(results.every((result: { goal: { monthStart: Date; userId: string } }) => result.goal.monthStart.getTime() === goals.find((goal) => goal.userId === result.goal.userId)?.monthStart.getTime())).toBe(true);
   });
 });

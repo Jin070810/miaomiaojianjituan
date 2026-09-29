@@ -20,6 +20,7 @@ vi.mock("node:dns/promises", () => ({
 
 import {
   operationalAlertConfigurationStatus,
+  resetOperationalAlertCooldownForTests,
   sendOperationalAlert,
 } from "../lib/alerts";
 
@@ -230,5 +231,60 @@ describe("sendOperationalAlert", () => {
       severity: "critical",
       message: "webhook failed",
     })).resolves.toEqual({ sent: false, reason: "webhook-request-failed" });
+  });
+});
+
+describe("sendOperationalAlert cooldown", () => {
+  beforeEach(() => {
+    for (const key of ALERT_ENV_KEYS) delete process.env[key];
+    delete process.env.ALERT_COOLDOWN_MS;
+    resetOperationalAlertCooldownForTests();
+  });
+
+  afterEach(() => {
+    delete process.env.ALERT_COOLDOWN_MS;
+    resetOperationalAlertCooldownForTests();
+  });
+
+  it("suppresses duplicate alerts within the cooldown window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.ALERT_WEBHOOK_URL = "https://alerts.example.com/hook";
+    const payload = { source: "test", severity: "warning" as const, message: "同一故障" };
+    await expect(sendOperationalAlert(payload)).resolves.toMatchObject({ sent: true });
+    await expect(sendOperationalAlert(payload)).resolves.toMatchObject({ sent: false, reason: "cooldown" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // 不同 message 是不同告警，不受同一键的冷却影响。
+    await expect(sendOperationalAlert({ ...payload, message: "另一故障" })).resolves.toMatchObject({ sent: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports the suppressed count when the same alert fires after the window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.ALERT_WEBHOOK_URL = "https://alerts.example.com/hook";
+    process.env.ALERT_COOLDOWN_MS = "1";
+    const payload = { source: "test", severity: "warning" as const, message: "持续故障" };
+    await sendOperationalAlert(payload);
+    await sendOperationalAlert(payload);
+    await sendOperationalAlert(payload);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const result = await sendOperationalAlert(payload);
+    expect(result).toMatchObject({ sent: true });
+    expect((result as { channels?: string[] }).channels).toEqual(["webhook"]);
+    const body = JSON.parse(String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1]?.body ?? "{}"));
+    expect(body.details.suppressedDuringCooldown).toBe(2);
+  });
+
+  it("clears the cooldown after a failed delivery so the next alert can retry", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.ALERT_WEBHOOK_URL = "https://alerts.example.com/hook";
+    const payload = { source: "test", severity: "critical" as const, message: "投递失败重试" };
+    await expect(sendOperationalAlert(payload)).resolves.toMatchObject({ sent: false });
+    await expect(sendOperationalAlert(payload)).resolves.toMatchObject({ sent: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

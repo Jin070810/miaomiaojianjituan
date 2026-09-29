@@ -28,7 +28,10 @@ export async function POST(request: Request) {
     const idempotencyKey = requireIdempotency(request);
     const receiver = input.receiverId
       ? await db.user.findFirst({ where: { id: input.receiverId, active: true, role: { in: ["MEMBER", "REVIEWER"] } } })
-      : await db.user.findFirst({ where: { kuaishouId: { equals: input.receiverKuaishouId!, mode: "insensitive" }, active: true } });
+      // 快手 ID 不区分大小写，但优先精确匹配以命中唯一索引；仅大小写不同的输入
+      // 才回退到不敏感查询（该查询无法使用索引，只应在少数场景触发）。
+      : await db.user.findFirst({ where: { kuaishouId: input.receiverKuaishouId!, active: true } })
+        ?? await db.user.findFirst({ where: { kuaishouId: { equals: input.receiverKuaishouId!, mode: "insensitive" }, active: true } });
     if (!receiver) return NextResponse.json({ error: "未找到转入成员" }, { status: 404 });
     const transfer = await completeTransfer({
       senderId: user.id,

@@ -583,7 +583,6 @@ model MemberMonthlyGoal {
   user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, monthStart])
-  @@index([userId, monthStart])
 }
 
 model MemberMonthlyReview {
@@ -602,7 +601,6 @@ model MemberMonthlyReview {
   user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, monthStart])
-  @@index([userId, monthStart])
 }
 
 model RedemptionOrder {
@@ -772,7 +770,6 @@ model RankingEntry {
 
   @@unique([periodId, userId])
   @@unique([periodId, rank])
-  @@index([periodId, rank])
 }
 
 model RankingAward {
@@ -868,6 +865,8 @@ model AuditLog {
 
   @@index([entity, entityId])
   @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
 }
 
 model SystemSetting {

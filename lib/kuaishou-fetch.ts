@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { normalizeKuaishouLink, calculateVideoPoints, compareOwnerNames } from "./kuaishou";
 import { DEFAULT_VIDEO_POINT_RULE, VideoPointRuleConfig } from "./point-rules";
+import { VideoFetchError } from "./fetch-errors";
 
 export type FetchedKuaishouVideo = {
   source: ReturnType<typeof normalizeKuaishouLink>;
@@ -18,6 +19,12 @@ export type FetchedKuaishouVideo = {
   ownerMatchMethod: ReturnType<typeof compareOwnerNames>["method"];
 };
 
+// 多字节 UTF-8 字符可能跨 chunk 边界，必须拼接后再整体解码；
+// 逐 chunk toString 会把中文字段（作者名/文案）破坏为 U+FFFD，导致作者被误判不一致。
+export function concatUtf8Chunks(chunks: Buffer[]) {
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function runCurl(url: string, timeoutMs = 10_000) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn("curl", [
@@ -34,13 +41,15 @@ function runCurl(url: string, timeoutMs = 10_000) {
       shell: false,
       windowsHide: true,
     });
-    let stdout = "";
     let stderr = "";
     let oversized = false;
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs + 500);
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-      if (stdout.length > 5_000_000) {
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+      if (totalBytes > 5_000_000) {
         oversized = true;
         child.kill("SIGKILL");
       }
@@ -55,8 +64,8 @@ function runCurl(url: string, timeoutMs = 10_000) {
     child.on("close", (code) => {
       clearTimeout(timer);
       if (oversized) reject(new Error("快手页面响应过大，已停止处理"));
-      else if (code !== 0 && !stdout) reject(new Error(stderr || `curl exited with ${code}`));
-      else resolve(stdout);
+      else if (code !== 0 && chunks.length === 0) reject(new Error(stderr || `curl exited with ${code}`));
+      else resolve(concatUtf8Chunks(chunks));
     });
   });
 }
@@ -108,7 +117,7 @@ export function parseKuaishouHtml(rawHtml: string) {
   const coverUrl = safePublicImageUrl(decodeJsonText(capture(rawHtml, /"(?:coverUrl|cover)"\s*:\s*"((?:\\.|[^"\\])*)"/)));
   const publishedAt = captureVideoPublishedAt(rawHtml);
   if (!likesText || !photoId || owner === null || !publishedAt) {
-    throw new Error("快手页面未返回完整的视频数据，请稍后重试");
+    throw new VideoFetchError("快手页面未返回完整的视频数据，请稍后重试", "transient");
   }
   const decodedOwner = decodeJsonText(owner) ?? "";
   const likes = Number(likesText);
@@ -121,7 +130,12 @@ export async function fetchKuaishouVideo(
   submittedNickname: string,
   rule: VideoPointRuleConfig = DEFAULT_VIDEO_POINT_RULE,
 ): Promise<FetchedKuaishouVideo> {
-  const source = normalizeKuaishouLink(input);
+  let source: ReturnType<typeof normalizeKuaishouLink>;
+  try {
+    source = normalizeKuaishouLink(input);
+  } catch (error) {
+    throw new VideoFetchError(error instanceof Error ? error.message : "快手链接无效", "permanent");
+  }
   let lastError: unknown;
   // Kuaishou occasionally returns a shell page before the embedded JSON is
   // available. Retry the same normalized URL with a bounded backoff before

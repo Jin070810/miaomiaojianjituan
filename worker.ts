@@ -1,9 +1,10 @@
 import { Worker } from "bullmq";
 import "dotenv/config";
-import { closeDouyinBrowser, connection, processVideoSubmission, recoverStaleVideoSubmissions } from "./lib/video-jobs";
+import { closeDouyinBrowser, connection, finalizeVideoFetchFailure, processVideoSubmission, recoverStaleVideoSubmissions } from "./lib/video-jobs";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
 import { sendOperationalAlert } from "./lib/alerts";
+import { VideoFetchError } from "./lib/fetch-errors";
 import {
   generateWeeklyChallengePeriod,
   runWeeklyChallengeMaintenance,
@@ -19,7 +20,11 @@ import { runMemberGrowthMonthlyMaintenance } from "./lib/member-achievements";
 import { runBirthdayMaintenance } from "./lib/birthdays";
 
 const worker = new Worker("kuaishou-video", async (job) => {
-  await processVideoSubmission(job.data.videoId);
+  const attempts = job.opts.attempts ?? 1;
+  await processVideoSubmission(job.data.videoId, {
+    // attemptsStarted 从 Redis 反序列化，等于当前尝试序号；等于总数即为最后一次尝试。
+    finalAttempt: job.attemptsStarted >= attempts,
+  });
 }, {
   connection: connection(),
   concurrency: Math.min(12, Math.max(1, Number(process.env.VIDEO_WORKER_CONCURRENCY ?? 4))),
@@ -47,8 +52,19 @@ const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
 
 worker.on("completed", (job) => console.log(`[video-worker] completed ${job.id}`));
 worker.on("failed", (job, error) => {
-  console.error(`[video-worker] failed ${job?.id}`, error);
-  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, error: error.message } });
+  const attempts = job?.opts.attempts ?? 1;
+  const finalFailure = Boolean(job && job.attemptsStarted >= attempts);
+  console.error(`[video-worker] failed ${job?.id} (attempt ${job?.attemptsStarted ?? "?"}/${attempts})`, error);
+  // 瞬时抓取错误交给队列重试；重试耗尽时兜底自动驳回（正常由处理器内完成，此处覆盖
+  // 语义偏差或处理器提前崩溃的情况），并且只在终局失败时告警，避免瞬时抖动刷屏。
+  if (finalFailure) {
+    if (job && error instanceof VideoFetchError) {
+      void finalizeVideoFetchFailure(job.data.videoId).catch((finalizeError) => {
+        console.error(`[video-worker] finalize fetch failure failed ${job.id}`, finalizeError);
+      });
+    }
+    void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务重试耗尽", details: { jobId: job?.id, error: error.message } });
+  }
 });
 worker.on("error", (error) => {
   console.error("[video-worker] redis error", error);

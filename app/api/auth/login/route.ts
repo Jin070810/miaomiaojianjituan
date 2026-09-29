@@ -24,7 +24,10 @@ export async function POST(request: Request) {
     const input = schema.parse(await request.json());
     await enforceRateLimit(`login:${getClientIp(request)}:${input.kuaishouId.toLowerCase()}`, 8, 900);
     const auditRequestId = requestId();
-    const user = await db.user.findFirst({ where: { kuaishouId: { equals: input.kuaishouId, mode: "insensitive" } } });
+    // 快手 ID 不区分大小写：先精确匹配命中唯一索引，未命中再回退不敏感查询，
+    // 避免每次登录都走顺序扫描。
+    const user = await db.user.findUnique({ where: { kuaishouId: input.kuaishouId } })
+      ?? await db.user.findFirst({ where: { kuaishouId: { equals: input.kuaishouId, mode: "insensitive" } } });
     if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
       await writeAuditLog(db, {
           action: "LOGIN_FAILED",

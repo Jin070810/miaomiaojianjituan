@@ -6,6 +6,16 @@ import { isPasswordResetApproverRole, isVideoReviewOperatorRole } from "./member
 const COOKIE = "miaomiao_session";
 const DAYS = 14;
 
+// 生产环境默认 Secure；HTTPS 由 Nginx 终结、应用经 HTTP 反代访问的部署（如
+// 生产构建的 e2e 走 http://127.0.0.1）可用 SESSION_COOKIE_SECURE=false 显式
+// 关闭——WebKit 不把 http://127.0.0.1 视为可信来源，会直接丢弃 Secure Cookie。
+function sessionCookieSecure() {
+  const override = process.env.SESSION_COOKIE_SECURE?.trim().toLowerCase();
+  if (override === "true") return true;
+  if (override === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
+
 export async function createSession(userId: string) {
   const id = crypto.randomBytes(32).toString("base64url");
   await db.session.create({
@@ -14,7 +24,7 @@ export async function createSession(userId: string) {
   const jar = await cookies();
   jar.set(COOKIE, id, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: sessionCookieSecure(),
     sameSite: "lax",
     path: "/",
     maxAge: DAYS * 86400,

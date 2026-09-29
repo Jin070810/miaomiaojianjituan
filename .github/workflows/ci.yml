@@ -119,6 +119,8 @@ jobs:
       PHONE_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       RUN_DB_TESTS: "1"
       PLAYWRIGHT_PROD_SERVER: "1"
+      # e2e 走 http://127.0.0.1，生产构建默认 Secure Cookie 会被 WebKit 丢弃。
+      SESSION_COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

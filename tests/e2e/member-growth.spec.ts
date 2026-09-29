@@ -51,7 +51,9 @@ test("member growth loads locally, retries, and fits the configured viewport", a
   let attempts = 0;
   await page.route("**/api/member/growth", async (route) => {
     attempts += 1;
-    if (attempts === 1) {
+    // Next 16.3 起 dev 模式 StrictMode 会双触发挂载效果：第一次请求的失败会被
+    // remount 丢弃。前两次都失败才能保证错误态在单次/双次挂载下都稳定可见。
+    if (attempts <= 2) {
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "模拟成长接口失败" }) });
       return;
     }
@@ -59,9 +61,11 @@ test("member growth loads locally, retries, and fits the configured viewport", a
   });
 
   await login(page, e2eIds.noTaskMember);
+  const growthCard = page.getByLabel("本周成长");
   await expect(page.getByRole("heading", { name: "本周成长" })).toBeVisible();
   await expect(page.getByText("模拟成长接口失败")).toBeVisible();
-  await page.getByRole("button", { name: "重新加载" }).click();
+  // 定位器限定在成长卡片内，避免其他卡片的错误态（如有）造成严格模式冲突。
+  await growthCard.getByRole("button", { name: "重新加载" }).click();
   await expect(page.getByText("9,999,999,999").first()).toBeVisible();
   await expect(page.getByText("本周开始有记录").first()).toBeVisible();
   await expectNoHorizontalOverflow(page);

@@ -51,7 +51,9 @@ test("member growth loads locally, retries, and fits the configured viewport", a
   let attempts = 0;
   await page.route("**/api/member/growth", async (route) => {
     attempts += 1;
-    if (attempts === 1) {
+    // Next 16.3 起 dev 模式 StrictMode 会双触发挂载效果：第一次请求的失败会被
+    // remount 丢弃。前两次都失败才能保证错误态在单次/双次挂载下都稳定可见。
+    if (attempts <= 2) {
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "模拟成长接口失败" }) });
       return;
     }

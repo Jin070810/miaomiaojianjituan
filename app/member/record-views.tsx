@@ -11,6 +11,7 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
+import { ledgerLabel } from "@/lib/labels";
 import { StateMessage } from "./brand";
 import { miaoAssets } from "./visual-assets";
 
@@ -53,23 +54,6 @@ function formatDate(value: string) {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(value));
-}
-
-function ledgerLabel(type: string, note: string | null) {
-  if (note) return note;
-  const labels: Record<string, string> = {
-    VIDEO_REWARD: "切片通过",
-    TRANSFER_IN: "收到团友积分",
-    TRANSFER_OUT: "送积分给团友",
-    REDEMPTION: "兑换礼物",
-    ADMIN_ADJUSTMENT: "积分调整",
-    REVERSAL: "积分退回",
-    BIRTHDAY_DRAW_REWARD: "生日星愿奖励",
-    BIRTHDAY_VIDEO_BONUS: "生日作品加成",
-    REFUND: "兑换退款",
-    RANKING_REWARD: "榜单奖励",
-  };
-  return labels[type] ?? "积分变动";
 }
 
 function LoadMoreHistory({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {

@@ -188,6 +188,8 @@ docker build --target worker -t miaomiao-points-worker:verify .
 
 ## 工程协作
 
+会话字段精简、首页查询复用及验证边界见 [`docs/MEMBER-SESSION-READ-PATH.md`](docs/MEMBER-SESSION-READ-PATH.md)。
+
 成长档案的后台重建、只读查询和运维核对见 [`docs/ACHIEVEMENT-PROJECTION.md`](docs/ACHIEVEMENT-PROJECTION.md)。
 
 订单确认、履约、取消和生日零价订单的规则见 [`docs/REDEMPTION-STATE-MACHINE.md`](docs/REDEMPTION-STATE-MACHINE.md)。

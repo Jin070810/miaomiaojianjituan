@@ -92,7 +92,6 @@ let closing = false;
 let maintenanceRunning = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
-<<<<<<< HEAD
 let heartbeatRunning = false;
 let activeMaintenance: Promise<void> | null = null;
 let activeHeartbeat: Promise<void> | null = null;
@@ -103,9 +102,7 @@ function startMaintenance() {
   activeMaintenance = task;
   void task.finally(() => { if (activeMaintenance === task) activeMaintenance = null; });
 }
-=======
 let stopAchievementRefresh: (() => Promise<void>) | null = null;
->>>>>>> chore/achievement-read-model-20261004
 
 async function maintenance() {
   if (closing || maintenanceRunning) return;

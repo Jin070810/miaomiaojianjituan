@@ -64,15 +64,25 @@ release_prepare_ingress() {
 }
 
 release_verify_gate() {
-  local domain="$1" evidence="$2" code route method
+  local domain="$1" evidence="$2" code route method attempt matched
   [[ "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || return 1
   for route in /login /api/__release_gate_probe; do
     method=GET
     [[ "$route" != /api/* ]] || method=POST
-    code="$(curl --silent --show-error --connect-timeout 3 --max-time 8 --request "$method" \
-      --dump-header "$evidence" --output /dev/null --write-out '%{http_code}' "https://$domain$route")" || return 1
-    [[ "$code" == 503 ]] || return 1
-    tr -d '\r' < "$evidence" | grep -Eiq '^x-miaomiao-maintenance: 1$' || return 1
-    tr -d '\r' < "$evidence" | grep -Eiq '^cache-control: no-store$' || return 1
+    matched=false
+    # Nginx reload acknowledges its signal before new workers accept traffic.
+    # Retry this read-only gate probe briefly; never proceed without evidence.
+    for attempt in {1..5}; do
+      if code="$(curl --silent --show-error --connect-timeout 3 --max-time 8 --request "$method" \
+        --dump-header "$evidence" --output /dev/null --write-out '%{http_code}' "https://$domain$route")" &&
+        [[ "$code" == 503 ]] &&
+        tr -d '\r' < "$evidence" | grep -Eiq '^x-miaomiao-maintenance: 1$' &&
+        tr -d '\r' < "$evidence" | grep -Eiq '^cache-control: no-store$'; then
+        matched=true
+        break
+      fi
+      if (( attempt < 5 )); then sleep 1; fi
+    done
+    [[ "$matched" == true ]] || return 1
   done
 }

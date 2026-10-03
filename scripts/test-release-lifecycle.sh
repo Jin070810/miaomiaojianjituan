@@ -57,6 +57,10 @@ if release_set_gate "$root/runtime" open 123-1; then exit 1; fi
 jq -e '.state.ExitCode==0' "$root/normal.json" >/dev/null
 cat > "$root/bin/curl" <<'FAKE'
 #!/usr/bin/env bash
+if [[ -n "${LIFECYCLE_GATE_RECOVER:-}" && ! -f "$LIFECYCLE_TEST_ROOT/curl-retried" ]]; then
+  touch "$LIFECYCLE_TEST_ROOT/curl-retried"
+  exit 7
+fi
 while (( $# )); do
   if [[ "$1" == --dump-header ]]; then shift; headers="$1"; fi
   shift
@@ -66,6 +70,8 @@ printf '%s' "${LIFECYCLE_GATE_STATUS:-503}"
 FAKE
 chmod +x "$root/bin/curl"
 release_verify_gate example.invalid "$root/headers"
+LIFECYCLE_GATE_RECOVER=1 release_verify_gate example.invalid "$root/headers"
+[[ -f "$root/curl-retried" ]]
 if LIFECYCLE_GATE_STATUS=200 release_verify_gate example.invalid "$root/headers"; then exit 1; fi
 if LIFECYCLE_GATE_HEADER=0 release_verify_gate example.invalid "$root/headers"; then exit 1; fi
 echo 'Release drain rejects forced stops, OOM and wrong containers; HTTP gate requires 503 and its own headers.'

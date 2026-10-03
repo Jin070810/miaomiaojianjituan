@@ -1,6 +1,6 @@
 # GitHub 仓库保护配置
 
-以下设置需要仓库所有者在 GitHub 网页完成一次。配置完成后，正式发布满足“分支开发、自动测试、维护者自审或多人审查、显式批准部署”。
+以下设置由仓库所有者确认后配置，可通过 GitHub 网页或受控 API 完成。文档不表示远端保护已经启用；配置后应读取规则验证。当前候选发布门禁见 [上线准备](../PRODUCTION-READINESS.md)。
 
 ## 主分支
 
@@ -11,9 +11,9 @@
    - Required approvals：单人维护仓库设为 0，多人协作仓库设为至少 1；
    - 不要求不存在的 Code Owners；多人协作时可按实际团队配置；
    - Dismiss stale approvals when new commits are pushed；
-   - Require status checks：`CI / test`；
+   - Require status checks：本仓库 CI 的 `core`、`staging` 两个检查（GitHub 页面可能显示为 `CI / core`、`CI / staging`），不要继续选择已删除的 `test` 或独立 `e2e`；
    - Require conversation resolution；
-   - Require linear history；
+   - 按合并策略设置 linear history；当前整合分支含合并提交，选择 squash 后 main 可保持线性；
    - Block force pushes；
    - Block deletions；
    - Do not allow bypassing the above settings。
@@ -42,9 +42,10 @@
 
 1. PR 合并到 `main` 后记录完整 commit SHA；
 2. Actions → Deploy Production → Run workflow；
-3. 输入已合并的 40 位 commit SHA，并明确勾选 `confirm_production`；
+3. 为该 SHA 设置唯一正式版本 tag，输入已合并的 40 位 SHA 和成功 main CI 的 `candidate_run_id`，按实际情况完成 `confirm_production` 和维护者自审/staging 确认；
 4. 如果配置了 Environment 审查者，等待人工批准；单人维护且未配置审查者时，以 workflow 的维护者确认和发布记录为准；
-5. 工作流备份数据库、构建并部署；
-6. `/api/health` 通过后记录发布结果。
+5. main 的 `core`、`staging` 和 `publish` 必须全部成功，产物含验收镜像摘要与真实签名。PR 的 publish 正常跳过，不能作为发布凭证；
+6. 部署工作流验证原制品，主机预检、维护、排空、备份、migration、同版本切换和 TLS 健康通过后恢复入口；服务器不再构建；
+7. 观察至少 30 分钟并记录发布结果。归档候选恢复及原 CI attempt 校验见 [签名与归档](SIGNED-RELEASE-ARCHIVE.md)。
 
 工作流失败时不会自动回退数据库。由技术负责人根据 migration 情况决定应用回滚或前向修复。

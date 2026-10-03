@@ -7,6 +7,8 @@ import { assertSameOrigin, getClientIp, isSafeCashQrCodeUrl, MAX_CASH_QR_CODE_LE
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
+import { IdempotencyConflictError } from "@/lib/request-idempotency";
+import { memberOrderDto } from "@/lib/redemption-dto";
 
 const schema = z.object({
   giftId: z.string().min(1),
@@ -33,11 +35,11 @@ export async function POST(request: Request) {
     await enforceRateLimit(`redemption:${user.id}`, 10, 60);
     const input = schema.parse(await request.json());
     const order = await redeemGift({ ...input, userId: user.id, idempotencyKey: requireIdempotency(request), ip: getClientIp(request) });
-    return NextResponse.json({ order }, { status: 201 });
+    return NextResponse.json({ order: memberOrderDto(order) }, { status: 201 });
   } catch (error) {
     const limited = rateLimitResponse(error);
     if (limited) return limited;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "兑换失败" }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "兑换失败" }, { status: error instanceof IdempotencyConflictError ? 409 : 400 });
   }
 }
 
@@ -51,14 +53,7 @@ export async function GET(request: Request) {
     db.redemptionOrder.count({ where }),
   ]);
   return NextResponse.json({
-    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, fulfillmentDataEnc, ...order }) => ({
-      ...order,
-      fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
-      hasRecipientPhone: Boolean(recipientPhoneEnc),
-      hasRecipientAddress: Boolean(recipientAddressEnc),
-      hasCashQrCode: Boolean(cashQrCodeUrl),
-      hasFulfillmentData: Boolean(fulfillmentDataEnc),
-    })),
+    orders: orders.map(memberOrderDto),
     pagination: paginationResult(page, take, total),
   });
 }

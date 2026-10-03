@@ -7,6 +7,7 @@ import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } 
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
+import { IdempotencyConflictError } from "@/lib/request-idempotency";
 
 const schema = z.object({
   receiverKuaishouId: z.string().trim().min(2).max(80).optional(),
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const limited = rateLimitResponse(error);
     if (limited) return limited;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "转账失败" }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "转账失败" }, { status: error instanceof IdempotencyConflictError ? 409 : 400 });
   }
 }
 

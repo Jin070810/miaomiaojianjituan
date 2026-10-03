@@ -9,6 +9,12 @@ const ACTIVE_REDEMPTION_STATUSES: RedemptionStatus[] = [
   RedemptionStatus.APPROVED,
 ];
 
+const paidOrderFilter = {
+  birthdayPrizeId: null,
+  unitCost: { gt: 0 },
+  totalCost: { gt: 0 },
+} satisfies Prisma.RedemptionOrderWhereInput;
+
 type ReconciliationOrder = {
   id: string;
   userId: string;
@@ -30,6 +36,7 @@ export type RedemptionReconciliationScope = {
 function scopeWhere(input: { cutoff: Date; excludedGiftName: string }): Prisma.RedemptionOrderWhereInput {
   return {
     status: { in: ACTIVE_REDEMPTION_STATUSES },
+    ...paidOrderFilter,
     createdAt: { lte: input.cutoff },
     gift: { name: { not: input.excludedGiftName } },
   };
@@ -59,6 +66,7 @@ export async function inspectRedemptionReconciliation(input: {
         status: { in: ACTIVE_REDEMPTION_STATUSES },
         createdAt: { lte: input.cutoff },
         gift: { name: input.excludedGiftName },
+        ...paidOrderFilter,
       },
       include,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -113,6 +121,7 @@ export async function reconcileRedemptionOrders(input: {
           status: { in: ACTIVE_REDEMPTION_STATUSES },
           createdAt: { lte: input.cutoff },
           gift: { name: input.excludedGiftName },
+          ...paidOrderFilter,
         },
         include,
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],

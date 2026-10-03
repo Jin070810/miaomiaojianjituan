@@ -1,6 +1,6 @@
-import { Worker } from "bullmq";
+import { DelayedError, Worker } from "bullmq";
 import "dotenv/config";
-import { closeDouyinBrowser, connection, processVideoSubmission } from "./lib/video-jobs";
+import { closeDouyinBrowser, closeVideoQueue, connection, processVideoSubmission } from "./lib/video-jobs";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
 import { sendOperationalAlert } from "./lib/alerts";
@@ -15,9 +15,26 @@ import {
   ensureWeeklyChallengeScheduler,
 } from "./lib/weekly-challenge-jobs";
 import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "./lib/member-clearance-operations";
+import { VideoProcessingDeferredError } from "./lib/video-processing";
 
-const worker = new Worker("kuaishou-video", async (job) => {
-  await processVideoSubmission(job.data.videoId);
+// Independent of Redis/DB health; the parent can detect an event-loop stall.
+const watchdogTimer = process.env.MIAOMIAO_WORKER_SUPERVISED === "1" && process.send
+  ? setInterval(() => { if (process.connected) process.send?.({ type: "worker-liveness" }); }, 10_000)
+  : null;
+watchdogTimer?.unref();
+
+const worker = new Worker("kuaishou-video", async (job, token) => {
+  try {
+    await processVideoSubmission(job.data.videoId, {
+      finalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
+    });
+  } catch (error) {
+    if (error instanceof VideoProcessingDeferredError) {
+      await job.moveToDelayed(Math.max(Date.now() + 100, error.retryAt.getTime()), token);
+      throw new DelayedError();
+    }
+    throw error;
+  }
 }, {
   connection: connection(),
   concurrency: Math.min(12, Math.max(1, Number(process.env.VIDEO_WORKER_CONCURRENCY ?? 4))),
@@ -74,6 +91,16 @@ let closing = false;
 let maintenanceRunning = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let heartbeatRunning = false;
+let activeMaintenance: Promise<void> | null = null;
+let activeHeartbeat: Promise<void> | null = null;
+
+function startMaintenance() {
+  if (closing || maintenanceRunning) return;
+  const task = maintenance().catch((error) => console.error("[worker-maintenance] alert failed", error));
+  activeMaintenance = task;
+  void task.finally(() => { if (activeMaintenance === task) activeMaintenance = null; });
+}
 
 async function maintenance() {
   if (closing || maintenanceRunning) return;
@@ -148,39 +175,55 @@ async function maintenance() {
 }
 
 async function heartbeat() {
-  if (closing) return;
+  if (heartbeatRunning) return;
+  heartbeatRunning = true;
   try {
-    await writeWorkerHeartbeat();
+    await writeWorkerHeartbeat(closing ? "draining" : "running");
   } catch (error) {
     console.error("[video-worker] heartbeat failed", error);
+  } finally {
+    heartbeatRunning = false;
   }
+}
+
+function startHeartbeat() {
+  if (activeHeartbeat) return activeHeartbeat;
+  const task = heartbeat();
+  activeHeartbeat = task;
+  void task.finally(() => { if (activeHeartbeat === task) activeHeartbeat = null; });
+  return task;
 }
 
 async function start() {
   await ensureWeeklyChallengeScheduler();
   await Promise.all([worker.waitUntilReady(), weeklyChallengeWorker.waitUntilReady()]);
   console.log("[video-worker] listening");
-  await Promise.all([maintenance(), heartbeat()]);
-  maintenanceTimer = setInterval(() => void maintenance(), 60_000);
-  heartbeatTimer = setInterval(() => void heartbeat(), 15_000);
+  await startHeartbeat();
+  heartbeatTimer = setInterval(() => void startHeartbeat(), 15_000);
+  maintenanceTimer = setInterval(startMaintenance, 60_000);
+  startMaintenance();
 }
 
-async function shutdown(signal: string) {
+async function shutdown(signal: string, exitCode = 0) {
   if (closing) return;
   closing = true;
   console.log(`[video-worker] ${signal} received, shutting down`);
   if (maintenanceTimer) clearInterval(maintenanceTimer);
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
   // 先等队列任务排空，再清除心跳：滚动发布期间健康检查不应在活跃任务尚未
   // 完成时就把 Worker 判死。
-  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close()]);
+  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), activeMaintenance]);
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  // Finish the last write before deleting this instance's keys.
+  await activeHeartbeat;
   await Promise.allSettled([
+    closeVideoQueue(),
     closeWeeklyChallengeQueue(),
     closeWorkerHealth(),
     closeDouyinBrowser(),
     db.$disconnect(),
   ]);
-  process.exit(0);
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  process.exit(exitCode);
 }
 
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -189,6 +232,5 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 void start().catch(async (error) => {
   console.error("[video-worker] startup failed", error);
   await sendOperationalAlert({ source: "video-worker", severity: "critical", message: "视频 Worker 启动失败", details: { error: error instanceof Error ? error.message : String(error) } });
-  await shutdown("startup-failure");
-  process.exitCode = 1;
+  await shutdown("startup-failure", 1);
 });

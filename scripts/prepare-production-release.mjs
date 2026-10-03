@@ -47,6 +47,7 @@ check(Boolean(destination), "缺少临时目录");
 mkdirSync(destination, { recursive: true, mode: 0o700 });
 writeFileSync(path.join(destination, "request.json"), JSON.stringify(request), { mode: 0o600 });
 copyFileSync("output/release/deploy-candidate.json", path.join(destination, "manifest.json"));
+copyFileSync("output/release/deploy-candidate.sigstore.json", path.join(destination, "attestation.json"));
 for (const file of ["production-lock.sh", "production-release.sh", "production-preflight.sh",
   "pull-release-images.sh", "backup-db.sh", "verify-release-health.sh"]) {
   const target = path.join(destination, file);

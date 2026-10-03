@@ -14,7 +14,7 @@ trap 'exit 143' TERM HUP
 # Only the named regular files from this workflow are accepted. No source tree,
 # database data or secrets are copied into the public release evidence directory.
 timeout --signal=TERM --kill-after=10s 60s tar -xzf - --no-same-owner --no-same-permissions \
-  -C "$payload" request.json manifest.json production-lock.sh production-release.sh \
+  -C "$payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
   production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh
 for file in "$payload"/*; do [[ -f "$file" && ! -L "$file" ]]; done
 timeout --signal=TERM --kill-after=30s 30m bash "$payload/production-release.sh" "$project_dir" "$payload"

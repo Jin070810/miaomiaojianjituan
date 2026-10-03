@@ -14,6 +14,7 @@ import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
 import { reconcileMemberAchievements } from "./member-achievements";
 import { applyBirthdayVideoBonus, revokeBirthdayVideoBonus } from "./birthdays";
+import { assertAuditRequestReplay, assertTransferReplay, IdempotencyConflictError, requestFingerprint } from "./request-idempotency";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -142,7 +143,7 @@ export async function completeTransfer(input: {
   try {
     return await db.$transaction(async (tx) => {
     const existing = await tx.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-    if (existing) return existing;
+    if (existing) { assertTransferReplay(existing, input); return existing; }
     const sender = await tx.user.findUnique({ where: { id: input.senderId } });
     const receiver = await tx.user.findUnique({ where: { id: input.receiverId } });
     if (!sender || !receiver || !sender.active || !receiver.active) throw new Error("转出或转入成员不存在或已停用");
@@ -192,7 +193,7 @@ export async function completeTransfer(input: {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-      if (existing) return existing;
+      if (existing) { assertTransferReplay(existing, input); return existing; }
     }
     throw error;
   }
@@ -211,14 +212,32 @@ export async function adminAdjustPoints(input: {
   }
   const reason = input.reason.trim();
   if (reason.length < 2 || reason.length > 500) throw new Error("请填写 2 至 500 字的调整原因");
+  const validateReplay = async (
+    tx: Pick<Prisma.TransactionClient, "auditLog">,
+    ledger: { type: string; referenceId: string | null; amount: number; note: string | null; accountId: string; account: { userId: string } },
+  ) => {
+    if (ledger.type !== "ADMIN_ADJUSTMENT" || ledger.referenceId !== input.idempotencyKey
+      || ledger.account.userId !== input.userId || ledger.amount !== input.amount || ledger.note !== reason) {
+      throw new IdempotencyConflictError();
+    }
+    const audit = await tx.auditLog.findFirst({ where: {
+      requestId: input.idempotencyKey, actorId: input.actorId, entity: "PointAccount", entityId: ledger.accountId,
+      action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED", reason,
+    }, select: { id: true } });
+    if (!audit) throw new IdempotencyConflictError();
+  };
 
   try {
     return await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`admin-adjustment:${input.idempotencyKey}`})::bigint)`;
       const existing = await tx.pointLedger.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing) return { ledger: existing, balance: existing.balanceAfter };
+      if (existing) { await validateReplay(tx, existing); return { ledger: existing, balance: existing.balanceAfter }; }
+      if (await tx.pointLedger.count({ where: { type: "ADMIN_ADJUSTMENT", referenceId: input.idempotencyKey } })) {
+        throw new IdempotencyConflictError();
+      }
 
       const target = await tx.user.findUnique({ where: { id: input.userId }, select: { id: true, active: true } });
       if (!target || !target.active) throw new Error("目标成员不存在或已停用");
@@ -260,7 +279,7 @@ export async function adminAdjustPoints(input: {
         where: { idempotencyKey: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing) return { ledger: existing, balance: existing.balanceAfter };
+      if (existing) { await validateReplay(db, existing); return { ledger: existing, balance: existing.balanceAfter }; }
     }
     throw error;
   }
@@ -305,14 +324,27 @@ export async function adminAdjustPointsBatch(input: {
   if (input.selectionMode !== "ALL_ACTIVE_MEMBERS" && explicitUserIds.length < 1) {
     throw new BulkPointAdjustmentError("批量调整至少需要选择一名成员");
   }
+  const fingerprint = requestFingerprint("admin-adjustment-batch", {
+    actorId: input.actorId, amount: input.amount, reason, idempotencyKey: input.idempotencyKey,
+    selectionMode: input.selectionMode ?? "EXPLICIT",
+    userIds: input.selectionMode === "ALL_ACTIVE_MEMBERS" ? [] : [...new Set(explicitUserIds)].sort(),
+  });
+  const validateReplay = (tx: Pick<Prisma.TransactionClient, "auditLog">, accountId: string) => assertAuditRequestReplay(tx, {
+    requestId: input.idempotencyKey, actorId: input.actorId, entity: "PointAccount", entityId: accountId,
+    action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED",
+  }, fingerprint);
 
   try {
     return await db.$transaction(async (tx) => {
+      // Lock the request, not its selected accounts: two payloads may target
+      // disjoint members yet reuse one key. Single adjustments share this lock.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`admin-adjustment:${input.idempotencyKey}`})::bigint)`;
       const completedBatch = await tx.pointLedger.findMany({
-        where: { idempotencyKey: { startsWith: `${input.idempotencyKey}:` } },
+        where: { type: "ADMIN_ADJUSTMENT", referenceId: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (input.selectionMode === "ALL_ACTIVE_MEMBERS" && completedBatch.length > 0) {
+      if (completedBatch.length > 0) {
+        await validateReplay(tx, completedBatch[0].accountId);
         return {
           idempotencyKey: input.idempotencyKey,
           adjustments: completedBatch.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
@@ -330,10 +362,8 @@ export async function adminAdjustPointsBatch(input: {
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
       if (existing.length === userIds.length) {
-        return {
-          idempotencyKey: input.idempotencyKey,
-          adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
-        };
+        // A colliding per-member key from another request is not this batch.
+        throw new IdempotencyConflictError();
       }
       if (existing.length > 0) throw new BulkPointAdjustmentError("该批量请求状态不完整，请使用新的请求标识重试");
 
@@ -382,7 +412,7 @@ export async function adminAdjustPointsBatch(input: {
             entity: "PointAccount",
             entityId: account.id,
             beforeValue: { balance: account.balance - input.amount, userId },
-            afterValue: { balance: account.balance, amount: input.amount, userId },
+            afterValue: { balance: account.balance, amount: input.amount, userId, requestFingerprint: fingerprint },
             reason,
             ip: input.ip,
             requestId: input.idempotencyKey,
@@ -405,10 +435,14 @@ export async function adminAdjustPointsBatch(input: {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.pointLedger.findMany({
-        where: { idempotencyKey: { startsWith: `${input.idempotencyKey}:` } },
+        where: { type: "ADMIN_ADJUSTMENT", referenceId: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing.length > 0) return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
+      if (existing.length > 0) {
+        await validateReplay(db, existing[0].accountId);
+        return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
+      }
+      throw new IdempotencyConflictError();
     }
     throw error;
   }
@@ -430,10 +464,20 @@ export async function redeemGift(input: {
   idempotencyKey: string;
   ip?: string;
 }) {
+  const fingerprint = requestFingerprint("redemption", {
+    userId: input.userId, giftId: input.giftId, quantity: input.quantity,
+    idempotencyKey: input.idempotencyKey,
+    shippingInfo: input.shippingInfo || "", note: input.note || "",
+    recipient: input.recipient ?? {}, membershipAnswers: input.membershipAnswers ?? {},
+  });
+  const validateReplay = async (tx: Pick<Prisma.TransactionClient, "auditLog">, order: { id: string; userId: string }) => {
+    if (order.userId !== input.userId) throw new IdempotencyConflictError();
+    await assertAuditRequestReplay(tx, { action: "REDEMPTION_CREATED", entity: "RedemptionOrder", entityId: order.id, actorId: input.userId }, fingerprint);
+  };
   try {
     return await db.$transaction(async (tx) => {
     const existing = await tx.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-    if (existing) return existing;
+    if (existing) { await validateReplay(tx, existing); return existing; }
     if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 20) {
       throw new Error("兑换数量不合法");
     }
@@ -510,6 +554,7 @@ export async function redeemGift(input: {
           quantity: input.quantity,
           totalCost,
           membershipFieldCount: fulfillmentSnapshot?.fields.length ?? 0,
+          requestFingerprint: fingerprint,
         },
         ip: input.ip,
       },
@@ -529,7 +574,7 @@ export async function redeemGift(input: {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-      if (existing) return existing;
+      if (existing) { await validateReplay(db, existing); return existing; }
     }
     throw error;
   }

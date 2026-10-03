@@ -2,6 +2,8 @@
 
 这是“妙妙剪辑团积分中心”的可部署版本，包含成员端、管理员端、认证、成员头像、积分账户、视频审核、转账、积分商城、榜单结算、AI 周挑战和生产运维工具。
 
+写操作重试、请求冲突及成员订单字段的约定见 [请求幂等说明](docs/REQUEST-IDEMPOTENCY.md)。
+
 ## 本地运行
 
 1. 使用 Node.js 22 安装锁定依赖：`npm ci`。测试工具链版本与安全检查见 [`docs/TEST-DEPENDENCY-SECURITY.md`](docs/TEST-DEPENDENCY-SECURITY.md)。

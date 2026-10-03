@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { adminAdjustPointsBatch, BulkPointAdjustmentError } from "@/lib/points";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
+import { IdempotencyConflictError } from "@/lib/request-idempotency";
 
 const schema = z.object({
   selectionMode: z.enum(["EXPLICIT", "ALL_ACTIVE_MEMBERS"]).default("EXPLICIT"),
@@ -34,6 +35,6 @@ export async function POST(request: Request) {
     if (limited) return limited;
     const message = error instanceof z.ZodError ? "批量积分信息格式不正确" : error instanceof Error ? error.message : "批量积分调整失败";
     const details = error instanceof BulkPointAdjustmentError && error.blockers.length ? error.blockers : undefined;
-    return NextResponse.json({ error: message, blockers: details }, { status: details ? 409 : 400 });
+    return NextResponse.json({ error: message, blockers: details }, { status: details || error instanceof IdempotencyConflictError ? 409 : 400 });
   }
 }

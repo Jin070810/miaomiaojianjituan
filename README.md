@@ -171,6 +171,7 @@ Worker 的累计重试预算保存在数据库中，恢复扫描不会无限补�
 - 生产健康检查同时校验 Worker 心跳；Worker 会定时恢复因入队或重启中断而滞留的视频任务。
 - Web 容器使用 `/api/health/ready` 检查必需依赖；`/api/health/live` 只判断进程存活。正式发布和运维仍校验完整 `/api/health` 的 Worker、队列与版本一致性，超时及故障演练见 [`docs/HEALTH-CHECKS.md`](docs/HEALTH-CHECKS.md)。
 - 默认 Worker 并发为 4，可通过 `VIDEO_WORKER_CONCURRENCY` 调整；按约 310 名成员、峰值 20 人同时使用设计。
+- Worker 镜像只携带受审查的后台运行依赖和迁移/运维工具，保留包与根锁文件逐一核验；体积记录、实际 Chromium/迁移工具 smoke 和回退约束见 [Worker 运行时依赖](docs/WORKER-RUNTIME-DEPENDENCIES.md)。
 - `output/feishu` 中的飞书导出文件已加入忽略规则，不应提交到代码仓库。
 - 上线前运行 `npm run data:reconcile` 只读核对积分余额与流水、重复有效视频、待处理申诉、库存及整数积分约束。
 

@@ -8,6 +8,17 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 
+FROM deps AS worker-deps
+COPY scripts/worker-runtime-deps.mjs ./scripts/worker-runtime-deps.mjs
+# Reuse installed native binaries and the reviewed lock. Pruning cannot download or run scripts.
+RUN cp package-lock.json /tmp/worker-full-package-lock.json \
+    && node scripts/worker-runtime-deps.mjs measure node_modules > worker-deps-before.json \
+    && node scripts/worker-runtime-deps.mjs prepare . \
+    && npm prune --omit=dev --ignore-scripts --offline --no-audit --no-fund \
+    && node scripts/worker-runtime-deps.mjs verify . /tmp/worker-full-package-lock.json \
+    && npm ls --omit=dev --all > /dev/null \
+    && node scripts/worker-runtime-deps.mjs measure node_modules > worker-deps-after.json
+
 FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -41,8 +52,9 @@ FROM node:22-alpine AS worker
 RUN apk add --no-cache chromium curl nss freetype harfbuzz ca-certificates ttf-freefont
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=deps /app/node_modules ./node_modules
-COPY package.json tsconfig.json worker.ts ./
+COPY --from=worker-deps /app/node_modules ./node_modules
+COPY --from=worker-deps /app/package.json /app/package-lock.json /app/worker-deps-before.json /app/worker-deps-after.json ./
+COPY tsconfig.json worker.ts ./
 COPY lib ./lib
 COPY prisma ./prisma
 COPY scripts/seed-admin.ts ./scripts/seed-admin.ts
@@ -55,6 +67,7 @@ COPY scripts/download-oss-backup.ts ./scripts/download-oss-backup.ts
 COPY scripts/send-ops-alert.ts ./scripts/send-ops-alert.ts
 RUN npx prisma generate
 COPY scripts/worker-healthcheck.js ./scripts/worker-healthcheck.js
+COPY scripts/worker-runtime-deps.mjs scripts/verify-worker-runtime.mjs ./scripts/
 COPY scripts/worker-supervisor.js ./scripts/worker-supervisor.js
 ARG APP_COMMIT_SHA
 ARG APP_BUILD_TIME

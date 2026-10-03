@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { currentUser } from "@/lib/auth";
+import { currentUser, memberProfileSelect } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse } from "@/lib/security";
@@ -33,7 +33,7 @@ function safeUser(user: {
 }
 
 export async function GET() {
-  const user = await currentUser();
+  const user = await currentUser({ profile: true });
   if (!user) return NextResponse.json({ user: null }, { status: 401 });
   return NextResponse.json({ user: safeUser(user) });
 }
@@ -41,7 +41,7 @@ export async function GET() {
 export async function PATCH(request: Request) {
   try {
     assertSameOrigin(request);
-    const user = await currentUser();
+    const user = await currentUser({ profile: true });
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     await enforceRateLimit(`profile-update:${user.id}`, 10, 3600);
     const input = updateSchema.parse(await request.json());
@@ -55,7 +55,7 @@ export async function PATCH(request: Request) {
           ...(input.nickname !== undefined ? { nickname: input.nickname } : {}),
           ...(input.guildStatus !== undefined ? { guildStatus: input.guildStatus, invited: true } : {}),
         },
-        include: { account: true },
+        select: memberProfileSelect,
       });
       if (input.guildStatus && input.guildStatus !== user.guildStatus) {
         await tx.guildStatusHistory.create({

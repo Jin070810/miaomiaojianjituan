@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { parsePagination, paginationResult } from "@/lib/pagination";
+import { videoRulePreview } from "@/lib/video-point-rule-snapshots";
 
 export async function GET(request: Request) {
   try {
@@ -24,7 +25,7 @@ export async function GET(request: Request) {
       db.videoAppeal.findMany({
         where,
         include: {
-          video: true,
+          video: { include: { pointRuleSnapshot: true } },
           user: { select: { id: true, kuaishouId: true, nickname: true } },
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -33,7 +34,10 @@ export async function GET(request: Request) {
       }),
       db.videoAppeal.count({ where }),
     ]);
-    return NextResponse.json({ appeals, pagination: paginationResult(page, take, total) });
+    return NextResponse.json({ appeals: appeals.map((appeal) => {
+      const { pointRuleSnapshot, ...video } = appeal.video;
+      return { ...appeal, video: { ...video, pointRulePreview: pointRuleSnapshot ? videoRulePreview(pointRuleSnapshot, video.likes) : null } };
+    }), pagination: paginationResult(page, take, total) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }

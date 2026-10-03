@@ -82,6 +82,7 @@ type AdminAppeal = {
   reason: string;
   createdAt: string;
   video: AdminVideo & {
+    pointRulePreview?: { revision: string; capturedAt: string; historicalFallback: boolean; maximumPoints: number; defaultPoints: number } | null;
     fetchedOwner: string | null;
     submittedNickname: string;
     matchedOwner: boolean | null;
@@ -2321,6 +2322,7 @@ export default function AdminPage() {
     invalidateOverview();
   }
   async function handleAppealAction(appeal: AdminAppeal, action: "approve" | "reject") {
+    const rulePreview = appeal.video.pointRulePreview;
     const reason = await askAdminValue(action === "reject" ? {
       title: "驳回视频申诉",
       label: "驳回原因",
@@ -2339,29 +2341,34 @@ export default function AdminPage() {
     if (action === "approve") {
       const raw = await askAdminValue({
         title: "核定申诉积分",
-        label: `当前抓取点赞 ${appeal.video.likes ?? 0}，请输入核定积分`,
+        label: "核定积分（留空按规则计算）",
+        description: rulePreview
+          ? `当前抓取点赞 ${appeal.video.likes ?? 0}，${rulePreview.historicalFallback ? "此前申诉采用的" : "首次自动审核锁定的"}规则计算为 ${rulePreview.defaultPoints} 分，上限 ${rulePreview.maximumPoints} 分。`
+          : "这条历史记录没有保存原审核规则。留空将按本次处理时规则计算，并明确记录这一情况；也可以填写核定积分。",
         inputType: "number",
-        initialValue: String(appeal.video.points || ""),
+        initialValue: "",
         required: false,
         confirmLabel: "确认通过",
       });
       if (raw === null) return;
       if (raw !== null && raw.trim() !== "") {
         points = Number(raw);
-        if (!Number.isInteger(points) || points < 0) {
-          setAdminFeedback({ type: "error", message: "积分必须是非负整数" });
+        if (!Number.isSafeInteger(points) || points < 0 || points > (rulePreview?.maximumPoints ?? 10_000_000)) {
+          setAdminFeedback({ type: "error", message: `积分必须是 0 至 ${rulePreview?.maximumPoints ?? 10_000_000} 的整数` });
           return;
         }
       }
     }
+    const calculated = points ?? rulePreview?.defaultPoints;
+    const pointImpact = calculated === undefined ? "按处理时规则计算基础积分，金额尚未确定" : `基础积分入账 ${calculated} 分`;
     const confirmed = await askAdminValue({
       title: action === "approve" ? "确认通过视频申诉" : "确认驳回视频申诉",
       label: "确认申诉结果",
-      description: action === "approve" ? `将为 ${appeal.user.nickname} 入账 ${points ?? appeal.video.points ?? 0} 积分，并写入审计记录。` : "将保留原自动驳回结果，并向成员发送处理结果。",
+      description: action === "approve" ? `将为 ${appeal.user.nickname} ${pointImpact}，生日加成如适用另计，并写入审计记录。` : "将保留原自动驳回结果，并向成员发送处理结果。",
       impact: [
         { label: "成员", value: `${appeal.user.nickname} · ${appeal.user.kuaishouId}` },
         { label: "申诉结果", value: action === "approve" ? "通过申诉并恢复视频奖励" : "维持原自动驳回结果", tone: action === "approve" ? "warning" : "default" },
-        { label: "积分影响", value: action === "approve" ? `入账 ${points ?? appeal.video.points ?? 0} 分` : "不产生积分变动", tone: action === "approve" ? "danger" : "default" },
+        { label: "积分影响", value: action === "approve" ? pointImpact : "不产生积分变动", tone: action === "approve" ? "danger" : "default" },
         { label: "审计", value: "处理结果、复查说明和积分流水在同一事务留痕" },
       ],
       confirmationOnly: true,
@@ -2372,7 +2379,7 @@ export default function AdminPage() {
     const response = await fetch(`/api/admin/video-appeals/${appeal.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, reason, points }),
+      body: JSON.stringify({ action, reason, points, expectedRuleRevision: rulePreview?.revision, expectedCalculatedPoints: rulePreview?.defaultPoints }),
     });
     const result = await response.json();
     if (!response.ok) {

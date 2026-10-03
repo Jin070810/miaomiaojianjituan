@@ -458,6 +458,7 @@ model VideoSubmission {
   appeals                VideoAppeal[]
   secondaryReview        VideoSecondaryReview?
   processingState        VideoProcessingState?
+  pointRuleSnapshot      VideoPointRuleSnapshot?
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
@@ -478,6 +479,22 @@ model VideoProcessingState {
   video          VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([nextAttemptAt])
+}
+
+model VideoPointRuleSnapshot {
+  videoId              String   @id
+  revision             String
+  formulaVersion       String
+  origin               String
+  minimumLikes         Int
+  fixedTierMaxLikes     Int
+  fixedTierPoints       Int
+  likesDivisor          Int
+  maximumPoints         Int
+  submissionWindowDays Int
+  sourceUpdatedAt      DateTime?
+  capturedAt           DateTime @default(now())
+  video                VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
 }
 
 model VideoSecondaryReview {

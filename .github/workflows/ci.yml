@@ -156,6 +156,7 @@ jobs:
       ADMIN_NICKNAME: Staging Health Admin
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
+      SESSION_COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -224,10 +225,13 @@ jobs:
           npx playwright test
           tests/e2e/admin-responsive.spec.ts
           tests/e2e/birthday-system.spec.ts
+          tests/e2e/ranking-adjustments.spec.ts
           --project=admin-desktop
           --project=admin-mobile
           --project=birthday-desktop
           --project=birthday-mobile
+          --project=ranking-mobile
+          --project=ranking-desktop
       - name: Collect staging container evidence
         if: always()
         run: |

@@ -4,35 +4,9 @@ import { decryptSensitive, encryptSensitive } from "./security";
 import { createNotification } from "./notifications";
 import { memberParticipantRoles } from "./member-roles";
 
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-export type RankingKind = "week" | "month" | "total";
-
-function localParts(value: Date) {
-  const shifted = new Date(value.getTime() + SHANGHAI_OFFSET_MS);
-  return {
-    year: shifted.getUTCFullYear(),
-    month: shifted.getUTCMonth(),
-    date: shifted.getUTCDate(),
-    day: shifted.getUTCDay(),
-  };
-}
-
-function shanghaiDate(year: number, month: number, date: number) {
-  return new Date(Date.UTC(year, month, date) - SHANGHAI_OFFSET_MS);
-}
-
-export function periodBounds(kind: Exclude<RankingKind, "total">, reference = new Date()) {
-  const parts = localParts(reference);
-  if (kind === "month") {
-    const start = shanghaiDate(parts.year, parts.month, 1);
-    return { start, end: shanghaiDate(parts.year, parts.month + 1, 1) };
-  }
-  const mondayOffset = (parts.day + 6) % 7;
-  const start = shanghaiDate(parts.year, parts.month, parts.date - mondayOffset);
-  return { start, end: new Date(start.getTime() + WEEK_MS) };
-}
+import { lockRankingPeriod, periodBounds, type RankingKind } from "./ranking-period";
+import { assertRankingAwardNotFrozen, lockRankingAward } from "./ranking-adjustments";
+export { periodBounds, type RankingKind } from "./ranking-period";
 
 function periodType(kind: Exclude<RankingKind, "total">): RankingPeriodType {
   return kind === "week" ? "WEEK" : "MONTH";
@@ -47,7 +21,7 @@ async function ensurePeriod(
   return tx.rankingPeriod.upsert({
     where: { type_periodStart: { type: periodType(kind), periodStart: bounds.start } },
     create: { type: periodType(kind), periodStart: bounds.start, periodEnd: bounds.end },
-    update: { periodEnd: bounds.end },
+    update: {},
   });
 }
 
@@ -94,13 +68,15 @@ async function userMap(tx: Prisma.TransactionClient | typeof db, ids: string[]) 
 
 export async function getLiveRanking(kind: RankingKind, userId?: string, reference = new Date()) {
   const period = kind === "total" ? null : await ensurePeriod(db, kind, reference);
-  const rows = await computeRows(db, kind, period?.periodStart, period?.periodEnd);
+  const rows = period?.status === "SETTLED"
+    ? await db.rankingEntry.findMany({ where: { periodId: period.id }, orderBy: { rank: "asc" } })
+    : await computeRows(db, kind, period?.periodStart, period?.periodEnd);
   const byId = await userMap(db, rows.map((row) => row.userId));
   return {
     kind,
     period: period ? { id: period.id, start: period.periodStart, end: period.periodEnd, status: period.status } : null,
     rankings: rows.map((row, index) => ({
-      rank: index + 1,
+      rank: "rank" in row ? row.rank : index + 1,
       userId: row.userId,
       kuaishouId: byId.get(row.userId)?.kuaishouId ?? "",
       nickname: byId.get(row.userId)?.nickname ?? "未知成员",
@@ -120,12 +96,14 @@ export async function previewRankingPeriod(input: { type: Exclude<RankingKind, "
     where: { type_periodStart: { type: periodType(input.type), periodStart: input.periodStart } },
   });
   if (!period) return { period: null, rankings: [] };
-  const rows = await computeRows(db, input.type, period.periodStart, period.periodEnd);
+  const rows = period.status === "SETTLED"
+    ? await db.rankingEntry.findMany({ where: { periodId: period.id }, orderBy: { rank: "asc" } })
+    : await computeRows(db, input.type, period.periodStart, period.periodEnd);
   const users = await userMap(db, rows.slice(0, 5).map((row) => row.userId));
   return {
     period,
     rankings: rows.slice(0, 5).map((row, index) => ({
-      rank: index + 1,
+      rank: "rank" in row ? row.rank : index + 1,
       userId: row.userId,
       nickname: users.get(row.userId)?.nickname ?? "未知成员",
       kuaishouId: users.get(row.userId)?.kuaishouId ?? "",
@@ -168,15 +146,30 @@ export async function settleRankingPeriod(input: {
   if (period.periodEnd > settledAt) throw new Error("当前周期尚未结束，不能结算");
   const rewardMap = new Map(input.rewards.map((reward) => [reward.rank, reward]));
   return db.$transaction(async (tx) => {
+    await lockRankingPeriod(tx, input.type, input.periodStart);
+    const ruleSnapshot = { version: "ranking-v1", timezone: "Asia/Shanghai", timeBasis: "submittedAt", metric: input.type === "week" ? "videoCount" : "likes", rankingLimit: 100, awardLimit: 5, eligibleRoles: memberParticipantRoles, tieBreakers: ["value desc", "videoCount desc", "likes desc", "userId localeCompare asc"], rewards: input.rewards };
+    const capturedAt = new Date();
     const claimed = await tx.rankingPeriod.updateMany({
       where: { id: period.id, status: "OPEN", periodEnd: { lte: settledAt } },
-      data: { status: "SETTLED", settledAt },
+      data: { status: "SETTLED", settledAt, ruleSnapshot, contributionsCapturedAt: capturedAt },
     });
     if (claimed.count !== 1) {
       const current = await tx.rankingPeriod.findUniqueOrThrow({ where: { id: period.id } });
       return { period: current, settled: false, reason: "已结算" };
     }
-    const rows = await computeRows(tx, input.type, period.periodStart, period.periodEnd);
+    // One INSERT...SELECT fixes the contributing set at a single DB snapshot.
+    // Aggregation reads that set, never a second view of mutable submissions.
+    await tx.$executeRaw`
+      INSERT INTO "RankingContribution" ("periodId", "videoId", "userId", "likes", "submittedAt")
+      SELECT ${period.id}, v."id", v."userId", COALESCE(v."likes", 0), v."submittedAt"
+      FROM "VideoSubmission" v JOIN "User" u ON u."id" = v."userId"
+      WHERE v."status" = 'APPROVED'
+        AND v."submittedAt" >= (${period.periodStart}::timestamptz AT TIME ZONE 'UTC')
+        AND v."submittedAt" < (${period.periodEnd}::timestamptz AT TIME ZONE 'UTC')
+        AND u."active" = true AND u."role"::text IN (${Prisma.join(memberParticipantRoles)})`;
+    const grouped = await tx.rankingContribution.groupBy({ by: ["userId"], where: { periodId: period.id }, _count: { videoId: true }, _sum: { likes: true } });
+    const rows = grouped.map((row) => ({ userId: row.userId, value: input.type === "week" ? row._count.videoId : row._sum.likes ?? 0, videoCount: row._count.videoId, likes: row._sum.likes ?? 0 }))
+      .sort((a, b) => b.value - a.value || b.videoCount - a.videoCount || b.likes - a.likes || a.userId.localeCompare(b.userId)).slice(0, 100);
     if (!input.allowEmptyRewards && rows.some((_, index) => index < 5 && !rewardMap.get(index + 1)?.title.trim())) {
       throw new Error("前五名实际获奖成员必须填写奖励名称");
     }
@@ -237,11 +230,11 @@ export async function settleRankingPeriod(input: {
         action: "RANKING_SETTLED",
         entity: "RankingPeriod",
         entityId: period.id,
-        afterValue: { kind: input.type, periodStart: period.periodStart.toISOString(), periodEnd: period.periodEnd.toISOString(), topFive: rows.slice(0, 5), rewards: input.rewards },
+        afterValue: { kind: input.type, periodStart: period.periodStart.toISOString(), periodEnd: period.periodEnd.toISOString(), topFive: rows.slice(0, 5), rewards: input.rewards, ruleSnapshot, contributionsCapturedAt: capturedAt.toISOString() },
         ip: input.ip,
       },
     });
-    return { period: { ...period, status: "SETTLED" as const, settledAt }, settled: true, entries, awards };
+    return { period: { ...period, status: "SETTLED" as const, settledAt, ruleSnapshot, contributionsCapturedAt: capturedAt }, settled: true, entries, awards };
   });
 }
 
@@ -267,8 +260,10 @@ export async function claimRankingAward(input: {
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
+    await lockRankingAward(tx, input.awardId);
     const award = await tx.rankingAward.findUnique({ where: { id: input.awardId }, include: { gift: true, period: true } });
     if (!award || award.userId !== input.userId) throw new Error("领奖记录不存在");
+    await assertRankingAwardNotFrozen(tx, award.id);
     if (award.status === "CLAIMED" || award.status === "FULFILLED") return award;
     if (award.status === "EXPIRED") throw new Error("该榜单奖励已过期");
     const profile = await tx.recipientProfile.findUnique({ where: { userId: input.userId } });

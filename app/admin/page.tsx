@@ -50,6 +50,7 @@ import { WorkbenchAdmin } from "./modules/workbench";
 import { AdminGlobalSearch } from "./modules/admin-search";
 import { ActivityDrawer } from "./modules/activity-drawer";
 import { BirthdayAdmin, type BirthdayAdminData } from "./modules/birthday-admin";
+import { RankingAdjustments } from "./modules/ranking-adjustments";
 import { useAdminActionDialog } from "./modules/admin-action-dialog";
 import { isMemberParticipantRole } from "@/lib/member-roles";
 import { canonicalVideoUrl } from "@/lib/kuaishou-url";
@@ -197,6 +198,8 @@ type AdminAuditRow = {
   actor: { kuaishouId: string; nickname: string; role: string } | null;
 };
 type AdminRankingAward = {
+  frozen?: boolean;
+  adjustmentPending?: boolean;
   id: string;
   rank: number;
   value: number;
@@ -1245,10 +1248,12 @@ function RankingsAdmin({
   periods,
   onSettle,
   onAwardUpdate,
+  onReload,
 }: {
   periods: AdminRankingPeriod[];
   onSettle: (type: "week" | "month", periodStart: string, rewards: Array<{ rank: number; title: string; description?: string }>) => Promise<void>;
   onAwardUpdate: (award: AdminRankingAward, input: { status?: "FULFILLED" }) => void;
+  onReload: () => Promise<void>;
 }) {
   const [rewards, setRewards] = useState<Record<string, Record<number, { title: string; description: string }>>>({});
   const [settling, setSettling] = useState("");
@@ -1352,6 +1357,7 @@ function RankingsAdmin({
         <div><span className="eyebrow">RANKING SETTLEMENT</span><h1>榜单结算</h1><p>只结算已结束周期；结算时保存奖励文字快照并向成员发送站内通知。</p></div>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
+      <RankingAdjustments onChanged={onReload} />
       {periods.map((period) => {
         const expanded = expandedPeriods.has(period.id);
         return (
@@ -1372,9 +1378,9 @@ function RankingsAdmin({
                     <td><div className="table-main"><span className="table-avatar">{award.rank}</span><div><strong>{award.user.nickname}</strong><small>{award.user.kuaishouId}</small></div></div></td>
                     <td>{award.value.toLocaleString()} {period.type === "WEEK" ? "个视频" : "赞"}</td>
                     <td><strong>{award.rewardTitle ?? "榜单奖励"}</strong>{award.rewardDescription && <small>{award.rewardDescription}</small>}</td>
-                    <td><span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "待领奖" : award.status === "CLAIMED" ? "已填写" : award.status === "FULFILLED" ? "已完成" : award.status}</span></td>
+                    <td><span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.frozen ? "已冻结" : award.adjustmentPending ? "已发待核实" : award.status === "PENDING" ? "待领奖" : award.status === "CLAIMED" ? "已填写" : award.status === "FULFILLED" ? "已完成" : "已取消或过期"}</span></td>
                     <td>{award.hasRecipientDetails ? <div className="ranking-recipient-summary"><span>资料已填写</span><button className="text-button" disabled={loadingAwardId === award.id} onClick={() => void viewAwardDetails(award)}>{loadingAwardId === award.id ? "读取中..." : visibleAwardId === award.id ? "收起" : "查看收货信息"}</button>{visibleAwardId === award.id && awardDetails[award.id] && <div className="ranking-recipient-details"><strong>{awardDetails[award.id].recipientName}</strong><small>{awardDetails[award.id].recipientPhone}<br />{awardDetails[award.id].recipientAddress}</small></div>}</div> : "尚未填写"}</td>
-                    <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" onClick={() => void completeAward(award)}>完成发放</button>}</td>
+                    <td>{award.status === "CLAIMED" && <button className="secondary-button mini-button" disabled={award.frozen} onClick={() => void completeAward(award)}>{award.frozen ? "冻结中" : "完成发放"}</button>}</td>
                   </tr>
                 ))}
                 {period.awards.length === 0 && <tr><td colSpan={6}>本期暂无获奖成员</td></tr>}
@@ -2923,7 +2929,7 @@ export default function AdminPage() {
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;
     if (active === "orders") return <OrdersAdmin rows={data.orders} pagination={data.ordersPagination} statusCounts={data.orderStatusCounts} onAction={handleOrderAction} onLoadMore={loadMoreOrders} onSearch={(search) => loadOrders({ search })} onFilter={(status) => loadOrders({ status: status === "ALL" ? "" : status === "PENDING" ? "PENDING_SHIPMENT" : status })} onActivity={(order) => setActivityTarget({ entity: "RedemptionOrder", entityId: order.id, title: `${order.gift.name}兑换订单` })} />;
-    if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} />;
+    if (active === "rankings") return <RankingsAdmin periods={data.periods} onSettle={handleRankingSettle} onAwardUpdate={handleRankingAwardUpdate} onReload={async () => { const payload = await loadAdminSection("rankings"); const rankings = payload.rankings as { periods?: AdminRankingPeriod[] }; setData((current) => current ? { ...current, periods: rankings.periods ?? [] } : current); }} />;
     if (active === "challenges") return <WeeklyChallengesAdmin periods={data.weeklyChallengePeriods} onRetry={handleWeeklyChallengeRetry} onUpgrade={handleWeeklyChallengeUpgrade} />;
     if (active === "birthdays" && data.birthdays) return <BirthdayAdmin data={data.birthdays} onReload={async () => { const payload = await loadAdminSection("birthdays"); setData((current) => current ? { ...current, birthdays: payload.birthdays as BirthdayAdminData } : current); }} />;
     if (active === "announcements") return <AnnouncementsAdmin rows={data.announcements} users={data.announcementUsers} onSave={saveAnnouncement} onAction={actionAnnouncement} />;

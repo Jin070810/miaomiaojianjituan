@@ -1,102 +1,47 @@
 import { NextResponse } from "next/server";
 import { operationalAlertConfigurationStatus } from "@/lib/alerts";
 import { db } from "@/lib/db";
-import { runtimeConfigIssues } from "@/lib/config";
-import { checkRateLimitStore } from "@/lib/rate-limit";
-import { getWorkerHeartbeat } from "@/lib/worker-health";
+import { getWorkerHeartbeat, type WorkerHeartbeat } from "@/lib/worker-health";
 import { getVideoQueueMetrics } from "@/lib/video-jobs";
 import { weeklyChallengeSchedulerStatus } from "@/lib/weekly-challenges";
 import { getWeeklyChallengeQueueStatus } from "@/lib/weekly-challenge-jobs";
+import { getWebReadiness } from "@/lib/health-readiness";
+import { createHealthProbe, healthHeaders } from "@/lib/health-probe";
 
+export const dynamic = "force-dynamic";
+
+const workerProbe = createHealthProbe<WorkerHeartbeat>(getWorkerHeartbeat, { status: "unavailable", commit: null, buildTime: null, heartbeatAt: null });
+const videoQueueProbe = createHealthProbe(getVideoQueueMetrics, null, 2_000, 5_000);
+const weeklyProbe = createHealthProbe<Awaited<ReturnType<typeof weeklyChallengeSchedulerStatus>> | null>(weeklyChallengeSchedulerStatus, null, 2_000, 5_000);
+const weeklyQueueProbe = createHealthProbe<Awaited<ReturnType<typeof getWeeklyChallengeQueueStatus>> | null>(getWeeklyChallengeQueueStatus, null, 2_000, 5_000);
+const adminProbe = createHealthProbe<number | null>(() => db.user.count({ where: { role: "ADMIN", active: true } }), null, 2_000, 5_000);
+
+// Retain the detailed /api/health contract used by releases and operations.
+// Container readiness uses /api/health/ready and never waits for Worker jobs.
 export async function GET() {
-  const configIssues = runtimeConfigIssues();
-  const app = {
-    commit: process.env.APP_COMMIT_SHA?.trim() || null,
-    buildTime: process.env.APP_BUILD_TIME?.trim() || null,
-  };
-  try {
-    const [, redis, workerVersion, queue, weeklyChallenges, weeklyChallengeQueue] = await Promise.all([
-      db.$queryRaw`SELECT 1`,
-      checkRateLimitStore().catch(() => "unavailable" as const),
-      getWorkerHeartbeat().catch(() => ({
-        status: "unavailable" as const,
-        commit: null,
-        buildTime: null,
-        heartbeatAt: null,
-      })),
-      getVideoQueueMetrics().catch(() => null),
-      weeklyChallengeSchedulerStatus().catch(() => null),
-      getWeeklyChallengeQueueStatus().catch(() => null),
-    ]);
-    const worker = workerVersion.status;
-    const admins = await db.user.count({ where: { role: "ADMIN", active: true } });
-    const adminIssue = process.env.NODE_ENV === "production" && admins === 0 ? ["没有启用的管理员账号"] : [];
-    const redisIssue = process.env.NODE_ENV === "production" && redis !== "ok" ? ["Redis不可用"] : [];
-    const workerIssue = process.env.NODE_ENV === "production" && worker !== "ok" ? ["视频处理Worker不可用"] : [];
-    const versionIssue = process.env.NODE_ENV === "production"
-      && workerVersion.commit !== process.env.APP_COMMIT_SHA
-      ? ["App与Worker提交版本不一致"] : [];
-    const weeklyChallengeIssue = process.env.NODE_ENV === "production" && weeklyChallenges?.enabled
-      ? [
-          ...(!weeklyChallenges.providerConfigured ? ["周挑战已启用但DeepSeek配置不完整"] : []),
-          ...(!operationalAlertConfigurationStatus().configured ? ["周挑战已启用但告警通道未配置"] : []),
-        ]
-      : [];
-    const weeklyChallengeStatusIssue = process.env.NODE_ENV === "production" && !weeklyChallenges
-      ? ["周挑战调度状态不可用"] : [];
-    const queueIssue = process.env.NODE_ENV === "production" && queue && queue.waiting > Number(process.env.QUEUE_WAITING_ALERT_THRESHOLD ?? 1000)
-      ? ["视频队列等待任务过多"] : [];
-    const weeklyQueueIssue = process.env.NODE_ENV === "production" && weeklyChallenges?.enabled
-      && (!weeklyChallengeQueue || !weeklyChallengeQueue.schedulerConfigured)
-      ? ["周挑战持久化调度器不可用"] : [];
-    const issues = [
-      ...configIssues,
-      ...adminIssue,
-      ...redisIssue,
-      ...workerIssue,
-      ...versionIssue,
-      ...weeklyChallengeIssue,
-      ...weeklyChallengeStatusIssue,
-      ...queueIssue,
-      ...weeklyQueueIssue,
-    ];
-    const operationalIssues = weeklyChallenges?.operationalIssues ?? [];
-    return NextResponse.json({
-      ok: issues.length === 0,
-      degraded: operationalIssues.length > 0,
-      app,
-      database: "ok",
-      redis,
-      worker,
-      workerVersion,
-      queue,
-      weeklyChallenges,
-      weeklyChallengeQueue,
-      operationalIssues,
-      admins,
-      issues,
-      time: new Date().toISOString(),
-    }, { status: issues.length === 0 ? 200 : 503 });
-  } catch {
-    const workerVersion = await getWorkerHeartbeat().catch(() => ({
-      status: "unavailable" as const,
-      commit: null,
-      buildTime: null,
-      heartbeatAt: null,
-    }));
-    return NextResponse.json({
-      ok: false,
-      app,
-      database: "unavailable",
-      redis: "unknown",
-      worker: workerVersion.status,
-      workerVersion,
-      weeklyChallenges: null,
-      weeklyChallengeQueue: null,
-      degraded: true,
-      operationalIssues: ["周挑战运行状态不可用"],
-      issues: configIssues,
-      time: new Date().toISOString(),
-    }, { status: 503 });
-  }
+  const [web, workerVersion, queue, weeklyChallenges, weeklyChallengeQueue, admins] = await Promise.all([
+    getWebReadiness(), workerProbe(), videoQueueProbe(), weeklyProbe(), weeklyQueueProbe(), adminProbe(),
+  ]);
+  const production = process.env.NODE_ENV === "production";
+  const worker = workerVersion.status;
+  const issues = [
+    ...web.issues,
+    ...(production && admins === null ? ["管理员状态不可用"] : []),
+    ...(production && admins === 0 ? ["没有启用的管理员账号"] : []),
+    ...(production && worker !== "ok" ? ["视频处理Worker不可用"] : []),
+    ...(production && workerVersion.commit !== web.app.commit ? ["App与Worker提交版本不一致"] : []),
+    ...(production && !queue ? ["视频队列状态不可用"] : []),
+    ...(production && queue && queue.waiting > Number(process.env.QUEUE_WAITING_ALERT_THRESHOLD ?? 1000) ? ["视频队列等待任务过多"] : []),
+    ...(production && !weeklyChallenges ? ["周挑战调度状态不可用"] : []),
+    ...(production && weeklyChallenges?.enabled ? [
+      ...(!weeklyChallenges.providerConfigured ? ["周挑战已启用但DeepSeek配置不完整"] : []),
+      ...(!operationalAlertConfigurationStatus().configured ? ["周挑战已启用但告警通道未配置"] : []),
+      ...(!weeklyChallengeQueue?.schedulerConfigured ? ["周挑战持久化调度器不可用"] : []),
+    ] : []),
+  ];
+  const operationalIssues = weeklyChallenges?.operationalIssues ?? ["周挑战运行状态不可用"];
+  return NextResponse.json({
+    ...web, ok: issues.length === 0, degraded: operationalIssues.length > 0,
+    worker, workerVersion, queue, weeklyChallenges, weeklyChallengeQueue, operationalIssues, admins, issues,
+  }, { status: issues.length === 0 ? 200 : 503, headers: healthHeaders });
 }

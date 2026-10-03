@@ -372,7 +372,7 @@ jobs:
           ALERTS_DEFERRED: ${{ inputs.confirm_alert_deferred }}
         run: |
           for _ in {1..12}; do
-            if health_json="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"; then
+            if health_json="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 8 "https://$PRODUCTION_DOMAIN/api/health")"; then
               printf '%s\n' "$health_json"
               if jq -e --arg sha "$RELEASE_COMMIT" --arg deferred "$ALERTS_DEFERRED" \
                 '.ok == true

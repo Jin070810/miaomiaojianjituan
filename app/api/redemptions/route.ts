@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { withPublicGiftImage } from "@/lib/public-images";
 import { redeemGift } from "@/lib/points";
 import { assertSameOrigin, getClientIp, isSafeCashQrCodeUrl, MAX_CASH_QR_CODE_LENGTH, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -53,7 +54,7 @@ export async function GET(request: Request) {
     db.redemptionOrder.count({ where }),
   ]);
   return NextResponse.json({
-    orders: orders.map(memberOrderDto),
+    orders: orders.map((order) => ({ ...memberOrderDto(order), gift: withPublicGiftImage(order.gift) })),
     pagination: paginationResult(page, take, total),
   });
 }

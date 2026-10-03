@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { publicAvatarUrl } from "@/lib/public-images";
 import { memberParticipantRoles } from "@/lib/member-roles";
 
 export async function GET() {
@@ -53,7 +54,7 @@ export async function GET() {
       id: user.id,
       kuaishouId: user.kuaishouId,
       nickname: user.nickname,
-      avatarUrl: user.avatarUrl,
+      avatarUrl: publicAvatarUrl(user),
       role: user.role,
       guildStatus: user.guildStatus,
       invited: user.invited,

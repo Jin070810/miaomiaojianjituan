@@ -29,6 +29,8 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 CI 为每个候选构建一对 App/Worker 镜像，完整浏览器验收直接使用这对容器；main 验收成功后将原镜像推送 GHCR 并保存 release manifest。正式发布输入已合并的完整 SHA 和对应 CI run ID，校验来源、验收、migration 校验和后只按 digest 拉取，并比对 staging 镜像 ID；发布及应用回滚均不重新构建。生产前置检查、备份、migration 和健康检查仍是必需门禁。详细流程见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)；生产发布、备份和维护使用同一主机锁，发布阶段与失败恢复规则见 [`docs/SERIALIZED-PRODUCTION-RELEASE.md`](docs/SERIALIZED-PRODUCTION-RELEASE.md)。
 
+成员端商品图片与头像使用独立版本 URL 缓存，礼物屋按分类和全局排序分页加载；私密收款码保持原权限链路。兼容范围、测试与回滚见 [公开图片缓存与商品分页](docs/PUBLIC-IMAGE-DELIVERY.md)。
+
 ## 快手与抖音视频抓取
 
 Worker 的累计重试预算保存在数据库中，恢复扫描不会无限补发失败任务；实例心跳和独立事件循环看门狗覆盖启动、排空与假死恢复。迁移、重试边界和回滚注意事项见 [视频 Worker 生命周期](docs/VIDEO-WORKER-LIFECYCLE.md)。

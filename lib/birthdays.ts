@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "./db";
+import { publicAvatarUrl } from "./public-images";
 import { createNotification } from "./notifications";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { isMemberParticipantRole, memberParticipantRoles } from "./member-roles";
@@ -305,7 +306,7 @@ export async function getBirthdayWall(viewerId: string, now = new Date()) {
     return {
       userId: item.profile.user.id,
       nickname: item.profile.user.nickname,
-      avatarUrl: item.profile.user.avatarUrl,
+      avatarUrl: publicAvatarUrl(item.profile.user),
       month: item.effective.month,
       day: item.effective.day,
       benefitYear: item.year,

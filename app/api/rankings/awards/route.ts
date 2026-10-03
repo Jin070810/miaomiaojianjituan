@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
+import { withPublicGiftImage } from "@/lib/public-images";
 
 export async function GET() {
   const user = await currentUser();
@@ -16,6 +17,7 @@ export async function GET() {
       ...award,
       frozen: adjustments.some((task) => task.kind === "FREEZE_UNPAID"),
       adjustmentPending: adjustments.length > 0,
+      gift: award.gift ? withPublicGiftImage(award.gift) : null,
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
       hasCashQrCode: Boolean(cashQrCodeUrl),

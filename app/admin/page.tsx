@@ -88,22 +88,6 @@ type AdminAppeal = {
   };
   user: { id: string; kuaishouId: string; nickname: string };
 };
-type AdminSecondaryReview = {
-  id: string;
-  status: "PENDING" | "APPROVED" | "REJECTED";
-  reviewReason: string | null;
-  assignedAt: string | null;
-  reviewedAt: string | null;
-  createdAt: string;
-  reviewer: { id: string; kuaishouId: string; nickname: string; role: string } | null;
-  video: AdminVideo & {
-    views: number | null;
-    commentCount: number | null;
-    caption: string | null;
-    coverUrl: string | null;
-  };
-};
-
 type AdminUserRow = {
   id: string;
   kuaishouId: string;
@@ -336,7 +320,6 @@ type AdminData = {
   recentVideos: AdminVideo[];
   videos: AdminVideo[];
   appeals: AdminAppeal[];
-  secondaryReviews: AdminSecondaryReview[];
   users: AdminUserRow[];
   voluntaryExits: AdminVoluntaryExitRow[];
   pointUsers: AdminUserRow[];
@@ -351,7 +334,6 @@ type AdminData = {
   pointPagination: AdminPagination;
   videosPagination: AdminPagination;
   appealsPagination: AdminPagination;
-  secondaryReviewsPagination: AdminPagination;
   usersPagination: AdminPagination;
   voluntaryExitPagination: AdminPagination;
   pointUsersPagination: AdminPagination;
@@ -387,7 +369,6 @@ function initialAdminData(dashboard: {
     recentVideos: dashboard.recentVideos ?? [],
     videos: [],
     appeals: [],
-    secondaryReviews: [],
     users: [],
     voluntaryExits: [],
     pointUsers: [],
@@ -402,7 +383,6 @@ function initialAdminData(dashboard: {
     pointPagination: emptyPagination,
     videosPagination: emptyPagination,
     appealsPagination: emptyPagination,
-    secondaryReviewsPagination: emptyPagination,
     usersPagination: emptyPagination,
     voluntaryExitPagination: emptyPagination,
     pointUsersPagination: emptyPagination,
@@ -590,7 +570,7 @@ function Overview({ data }: { data: AdminData }) {
         <section className="admin-panel exception-panel">
           <div className="admin-panel-head"><div><h2>需要关注</h2><p>异常视频与待处理订单</p></div><AlertTriangle size={19} color="#b8750a" /></div>
           <div className="exception-list">
-            <div><span className="exception-icon danger"><AlertTriangle size={16} /></span><div><strong>视频审核待办</strong><small>{data.metrics.pendingSecondaryReviews ?? 0} 条二审 · {data.metrics.pendingAppeals ?? 0} 条申诉</small></div><b>{data.metrics.pendingVideos}</b></div>
+            <div><span className="exception-icon danger"><AlertTriangle size={16} /></span><div><strong>视频审核待办</strong><small>{data.metrics.pendingAppeals ?? 0} 条申诉</small></div><b>{data.metrics.pendingVideos}</b></div>
             <div><span className="exception-icon warning"><Activity size={16} /></span><div><strong>在架礼品</strong><small>库存与状态实时同步</small></div><b>{data.metrics.activeGifts}</b></div>
             <div><span className="exception-icon teal"><PackageCheck size={16} /></span><div><strong>待处理订单</strong><small>兑换积分已锁定</small></div><b>{data.metrics.pendingOrders}</b></div>
           </div>
@@ -718,7 +698,7 @@ function AppealsAdmin({
     <>
       <section className="admin-panel audit-panel">
         <div className="admin-panel-head"><div><h2>待复查申诉</h2><p>共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页；普通视频由系统直接通过或驳回</p></div><div className="table-actions"><div className="admin-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitSearch(); }} placeholder="搜索成员、视频或申诉原因" /></div><button className="icon-button" title="执行搜索" aria-label="执行搜索" onClick={() => void submitSearch()}><Search size={18} /></button></div></div>
-        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>成员</th><th>视频</th><th>自动结果</th><th>申诉理由</th><th>提交时间</th><th /></tr></thead><tbody>
+        <div className="data-table-wrap appeal-review-table"><table className="data-table"><thead><tr><th>成员</th><th>视频</th><th>自动结果</th><th>申诉理由</th><th>提交时间</th><th /></tr></thead><tbody>
           {rows.map((appeal) => <tr key={appeal.id}>
             <td><div className="table-main"><span className="table-avatar">{appeal.user.nickname.slice(0, 1)}</span><div><strong>{appeal.user.nickname}</strong><small>{appeal.user.kuaishouId}</small></div></div></td>
             <td><div className="table-main"><div><strong>{appeal.video.likes?.toLocaleString() ?? "未获取"} 赞</strong><small>{appeal.video.sourceUrl.slice(0, 48)}</small></div></div></td>
@@ -730,131 +710,70 @@ function AppealsAdmin({
               <button className="table-more" title="驳回申诉" aria-label="驳回申诉" onClick={() => onAction(appeal, "reject")}><X size={16} /></button>
             </div></td>
           </tr>)}
-          {rows.length === 0 && <tr><td colSpan={6}>暂无待复查申诉</td></tr>}
         </tbody></table></div>
+        <div className="appeal-review-cards">
+          {rows.map((appeal) => <article className="appeal-review-card" key={appeal.id}>
+            <div className="appeal-review-card-head"><span className="table-thumb">▶</span><div>
+              <a href={appeal.video.sourceUrl} target="_blank" rel="noopener noreferrer"><strong>{appeal.user.nickname}的视频</strong><ExternalLink size={13} /></a>
+              <small>{appeal.user.kuaishouId} · {formatAdminDate(appeal.createdAt)}</small>
+            </div></div>
+            <dl><div><dt>点赞</dt><dd>{appeal.video.likes?.toLocaleString() ?? "未获取"}</dd></div><div><dt>提交昵称</dt><dd>{appeal.video.submittedNickname}</dd></div></dl>
+            <p className="appeal-auto-outcome"><b>自动结果：</b>{appeal.video.reviewReason ?? "自动驳回"}</p>
+            <p><b>抓取作者：</b>{appeal.video.fetchedOwner ?? "未获取"}</p>
+            <p><b>申诉理由：</b>{appeal.reason}</p>
+            <div className="appeal-review-card-actions">
+              <button className="primary-button" aria-label="通过申诉" onClick={() => onAction(appeal, "approve")}><Check size={16} />通过申诉</button>
+              <button className="danger-button" aria-label="驳回申诉" onClick={() => onAction(appeal, "reject")}><X size={16} />驳回申诉</button>
+            </div>
+          </article>)}
+        </div>
+        {rows.length === 0 && <p className="empty-copy">暂无待复查申诉</p>}
         {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多申诉 <ChevronDown size={15} /></button></div>}
       </section>
     </>
   );
 }
 
-function SecondaryReviewsAdmin({
-  rows,
-  pagination,
-  onAction,
-  onLoadMore,
-  onFilter,
-  onActivity,
-}: {
-  rows: AdminSecondaryReview[];
-  pagination: AdminPagination;
-  onAction: (review: AdminSecondaryReview, action: "approve" | "reject") => void;
-  onLoadMore: () => Promise<void>;
-  onFilter: (status: "PENDING" | "APPROVED" | "REJECTED") => Promise<void>;
-  onActivity: (video: AdminVideo) => void;
-}) {
-  const [filter, setFilter] = useState<"PENDING" | "APPROVED" | "REJECTED">("PENDING");
-  const labels: Record<typeof filter, string> = { PENDING: "待二审", APPROVED: "二审通过", REJECTED: "二审驳回" };
-  function changeFilter(next: typeof filter) {
-    setFilter(next);
-    void onFilter(next);
-  }
-  return (
-    <>
-      <div className="admin-tabs">
-        {(["PENDING", "APPROVED", "REJECTED"] as const).map((status) => (
-          <button key={status} className={filter === status ? "active" : ""} onClick={() => changeFilter(status)}>
-            {labels[status]}{filter === status && <span>{pagination.total}</span>}
-          </button>
-        ))}
-      </div>
-      <section className="admin-panel audit-panel">
-        <div className="admin-panel-head"><div><h2>{labels[filter]}</h2><p>共 {pagination.total} 条，当前第 {pagination.page} / {pagination.pages} 页；驳回会自动扣回视频积分</p></div></div>
-        <div className="data-table-wrap secondary-review-table"><table className="data-table"><thead><tr><th>成员与视频</th><th>数据</th><th>审核员</th><th>状态</th><th>时间</th><th /></tr></thead><tbody>
-          {rows.map((review) => {
-            const href = canonicalVideoUrl(review.video.sourceKind, review.video.photoId) ?? review.video.sourceUrl;
-            return (
-              <tr key={review.id}>
-                <td><div className="table-main">{review.video.coverUrl ? <span className="table-thumb video-cover-thumb"><img src={review.video.coverUrl} alt="" /></span> : <span className="table-thumb">▶</span>}<div><a className="video-source-link" href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${review.video.user.nickname}的二审视频`} title="打开视频"><strong>{review.video.caption || review.video.sourceUrl}</strong><ExternalLink size={13} /></a><small>{review.video.user.nickname} · {review.video.user.kuaishouId}</small></div></div></td>
-                <td><strong>{review.video.likes?.toLocaleString() ?? "未获取"} 赞</strong><small>{review.video.points.toLocaleString()} 积分 · photoId {review.video.photoId ?? "未获取"}</small></td>
-                <td>{review.reviewer ? <><span>{review.reviewer.nickname}</span><small>{review.reviewer.kuaishouId}</small></> : <span className="status-chip warning">未分配</span>}</td>
-                <td><span className={`status-chip ${review.status === "APPROVED" ? "success" : review.status === "REJECTED" ? "danger" : "warning"}`}>{labels[review.status]}</span>{review.reviewReason && <small>{review.reviewReason}</small>}</td>
-                <td>{formatAdminDate(review.reviewedAt ?? review.assignedAt ?? review.createdAt)}</td>
-                <td><div className="table-actions-inline">
-                  <button className="table-more" title="查看操作动态" aria-label="查看视频操作动态" onClick={() => onActivity(review.video)}><FileText size={16} /></button>
-                  {review.status === "PENDING" && <button className="table-more" title="二审通过" aria-label="二审通过" onClick={() => onAction(review, "approve")}><Check size={16} /></button>}
-                  {review.status === "PENDING" && <button className="table-more" title="二审驳回并扣回积分" aria-label="二审驳回" onClick={() => onAction(review, "reject")}><X size={16} /></button>}
-                </div></td>
-              </tr>
-            );
-          })}
-          {rows.length === 0 && <tr><td colSpan={6}>暂无二次审核任务</td></tr>}
-        </tbody></table></div>
-        <div className="secondary-review-cards">
-          {rows.map((review) => {
-            const href = canonicalVideoUrl(review.video.sourceKind, review.video.photoId) ?? review.video.sourceUrl;
-            return <article className="secondary-review-card" key={`mobile-${review.id}`}><div className="secondary-review-card-head">{review.video.coverUrl ? <img src={review.video.coverUrl} alt="" /> : <span className="table-thumb">▶</span>}<div><a href={href} target="_blank" rel="noopener noreferrer"><strong>{review.video.caption || "查看视频"}</strong><ExternalLink size={13} /></a><small>{review.video.user.nickname} · {review.video.user.kuaishouId}</small></div><span className={`status-chip ${review.status === "APPROVED" ? "success" : review.status === "REJECTED" ? "danger" : "warning"}`}>{labels[review.status]}</span></div><dl><div><dt>点赞</dt><dd>{review.video.likes?.toLocaleString() ?? "未获取"}</dd></div><div><dt>积分</dt><dd>{review.video.points.toLocaleString()}</dd></div><div><dt>审核员</dt><dd>{review.reviewer?.nickname ?? "未分配"}</dd></div><div><dt>时间</dt><dd>{formatAdminDate(review.reviewedAt ?? review.assignedAt ?? review.createdAt)}</dd></div></dl>{review.reviewReason && <p>{review.reviewReason}</p>}<div className="secondary-review-card-actions"><button className="secondary-button" onClick={() => onActivity(review.video)}><FileText size={16} />动态</button>{review.status === "PENDING" && <button className="primary-button" onClick={() => onAction(review, "approve")}><Check size={16} />通过</button>}{review.status === "PENDING" && <button className="danger-button" onClick={() => onAction(review, "reject")}><X size={16} />驳回</button>}</div></article>;
-          })}
-          {rows.length === 0 && <p className="empty-copy">暂无二次审核任务</p>}
-        </div>
-        {pagination.page < pagination.pages && <div className="admin-panel-actions"><button className="secondary-button" onClick={() => void onLoadMore()}>加载更多二审任务 <ChevronDown size={15} /></button></div>}
-      </section>
-    </>
-  );
-}
-
 function VideoManagement({
-  secondaryReviews,
   videos,
   appeals,
-  secondaryReviewsPagination,
   videosPagination,
   appealsPagination,
-  onSecondaryReviewAction,
   onVideoAction,
   onAppealAction,
-  onLoadMoreSecondaryReviews,
   onLoadMoreVideos,
   onLoadMoreAppeals,
-  onFilterSecondaryReviews,
   onSearchVideos,
   onFilterVideos,
   onSearchAppeals,
   onVideoActivity,
 }: {
-  secondaryReviews: AdminSecondaryReview[];
   videos: AdminVideo[];
   appeals: AdminAppeal[];
-  secondaryReviewsPagination: AdminPagination;
   videosPagination: AdminPagination;
   appealsPagination: AdminPagination;
-  onSecondaryReviewAction: (review: AdminSecondaryReview, action: "approve" | "reject") => void;
   onVideoAction: (video: AdminVideo, action: "revoke" | "reprocess") => void;
   onAppealAction: (appeal: AdminAppeal, action: "approve" | "reject") => void;
-  onLoadMoreSecondaryReviews: () => Promise<void>;
   onLoadMoreVideos: () => Promise<void>;
   onLoadMoreAppeals: () => Promise<void>;
-  onFilterSecondaryReviews: (status: "PENDING" | "APPROVED" | "REJECTED") => Promise<void>;
   onSearchVideos: (query: string) => Promise<void>;
   onFilterVideos: (status: string) => Promise<void>;
   onSearchAppeals: (query: string) => Promise<void>;
   onVideoActivity: (video: AdminVideo) => void;
 }) {
-  const [view, setView] = useState<"secondary" | "appeals" | "history">("secondary");
+  const [view, setView] = useState<"appeals" | "history">("appeals");
   return (
     <>
       <div className="admin-page-title">
-        <div><span className="eyebrow">CONTENT OPERATIONS</span><h1>视频与审核</h1><p>机审通过后进入二次审核池；二审驳回会自动扣回已到账积分。</p></div>
-        <span className={`status-chip ${secondaryReviewsPagination.total + appealsPagination.total ? "warning" : "success"}`}>{secondaryReviewsPagination.total + appealsPagination.total} 条待处理</span>
+        <div><span className="eyebrow">CONTENT OPERATIONS</span><h1>视频与审核</h1><p>普通视频由系统自动审核，人工仅处理成员申诉。</p></div>
+        <span className={`status-chip ${appealsPagination.total ? "warning" : "success"}`}>{appealsPagination.total} 条待处理</span>
       </div>
       <div className="admin-tabs">
-        <button className={view === "secondary" ? "active" : ""} onClick={() => setView("secondary")}>二审池<span>{secondaryReviewsPagination.total}</span></button>
         <button className={view === "appeals" ? "active" : ""} onClick={() => setView("appeals")}>待处理申诉<span>{appealsPagination.total}</span></button>
         <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>视频历史<span>{videosPagination.total}</span></button>
+        <Link className="admin-history-link" href="/reviewer">历史二审记录</Link>
       </div>
-      {view === "secondary"
-        ? <SecondaryReviewsAdmin rows={secondaryReviews} pagination={secondaryReviewsPagination} onAction={onSecondaryReviewAction} onLoadMore={onLoadMoreSecondaryReviews} onFilter={onFilterSecondaryReviews} onActivity={onVideoActivity} />
-        : view === "appeals"
+      {view === "appeals"
         ? <AppealsAdmin rows={appeals} pagination={appealsPagination} onAction={onAppealAction} onLoadMore={onLoadMoreAppeals} onSearch={onSearchAppeals} />
         : <VideosAdmin rows={videos} pagination={videosPagination} onAction={onVideoAction} onLoadMore={onLoadMoreVideos} onSearch={onSearchVideos} onFilter={onFilterVideos} onActivity={onVideoActivity} />}
     </>
@@ -2004,7 +1923,6 @@ export default function AdminPage() {
   const [giftEditor, setGiftEditor] = useState<{ gift: AdminGiftRow | null } | null>(null);
   const [giftActionId, setGiftActionId] = useState<string | null>(null);
   const [videoFilters, setVideoFilters] = useState({ search: "", status: "" });
-  const [secondaryReviewStatus, setSecondaryReviewStatus] = useState<"PENDING" | "APPROVED" | "REJECTED">("PENDING");
   const [appealSearch, setAppealSearch] = useState("");
   const [userFilters, setUserFilters] = useState({ search: "", guild: "" });
   const [voluntaryExitSearch, setVoluntaryExitSearch] = useState("");
@@ -2073,13 +1991,10 @@ export default function AdminPage() {
           return { ...current, metrics: dashboard.metrics, pointsTrend: dashboard.pointsTrend ?? [], audit: dashboard.audit ?? current.audit, recentVideos: dashboard.recentVideos ?? current.recentVideos, memberGrowth: dashboard.memberGrowth ?? null };
         }
         if (section === "videos") {
-          const reviews = payload.reviews as { reviews?: AdminSecondaryReview[]; pagination?: AdminPagination };
           const videos = payload.videos as { videos?: AdminVideo[]; pagination?: AdminPagination };
           const appeals = payload.appeals as { appeals?: AdminAppeal[]; pagination?: AdminPagination };
           return {
             ...current,
-            secondaryReviews: reviews.reviews ?? [],
-            secondaryReviewsPagination: reviews.pagination ?? emptyPagination,
             videos: videos.videos ?? [],
             videosPagination: videos.pagination ?? emptyPagination,
             appeals: appeals.appeals ?? [],
@@ -2179,27 +2094,6 @@ export default function AdminPage() {
     if (!response.ok) throw new Error(result.error ?? "公告操作失败");
     const announcement = result.announcement as AdminAnnouncement;
     setData((current) => current ? { ...current, announcements: current.announcements.map((row) => row.id === id ? { ...row, ...announcement } : row) } : current);
-  }
-  async function loadSecondaryReviews(input: { page?: number; status?: "PENDING" | "APPROVED" | "REJECTED"; append?: boolean }) {
-    if (!data) return;
-    const status = input.status ?? secondaryReviewStatus;
-    const page = input.page ?? 1;
-    const params = new URLSearchParams({ page: String(page), take: String(data.secondaryReviewsPagination.take), status });
-    try {
-      const result = await fetchAdminPage(`/api/reviewer/video-reviews?${params}`, "二次审核池加载失败");
-      setSecondaryReviewStatus(status);
-      setData((current) => current ? {
-        ...current,
-        secondaryReviews: input.append ? [...current.secondaryReviews, ...(result.reviews ?? [])] : (result.reviews ?? []),
-        secondaryReviewsPagination: result.pagination,
-      } : current);
-    } catch (loadError) {
-      setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "二次审核池加载失败" });
-    }
-  }
-  async function loadMoreSecondaryReviews() {
-    if (!data || data.secondaryReviewsPagination.page >= data.secondaryReviewsPagination.pages) return;
-    await loadSecondaryReviews({ page: data.secondaryReviewsPagination.page + 1, append: true });
   }
   async function loadVideos(input: { page?: number; search?: string; status?: string; append?: boolean }) {
     if (!data) return;
@@ -2372,59 +2266,6 @@ export default function AdminPage() {
     } catch (loadError) {
       setAdminFeedback({ type: "error", message: loadError instanceof Error ? loadError.message : "审计日志加载失败" });
     }
-  }
-  async function handleSecondaryReviewAction(review: AdminSecondaryReview, action: "approve" | "reject") {
-    const reason = action === "reject" ? await askAdminValue({
-      title: "二审驳回视频",
-      label: "驳回原因",
-      multiline: true,
-      placeholder: "说明二审驳回依据，系统会扣回该视频已到账积分",
-      confirmLabel: "确认驳回",
-    }) : undefined;
-    if (action === "reject" && !reason) return;
-    const confirmed = await askAdminValue({
-      title: action === "approve" ? "确认二审通过" : "确认二审驳回",
-      label: "确认二审结果",
-      description: action === "approve" ? "通过后该视频不再留在待二审池。" : `将扣回 ${review.video.points.toLocaleString()} 积分，并重新核对关联挑战奖励。`,
-      confirmationOnly: true,
-      required: false,
-      confirmLabel: action === "approve" ? "确认通过" : "确认驳回",
-    });
-    if (confirmed === null) return;
-    const response = await fetch(`/api/reviewer/video-reviews/${review.id}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, reason }),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      setAdminFeedback({ type: "error", message: result.error ?? "二次审核操作失败" });
-      return;
-    }
-    setAdminFeedback({ type: "success", message: action === "approve" ? "二审已通过" : "二审已驳回，积分已扣回" });
-    setData((current) => {
-      if (!current) return current;
-      const updated = result.review as AdminSecondaryReview;
-      const remainsVisible = updated.status === secondaryReviewStatus;
-      return {
-        ...current,
-        metrics: {
-          ...current.metrics,
-          pendingVideos: review.status === "PENDING" ? Math.max(0, current.metrics.pendingVideos - 1) : current.metrics.pendingVideos,
-          pendingSecondaryReviews: review.status === "PENDING" ? Math.max(0, (current.metrics.pendingSecondaryReviews ?? 0) - 1) : current.metrics.pendingSecondaryReviews,
-        },
-        secondaryReviews: remainsVisible
-          ? current.secondaryReviews.map((item) => item.id === review.id ? updated : item)
-          : current.secondaryReviews.filter((item) => item.id !== review.id),
-        secondaryReviewsPagination: remainsVisible
-          ? current.secondaryReviewsPagination
-          : { ...current.secondaryReviewsPagination, total: Math.max(0, current.secondaryReviewsPagination.total - 1) },
-        videos: action === "reject"
-          ? current.videos.map((item) => item.id === review.video.id ? { ...item, status: "REVOKED", reviewReason: reason ?? item.reviewReason } : item)
-          : current.videos,
-      };
-    });
-    invalidateOverview();
   }
   async function handleVideoAction(video: AdminVideo, action: "revoke" | "reprocess") {
     const reason = action === "revoke" ? await askAdminValue({
@@ -2918,7 +2759,7 @@ export default function AdminPage() {
     if (!loadedSections[active] && (status?.loading || status?.error)) {
       return <AdminModuleState loading={Boolean(status.loading)} error={status.error} onRetry={() => void ensureSectionLoaded(active, true)} />;
     }
-    if (active === "videos") return <VideoManagement secondaryReviews={data.secondaryReviews} videos={data.videos} appeals={data.appeals} secondaryReviewsPagination={data.secondaryReviewsPagination} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onSecondaryReviewAction={handleSecondaryReviewAction} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreSecondaryReviews={loadMoreSecondaryReviews} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onFilterSecondaryReviews={(status) => loadSecondaryReviews({ status })} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} onVideoActivity={(video) => setActivityTarget({ entity: "VideoSubmission", entityId: video.id, title: video.photoId ?? `${video.user.nickname} 的视频` })} />;
+    if (active === "videos") return <VideoManagement videos={data.videos} appeals={data.appeals} videosPagination={data.videosPagination} appealsPagination={data.appealsPagination} onVideoAction={handleVideoAction} onAppealAction={handleAppealAction} onLoadMoreVideos={loadMoreVideos} onLoadMoreAppeals={loadMoreAppeals} onSearchVideos={(query) => loadVideos({ search: query })} onFilterVideos={(status) => loadVideos({ status })} onSearchAppeals={(search) => loadAppeals({ search })} onVideoActivity={(video) => setActivityTarget({ entity: "VideoSubmission", entityId: video.id, title: video.photoId ?? `${video.user.nickname} 的视频` })} />;
     if (active === "users") return <UsersAdmin rows={data.users} pagination={data.usersPagination} voluntaryExits={data.voluntaryExits} voluntaryExitPagination={data.voluntaryExitPagination} onInvite={() => changeSection("settings", "registration-invite")} onToggle={handleUserToggle} onUpdate={handleUserUpdate} onResetPassword={handleResetPassword} onLoadMore={loadMoreUsers} onSearch={(search) => loadUsers({ search })} onFilter={(guild) => loadUsers({ guild: guild === "all" ? "" : guild })} onLoadMoreExits={loadMoreVoluntaryExits} onSearchExits={(search) => loadVoluntaryExits({ search })} />;
     if (active === "points") return <PointsAdmin users={data.pointUsers} ledger={data.pointLedger} rule={data.pointRule} pagination={data.pointPagination} membersPagination={data.pointUsersPagination} onAdjust={handlePointAdjustment} onRuleSave={handlePointRuleSave} onLoadMore={loadMorePointLedger} onLoadMoreMembers={loadMorePointUsers} onSearchMembers={(search) => loadPointUsers({ search })} />;
     if (active === "gifts") return <GiftsAdmin rows={data.gifts} orders={data.orders} busyGiftId={giftActionId} onCreate={() => setGiftEditor({ gift: null })} onEdit={(gift) => setGiftEditor({ gift })} onMove={(gift, direction) => void handleGiftMove(gift, direction)} onTogglePin={(gift) => void handleGiftTogglePin(gift)} onDelete={(gift) => void handleGiftDelete(gift)} />;

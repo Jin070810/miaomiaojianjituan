@@ -89,6 +89,7 @@ jobs:
       SESSION_COOKIE_SECURE: "false"
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
+      SESSION_COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

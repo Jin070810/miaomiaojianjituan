@@ -30,6 +30,7 @@ async function login(page: import("@playwright/test").Page) {
   const response = await page.request.post("/api/auth/login", { data: { kuaishouId: identity, password }, headers: { "x-real-ip": "198.51.100.144" } });
   expect(response.status()).toBe(200);
   await page.goto("/");
+  await page.locator(".achievement-summary").scrollIntoViewIfNeeded();
 }
 async function noOverflow(page: import("@playwright/test").Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

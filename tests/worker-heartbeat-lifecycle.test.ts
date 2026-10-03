@@ -15,6 +15,8 @@ vi.mock("../lib/weekly-challenge-jobs", () => ({
   closeWeeklyChallengeQueue: vi.fn(), enqueueWeeklyChallengeGeneration: vi.fn(), ensureWeeklyChallengeScheduler: vi.fn(),
 }));
 vi.mock("../lib/member-clearance-operations", () => ({ getMemberClearanceOperationalSnapshot: vi.fn(), memberClearanceOperationalIssues: vi.fn() }));
+vi.mock("../lib/member-achievement-worker", () => ({ startMemberAchievementRefreshWorker: vi.fn(() => vi.fn().mockResolvedValue(undefined)) }));
+vi.mock("../lib/performance-store", () => ({ recordPerformance: vi.fn().mockResolvedValue(false), recordProcessResources: vi.fn().mockResolvedValue(false), closePerformanceStore: vi.fn() }));
 vi.useFakeTimers();
 const once = vi.spyOn(process, "once").mockImplementation((event, handler) => { s.handlers.set(String(event), handler); return process; });
 const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);

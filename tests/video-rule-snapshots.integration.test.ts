@@ -1,3 +1,4 @@
+import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
@@ -37,7 +38,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
     fetchMock.mockImplementation(async (url, nickname, rule = DEFAULT_VIDEO_POINT_RULE) => ({
       source: normalizeKuaishouLink(url), likes: 500, views: 800, commentCount: 0,
       caption: null, coverUrl: null, publishedAt: new Date(), photoId: `rule-photo-${url.split("/").at(-1)}`,
-      owner: nickname, points: calculateVideoPoints(500, rule), rawHtml: "", ownerMatches, ownerMatchMethod: "exact",
+      authorUid: ownerMatches ? `fixture_${memberId}` : null, owner: nickname, points: calculateVideoPoints(500, rule), rawHtml: "", ownerMatches, ownerMatchMethod: "exact",
     }));
   });
 
@@ -57,6 +58,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
       userId: memberId, sourceUrl: url, requestUrl: url, sourceKind: "short-link", submittedNickname: "规则测试", idempotencyKey: key,
     } });
     videoIds.push(video.id);
+    await seedVerifiedVideoAuthor(video.id);
     return video;
   }
 
@@ -64,6 +66,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
     const video = await createVideo();
     expect((await processVideoSubmission(video.id))?.status).toBe("REJECTED");
     await db.videoPointRule.update({ where: { id: "default" }, data: { fixedTierPoints: 80 } });
+    await seedVerifiedVideoAuthor(video.id);
     const appeal = await db.videoAppeal.create({ data: { videoId: video.id, userId: memberId, reason: "归属核验通过", idempotencyKey: randomUUID() } });
     appealIds.push(appeal.id);
     const approved = await resolveVideoAppeal({ appealId: appeal.id, action: "approve", actorId: adminId });
@@ -77,6 +80,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
     fetchMock.mockRejectedValueOnce(new Error("synthetic network timeout"));
     await expect(processVideoSubmission(video.id)).rejects.toThrow("synthetic network timeout");
     await db.videoPointRule.update({ where: { id: "default" }, data: { fixedTierPoints: 80 } });
+    await db.videoProcessingState.update({ where: { videoId: video.id }, data: { nextAttemptAt: new Date(0) } });
     expect((await processVideoSubmission(video.id))?.points).toBe(50);
     expect(fetchMock.mock.calls.map((call) => call[2]?.fixedTierPoints)).toEqual([50, 50]);
   });
@@ -118,6 +122,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
     await db.videoPointRule.update({ where: { id: "default" }, data: { maximumPoints: 6000 } });
     await processVideoSubmission(video.id);
     await db.videoPointRule.update({ where: { id: "default" }, data: { maximumPoints: 100 } });
+    await seedVerifiedVideoAuthor(video.id);
     const appeal = await db.videoAppeal.create({ data: { videoId: video.id, userId: memberId, reason: "人工核实原始截图", idempotencyKey: randomUUID() } });
     appealIds.push(appeal.id);
     const input = { appealId: appeal.id, action: "approve" as const, actorId: adminId, points: 5500, reason: "原始截图与平台数据核验后补正积分" };
@@ -132,6 +137,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
   it("历史无快照申诉明确记录临时采用口径，失败时快照和审计一起回滚", async () => {
     const video = await createVideo();
     await db.videoSubmission.update({ where: { id: video.id }, data: { status: "REJECTED", likes: 500 } });
+    await seedVerifiedVideoAuthor(video.id);
     const appeal = await db.videoAppeal.create({ data: { videoId: video.id, userId: memberId, reason: "历史申诉", idempotencyKey: randomUUID() } });
     appealIds.push(appeal.id);
     await expect(resolveVideoAppeal({ appealId: appeal.id, action: "approve", actorId: adminId, points: 5001 })).rejects.toThrow("5000");
@@ -183,6 +189,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
     const video = await createVideo();
     await processVideoSubmission(video.id);
     const captured = await db.videoPointRuleSnapshot.findUniqueOrThrow({ where: { videoId: video.id } });
+    await seedVerifiedVideoAuthor(video.id);
     const appeal = await db.videoAppeal.create({ data: { videoId: video.id, userId: memberId, reason: "已核实归属", idempotencyKey: randomUUID() } });
     appealIds.push(appeal.id);
     const input = { appealId: appeal.id, action: "approve" as const, actorId: adminId, expectedRuleRevision: captured.revision, expectedCalculatedPoints: 50 };
@@ -196,6 +203,7 @@ describe.skipIf(!enabled)("视频积分规则锁定", () => {
   it("等待视频去重锁期间发生重新抓取时，申诉不能覆盖处理中状态", async () => {
     const video = await createVideo();
     const rejected = await processVideoSubmission(video.id);
+    await seedVerifiedVideoAuthor(video.id);
     const appeal = await db.videoAppeal.create({ data: { videoId: video.id, userId: memberId, reason: "并发申诉", idempotencyKey: randomUUID() } });
     appealIds.push(appeal.id);
     let unlock!: () => void;

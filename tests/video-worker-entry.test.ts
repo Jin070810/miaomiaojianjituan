@@ -27,6 +27,8 @@ vi.mock("../lib/member-clearance-operations", () => ({
   getMemberClearanceOperationalSnapshot: vi.fn(), memberClearanceOperationalIssues: vi.fn(),
 }));
 
+vi.mock("../lib/member-achievement-worker", () => ({ startMemberAchievementRefreshWorker: vi.fn(() => vi.fn().mockResolvedValue(undefined)) }));
+vi.mock("../lib/performance-store", () => ({ recordPerformance: vi.fn().mockResolvedValue(false), recordProcessResources: vi.fn().mockResolvedValue(false), closePerformanceStore: vi.fn() }));
 vi.useFakeTimers();
 const once = vi.spyOn(process, "once").mockImplementation(() => process);
 afterAll(() => { once.mockRestore(); vi.clearAllTimers(); vi.useRealTimers(); });

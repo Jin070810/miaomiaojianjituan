@@ -1,3 +1,4 @@
+import { claimMemberAchievementRefresh, processMemberAchievementRefresh } from "@/lib/member-achievement-jobs";
 import { expect, test, type Page } from "@playwright/test";
 import argon2 from "argon2";
 import { mkdir } from "node:fs/promises";
@@ -17,7 +18,10 @@ async function cleanup() {
 test.beforeAll(async () => {
   if (!process.env.DATABASE_URL?.includes("schema=")) throw new Error("E2E 需要显式测试 schema");
   await cleanup();
-  await db.user.create({ data: { kuaishouId: memberId, nickname: "加载验收成员", role: "MEMBER", passwordHash: await argon2.hash(e2ePassword), account: { create: { balance: 0 } } } });
+  const member = await db.user.create({ data: { kuaishouId: memberId, nickname: "加载验收成员", role: "MEMBER", passwordHash: await argon2.hash(e2ePassword), account: { create: { balance: 0 } } } });
+  const claim = await claimMemberAchievementRefresh(member.id);
+  if (!claim) throw new Error("Synthetic growth projection was not queued");
+  await processMemberAchievementRefresh(claim);
 });
 
 test.afterAll(async () => { await cleanup(); await db.$disconnect(); });
@@ -93,7 +97,7 @@ test("cold login and home omit fonts and unopened view chunks; lazy views recove
   await screenshot(page, "loading-birthday-empty");
   await page.getByRole("button", { name: "返回首页" }).click();
 
-  await page.getByRole("button", { name: "查看成长与成就" }).scrollIntoViewIfNeeded();
+  await page.locator(".achievement-summary").scrollIntoViewIfNeeded();
   await page.getByRole("button", { name: "查看成长与成就" }).click();
   await expect(page.getByRole("heading", { name: "勋章墙" })).toBeVisible();
   await expectNoHorizontalOverflow(page);

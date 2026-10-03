@@ -1,3 +1,4 @@
+import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Queue, Worker } from "bullmq";
@@ -108,16 +109,47 @@ describe.skipIf(process.env.RUN_DB_TESTS !== "1")("durable video processing", ()
 
   it("commits fetched metadata, approval and the point ledger together", async () => {
     const row = await video();
+    await seedVerifiedVideoAuthor(row.id);
     const photoId = `processing-photo-${randomUUID()}`;
     fetchMock.mockResolvedValue({
       source: { requestUrl: row.requestUrl, sourceUrl: row.sourceUrl, sourceKind: row.sourceKind, shortCode: null },
-      photoId, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
+      authorUid: `fixture_${userId}`, photoId, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
       publishedAt: row.submittedAt, owner: row.submittedNickname, ownerMatches: true, ownerMatchMethod: "exact", points: 50,
     });
     const result = await processVideoSubmission(row.id);
     expect(result).toMatchObject({ status: "APPROVED", photoId, points: 50 });
     await processVideoSubmission(row.id);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await db.pointLedger.count({ where: { referenceId: row.id, type: "VIDEO_REWARD" } })).toBe(1);
+  });
+
+  it("does not hold the video row while waiting for the shared photo lock", async () => {
+    const row = await video();
+    await seedVerifiedVideoAuthor(row.id);
+    const photoId = `lock-order-${randomUUID()}`;
+    fetchMock.mockResolvedValue({
+      source: { requestUrl: row.requestUrl, sourceUrl: row.sourceUrl, sourceKind: row.sourceKind, shortCode: null },
+      photoId, authorUid: `fixture_${userId}`, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
+      publishedAt: row.submittedAt, owner: row.submittedNickname, ownerMatches: true, ownerMatchMethod: "exact", points: 50,
+    });
+    let processing!: ReturnType<typeof processVideoSubmission>;
+    await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${photoId}`})::bigint)`;
+      processing = processVideoSubmission(row.id);
+      // Attach immediately so a failing regression is reported by the final await.
+      void processing.catch(() => undefined);
+      await expect.poll(async () => {
+        const [waiting] = await tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(*) AS count FROM pg_locks
+          WHERE locktype = 'advisory' AND NOT granted
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND objid = ((hashtext(${`video-photo:${photoId}`})::bigint & 4294967295)::oid)`;
+        return Number(waiting.count);
+      }, { timeout: 3_000, interval: 20 }).toBeGreaterThan(0);
+      // This is the row that a concurrent credit/appeal would need next.
+      await tx.$queryRaw`SELECT id FROM "VideoSubmission" WHERE id = ${row.id} FOR UPDATE NOWAIT`;
+    }, { timeout: 5_000 });
+    expect(await processing).toMatchObject({ status: "APPROVED", points: 50 });
     expect(await db.pointLedger.count({ where: { referenceId: row.id, type: "VIDEO_REWARD" } })).toBe(1);
   });
 

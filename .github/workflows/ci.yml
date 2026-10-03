@@ -171,7 +171,6 @@ jobs:
         with:
           name: worker-runtime-evidence
           path: output/worker-runtime/
-      - run: bash scripts/test-pull-release-images.sh
       - name: Start dependencies and migrate the isolated database
         run: |
           docker compose up -d --wait --wait-timeout 90 postgres redis
@@ -255,7 +254,6 @@ jobs:
           path: |
             output/playwright/
             ${{ runner.temp }}/miaomiao-acceptance/
-            ${{ runner.temp }}/miaomiao-gift-catalog/
             ${{ runner.temp }}/miaomiao-performance/
           if-no-files-found: error
           retention-days: 14

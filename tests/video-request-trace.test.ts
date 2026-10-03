@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 const queueMock = vi.hoisted(() => ({ add: vi.fn(), getJob: vi.fn(async () => null), close: vi.fn() }));
 vi.mock("bullmq", () => ({ Queue: class { add = queueMock.add; getJob = queueMock.getJob; close = queueMock.close; } }));
+vi.mock("../lib/db", () => ({ db: { videoSubmission: { findUnique: vi.fn(async () => ({ id: "synthetic-video", status: "PROCESSING", processingState: null })) } } }));
 import { enqueueVideo, closeVideoQueue } from "../lib/video-jobs";
 import { requestContext, safeRequestId } from "../lib/request-context";
 describe("video request trace propagation", () => {

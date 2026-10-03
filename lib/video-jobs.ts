@@ -177,10 +177,10 @@ export async function processVideoSubmission(
     // competing submissions return a useful duplicate reason without racing.
     // Metadata, status, points and audit are committed together under the lease.
     return await db.$transaction(async (tx) => {
+      // Match credit/appeal order: photo lock before parent row, then verified UID.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${fetched.photoId}`})::bigint)`;
       await lockVideoProcessing(tx, video.id);
       await assertVideoProcessingLease(tx, video.id, token);
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${fetched.photoId}`})::bigint)`;
-      await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${video.id} FOR UPDATE`;
       const current = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
       if (!["PROCESSING", "FAILED", "PENDING_REVIEW"].includes(current.status)) return current;
       const duplicate = await tx.videoSubmission.findFirst({

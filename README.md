@@ -29,6 +29,8 @@ CI 为每个候选构建一对 App/Worker 镜像，完整浏览器验收直接�
 
 ## 快手与抖音视频抓取
 
+Worker 的累计重试预算保存在数据库中，恢复扫描不会无限补发失败任务；实例心跳和独立事件循环看门狗覆盖启动、排空与假死恢复。迁移、重试边界和回滚注意事项见 [视频 Worker 生命周期](docs/VIDEO-WORKER-LIFECYCLE.md)。
+
 成员可以粘贴快手或抖音的短链接、长链接或包含链接的分享文本。快手仍使用页面源码抓取；抖音短链先由 Worker 内置 Chromium 完成跳转，再监听抖音页面返回的公开视频详情/作品列表接口，从目标 `aweme_id` 对应对象的 `statistics.digg_count` 读取精确点赞数。页面上的“1.9万”等展示缩写不会直接用于积分计算，未拿到精确详情时会自动驳回，避免近似数据入账。
 
 抖音支持普通视频和图文作品，提交时记录 `aweme_id` 到现有 `photoId` 字段，后续点赞变化不回溯、不重算历史积分；同一 `photoId` 在处理中、待审核和已通过记录中仍然全局去重。Worker 镜像需要 Chromium，默认路径为 `/usr/bin/chromium`，如部署环境不同可设置 `DOUYIN_BROWSER_EXECUTABLE_PATH`。本次不需要数据库 migration。

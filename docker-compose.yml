@@ -135,7 +135,7 @@ services:
     volumes:
       - ./backups:/app/backups
     healthcheck:
-      # 复用 worker 写入 Redis 的心跳 key，假死由 restart 策略自动恢复。
+      # 检查当前实例；独立 supervisor 在事件循环假死时退出，交由 restart 恢复。
       test: ["CMD", "node", "scripts/worker-healthcheck.js"]
       interval: 30s
       timeout: 10s

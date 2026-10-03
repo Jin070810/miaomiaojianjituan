@@ -58,6 +58,8 @@ jobs:
       - run: npm run build
       - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
+      - name: Audit test and development dependencies
+        run: npm audit --audit-level=moderate
       - run: docker compose config
       - run: |
           docker compose config | grep -q 'HOSTNAME: 0.0.0.0'

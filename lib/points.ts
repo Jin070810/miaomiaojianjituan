@@ -981,94 +981,153 @@ export async function updateRedemptionOrder(input: {
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
-    const order = await tx.redemptionOrder.findUnique({
-      where: { id: input.orderId },
-      include: { gift: true, user: { select: { nickname: true, kuaishouId: true } } },
-    });
-    if (!order) throw new Error("兑换订单不存在");
-    if (input.action === "update_tracking") {
-      if (order.gift.kind !== "PHYSICAL") throw new Error("只有实物订单可以填写快递单号");
-      if (order.status !== "FULFILLED") throw new Error("只有已发货的实物订单可以修改快递单号");
-      const trackingNumber = input.trackingNumber?.trim() || null;
-      if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
-      if (trackingNumber === order.trackingNumber) return order;
-      const updated = await tx.redemptionOrder.update({
-        where: { id: order.id },
-        data: { trackingNumber },
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const order = await tx.redemptionOrder.findUnique({
+        where: { id: input.orderId },
+        include: { gift: true, user: { select: { nickname: true, kuaishouId: true } } },
       });
-      await writeAuditLog(tx, {
-          actorId: input.actorId,
-          action: "REDEMPTION_TRACKING_UPDATED",
-          entity: "RedemptionOrder",
+      if (!order) throw new Error("兑换订单不存在");
+      if (input.action === "update_tracking") {
+        if (order.gift.kind !== "PHYSICAL") throw new Error("只有实物订单可以填写快递单号");
+        if (order.status !== "FULFILLED") throw new Error("只有已发货的实物订单可以修改快递单号");
+        const trackingNumber = input.trackingNumber?.trim() || null;
+        if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
+        if (trackingNumber === order.trackingNumber) return order;
+        const changed = await tx.redemptionOrder.updateMany({
+          where: { id: order.id, status: "FULFILLED", trackingNumber: order.trackingNumber },
+          data: { trackingNumber },
+        });
+        if (changed.count !== 1) continue;
+        const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+        await writeAuditLog(tx, {
+            actorId: input.actorId,
+            action: "REDEMPTION_TRACKING_UPDATED",
+            entity: "RedemptionOrder",
+            entityId: order.id,
+            beforeValue: { trackingNumber: order.trackingNumber },
+            afterValue: { trackingNumber },
+            reason: input.reason,
+            ip: input.ip,
+        });
+        await createNotification(tx, {
+          userId: order.userId,
+          type: "REDEMPTION",
+          title: "物流信息已更新",
+          body: trackingNumber ? `${order.gift.name} 的快递单号已更新为 ${trackingNumber}` : `${order.gift.name} 的快递单号已清除`,
+          entityType: "RedemptionOrder",
           entityId: order.id,
-          beforeValue: { trackingNumber: order.trackingNumber },
-          afterValue: { trackingNumber },
-          reason: input.reason,
-          ip: input.ip,
-      });
-      await createNotification(tx, {
-        userId: order.userId,
-        type: "REDEMPTION",
-        title: "物流信息已更新",
-        body: trackingNumber ? `${order.gift.name} 的快递单号已更新为 ${trackingNumber}` : `${order.gift.name} 的快递单号已清除`,
-        entityType: "RedemptionOrder",
-        entityId: order.id,
-        metadata: { status: "FULFILLED", trackingNumber },
-        dedupeKey: `redemption:${order.id}:tracking:${trackingNumber ?? "empty"}`,
-      });
-      return updated;
-    }
-    if (input.action === "approve") {
-      if (order.status !== "PENDING") return order;
-      const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "APPROVED", reviewedAt: new Date() } });
-      await tx.auditLog.create({
-        data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
-      });
-      await createNotification(tx, {
-        userId: order.userId,
-        type: "REDEMPTION",
-        title: "兑换订单已确认",
-        body: `${order.gift.name} 已确认，等待发放`,
-        entityType: "RedemptionOrder",
-        entityId: order.id,
-        metadata: { status: "APPROVED" },
-        dedupeKey: `redemption:${order.id}:approved`,
-      });
-      return updated;
-    }
-    if (input.action === "fulfill") {
-      if (!["APPROVED", "PENDING"].includes(order.status)) return order;
-      if (order.gift.kind === "CASH" && !order.cashQrCodeUrl) {
-        throw new Error("现金订单缺少收款码，补齐后才能完成");
+          metadata: { status: "FULFILLED", trackingNumber },
+          dedupeKey: `redemption:${order.id}:tracking:${trackingNumber ?? "empty"}`,
+        });
+        return updated;
       }
-      if (order.gift.kind === "PHYSICAL" && (!order.recipientName || !order.recipientPhoneEnc || !order.recipientAddressEnc)) {
-        throw new Error("实物订单缺少完整收货资料，补齐后才能发货");
+      if (input.action === "approve") {
+        if (order.status !== "PENDING") return order;
+        const changed = await tx.redemptionOrder.updateMany({ where: { id: order.id, status: "PENDING" }, data: { status: "APPROVED", reviewedAt: new Date() } });
+        if (changed.count !== 1) continue;
+        const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+        await tx.auditLog.create({
+          data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
+        });
+        await createNotification(tx, {
+          userId: order.userId,
+          type: "REDEMPTION",
+          title: "兑换订单已确认",
+          body: `${order.gift.name} 已确认，等待发放`,
+          entityType: "RedemptionOrder",
+          entityId: order.id,
+          metadata: { status: "APPROVED" },
+          dedupeKey: `redemption:${order.id}:approved`,
+        });
+        return updated;
       }
-      const requiredMembershipFields = order.gift.kind === "MEMBERSHIP"
-        ? parseMembershipFields(order.gift.fulfillmentFields).some((field) => field.required)
-        : false;
-      if (requiredMembershipFields && !order.fulfillmentDataEnc) {
-        throw new Error("会员权益订单缺少开通资料，补齐后才能完成");
+      if (input.action === "fulfill") {
+        if (!["APPROVED", "PENDING"].includes(order.status)) return order;
+        if (order.gift.kind === "CASH" && !order.cashQrCodeUrl) {
+          throw new Error("现金订单缺少收款码，补齐后才能完成");
+        }
+        if (order.gift.kind === "PHYSICAL" && (!order.recipientName || !order.recipientPhoneEnc || !order.recipientAddressEnc)) {
+          throw new Error("实物订单缺少完整收货资料，补齐后才能发货");
+        }
+        const requiredMembershipFields = order.gift.kind === "MEMBERSHIP"
+          ? parseMembershipFields(order.gift.fulfillmentFields).some((field) => field.required)
+          : false;
+        if (requiredMembershipFields && !order.fulfillmentDataEnc) {
+          throw new Error("会员权益订单缺少开通资料，补齐后才能完成");
+        }
+        const fulfilledAt = new Date();
+        const trackingNumber = order.gift.kind === "PHYSICAL" ? input.trackingNumber?.trim() || null : null;
+        if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
+        const changed = await tx.redemptionOrder.updateMany({
+          where: { id: order.id, status: order.status },
+          data: { status: "FULFILLED", reviewedAt: fulfilledAt, fulfilledAt, trackingNumber },
+        });
+        if (changed.count !== 1) continue;
+        const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+        await writeAuditLog(tx, {
+            actorId: input.actorId,
+            action: "REDEMPTION_FULFILLED",
+            entity: "RedemptionOrder",
+            entityId: order.id,
+            beforeValue: { status: order.status },
+            afterValue: {
+              status: updated.status,
+              trackingNumber,
+              giftName: order.gift.name,
+              targetNickname: order.user.nickname,
+              giftKind: order.gift.kind,
+            },
+            reason: input.reason,
+            ip: input.ip,
+        });
+        await createNotification(tx, {
+          userId: order.userId,
+          type: "REDEMPTION",
+          title: order.gift.kind === "PHYSICAL" ? "礼品已发货" : order.gift.kind === "MEMBERSHIP" ? "会员权益已开通" : "兑换已完成",
+          body: `${order.gift.name} 已完成${order.gift.kind === "PHYSICAL" ? "发货" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发放"}${trackingNumber ? `，快递单号：${trackingNumber}` : ""}`,
+          entityType: "RedemptionOrder",
+          entityId: order.id,
+          metadata: { status: "FULFILLED", trackingNumber },
+          dedupeKey: `redemption:${order.id}:fulfilled`,
+        });
+        return updated;
       }
-      const fulfilledAt = new Date();
-      const trackingNumber = order.gift.kind === "PHYSICAL" ? input.trackingNumber?.trim() || null : null;
-      if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
-      const updated = await tx.redemptionOrder.update({
-        where: { id: order.id },
-        data: { status: "FULFILLED", reviewedAt: fulfilledAt, fulfilledAt, trackingNumber },
+      if (["REJECTED", "REFUNDED", "CLEARANCE_CANCELLED"].includes(order.status)) return order;
+      if (input.action === "reject" && !["PENDING", "APPROVED"].includes(order.status)) {
+        throw new Error("只有待发货订单可以驳回");
+      }
+      if (!Number.isInteger(order.totalCost) || order.totalCost < 0) throw new Error("订单积分金额异常，请先核对订单");
+      const birthdayGift = order.totalCost === 0 && order.birthdayPrizeId
+        ? await tx.birthdayPrize.findUnique({ where: { id: order.birthdayPrizeId }, include: { annualBenefit: { select: { userId: true } } } })
+        : null;
+      if (order.totalCost === 0 && !(birthdayGift?.kind === "GIFT" && birthdayGift.status === "CLAIMED"
+        && birthdayGift.giftId === order.giftId && birthdayGift.annualBenefit.userId === order.userId
+        && order.quantity === 1 && order.unitCost === 0)) {
+        throw new Error("零积分订单缺少有效的生日奖品领取记录，请先核对订单");
+      }
+      const nextStatus = input.action === "refund" ? "REFUNDED" : "REJECTED";
+      const claimed = await tx.redemptionOrder.updateMany({
+        where: { id: order.id, status: order.status },
+        data: { status: nextStatus, reviewedAt: new Date(), note: input.reason ?? order.note },
       });
+      if (claimed.count !== 1) continue;
+      await tx.gift.update({ where: { id: order.giftId }, data: { stock: { increment: order.quantity } } });
+      if (order.totalCost > 0) {
+        await credit(tx, order.userId, order.totalCost, "REDEMPTION_REFUND", order.id, input.reason ?? "兑换订单退款");
+      }
+      const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
       await writeAuditLog(tx, {
           actorId: input.actorId,
-          action: "REDEMPTION_FULFILLED",
+          action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED",
           entity: "RedemptionOrder",
           entityId: order.id,
           beforeValue: { status: order.status },
           afterValue: {
             status: updated.status,
-            trackingNumber,
+            refunded: order.totalCost,
+            birthdayPrizeId: order.birthdayPrizeId,
             giftName: order.gift.name,
             targetNickname: order.user.nickname,
-            giftKind: order.gift.kind,
           },
           reason: input.reason,
           ip: input.ip,
@@ -1076,53 +1135,17 @@ export async function updateRedemptionOrder(input: {
       await createNotification(tx, {
         userId: order.userId,
         type: "REDEMPTION",
-        title: order.gift.kind === "PHYSICAL" ? "礼品已发货" : order.gift.kind === "MEMBERSHIP" ? "会员权益已开通" : "兑换已完成",
-        body: `${order.gift.name} 已完成${order.gift.kind === "PHYSICAL" ? "发货" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发放"}${trackingNumber ? `，快递单号：${trackingNumber}` : ""}`,
+        title: birthdayGift ? "生日奖品订单已取消" : input.action === "refund" ? "兑换订单已退款" : "兑换订单已驳回",
+        body: birthdayGift
+          ? `${order.gift.name} 生日奖品订单已取消，未扣除积分，年度领奖记录保留${input.reason ? `。原因：${input.reason}` : ""}`
+          : `${order.gift.name} 已${input.action === "refund" ? "退款" : "驳回"}，${order.totalCost} 积分已退回${input.reason ? `。原因：${input.reason}` : ""}`,
         entityType: "RedemptionOrder",
         entityId: order.id,
-        metadata: { status: "FULFILLED", trackingNumber },
-        dedupeKey: `redemption:${order.id}:fulfilled`,
+        metadata: { amount: order.totalCost, status: updated.status },
+        dedupeKey: `redemption:${order.id}:${updated.status.toLowerCase()}`,
       });
       return updated;
     }
-    if (input.action === "reject" && !["PENDING", "APPROVED"].includes(order.status)) {
-      throw new Error("只有待发货订单可以驳回");
-    }
-    if (["REJECTED", "REFUNDED"].includes(order.status)) return order;
-    const nextStatus = input.action === "refund" ? "REFUNDED" : "REJECTED";
-    const claimed = await tx.redemptionOrder.updateMany({
-      where: { id: order.id, status: { in: ["PENDING", "APPROVED", "FULFILLED"] } },
-      data: { status: nextStatus, reviewedAt: new Date(), note: input.reason ?? order.note },
-    });
-    if (claimed.count !== 1) return tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
-    await tx.gift.update({ where: { id: order.giftId }, data: { stock: { increment: order.quantity } } });
-    await credit(tx, order.userId, order.totalCost, "REDEMPTION_REFUND", order.id, input.reason ?? "兑换订单退款");
-    const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
-    await writeAuditLog(tx, {
-        actorId: input.actorId,
-        action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED",
-        entity: "RedemptionOrder",
-        entityId: order.id,
-        beforeValue: { status: order.status },
-        afterValue: {
-          status: updated.status,
-          refunded: order.totalCost,
-          giftName: order.gift.name,
-          targetNickname: order.user.nickname,
-        },
-        reason: input.reason,
-        ip: input.ip,
-    });
-    await createNotification(tx, {
-      userId: order.userId,
-      type: "REDEMPTION",
-      title: input.action === "refund" ? "兑换订单已退款" : "兑换订单已驳回",
-      body: `${order.gift.name} 已${input.action === "refund" ? "退款" : "驳回"}，${order.totalCost} 积分已退回${input.reason ? `。原因：${input.reason}` : ""}`,
-      entityType: "RedemptionOrder",
-      entityId: order.id,
-      metadata: { amount: order.totalCost, status: updated.status },
-      dedupeKey: `redemption:${order.id}:${updated.status.toLowerCase()}`,
-    });
-    return updated;
+    throw new Error("订单状态正在变化，请刷新后重试");
   });
 }

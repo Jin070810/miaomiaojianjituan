@@ -31,7 +31,7 @@ Web 容器过去以完整 `/api/health` 作为自身健康检查。该接口查�
 CI staging 在真实 App/Worker 镜像上执行 `scripts/test-staging-health.sh`：
 
 1. 验证完整健康状态与目标 SHA。
-2. 停止 Worker，断言 live/ready 为 200、完整健康为 503，恢复后校验同版健康。
+2. 停止 Worker，断言 live/ready 为 200、完整健康为 503，恢复后校验同版健康。旧 Worker 强停后心跳可保留 45 秒，演练允许 60 次轮询等待租约和探测缓存自然失效，不直接删除 Redis 心跳来制造结果。
 3. 分别停止 Redis、PostgreSQL，断言 live 为 200、ready 为 503，恢复依赖后校验完整健康。
 
 脚本仅接受 `CI=true`、`STAGING_HEALTH_FAULT_TESTS=1`、`POSTGRES_DB=miaomiao_staging` 的显式隔离环境。任何退出都会尝试重新启动依赖；不得在正式主机执行。它不修改或删除数据库数据。生产环境只进行只读检查。

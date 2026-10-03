@@ -19,8 +19,8 @@ cleanup() {
 trap cleanup EXIT
 
 wait_status() {
-  local route="$1" expected="$2" code
-  for _ in {1..20}; do
+  local route="$1" expected="$2" attempts="${3:-20}" code attempt
+  for ((attempt=0; attempt<attempts; attempt++)); do
     code="$(curl --silent --show-error --connect-timeout 2 --max-time 5 --output "$response_file" --write-out '%{http_code}' "http://127.0.0.1:3000$route")" || code=000
     if [[ "$code" == "$expected" ]]; then return 0; fi
     sleep 1
@@ -39,7 +39,9 @@ verify_complete_health
 timeout 45s docker compose stop --timeout 15 worker
 wait_status /api/health/live 200
 wait_status /api/health/ready 200
-wait_status /api/health 503
+# An abruptly stopped legacy Worker can retain its 45-second heartbeat. Allow
+# that lease plus the health probe cache to expire without changing Redis data.
+wait_status /api/health 503 60
 jq -e '.worker != "ok" and .database == "ok" and .redis == "ok"' "$response_file" >/dev/null
 timeout 45s docker compose start worker
 verify_complete_health

@@ -62,6 +62,7 @@ const actionLabels: Record<string, string> = {
   VIDEO_ENQUEUE_FAILED: "视频入队失败",
   VIDEO_POINTS_ADJUSTED: "调整视频积分",
   VIDEO_POINT_RULE_UPDATED: "修改视频积分规则",
+  VIDEO_POINT_RULE_CAPTURED: "锁定视频积分规则",
   VIDEO_REJECTED: "视频驳回",
   VIDEO_REPROCESS_ENQUEUE_FAILED: "视频重抓入队失败",
   VIDEO_REPROCESS_REQUESTED: "请求重新抓取视频",

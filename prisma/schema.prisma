@@ -457,11 +457,28 @@ model VideoSubmission {
   user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   appeals                VideoAppeal[]
   secondaryReview        VideoSecondaryReview?
+  pointRuleSnapshot      VideoPointRuleSnapshot?
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
   @@index([photoId, status])
   @@index([userId, birthdayBenefitYear])
+}
+
+model VideoPointRuleSnapshot {
+  videoId              String   @id
+  revision             String
+  formulaVersion       String
+  origin               String
+  minimumLikes         Int
+  fixedTierMaxLikes     Int
+  fixedTierPoints       Int
+  likesDivisor          Int
+  maximumPoints         Int
+  submissionWindowDays Int
+  sourceUpdatedAt      DateTime?
+  capturedAt           DateTime @default(now())
+  video                VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
 }
 
 model VideoSecondaryReview {

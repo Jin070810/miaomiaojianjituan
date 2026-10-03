@@ -172,6 +172,7 @@ jobs:
             echo "DOCKER_DATABASE_URL=postgresql://staging_admin:$database_password@postgres:5432/miaomiao_staging?schema=public"
             echo "DATABASE_URL=postgresql://staging_admin:$database_password@127.0.0.1:5433/miaomiao_staging?schema=public"
             echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "SESSION_COOKIE_SECURE=false"
             echo "PHONE_ENCRYPTION_KEY=$(openssl rand -hex 32)"
             echo "ADMIN_PASSWORD=$admin_password"
           } >> "$GITHUB_ENV"
@@ -223,6 +224,7 @@ jobs:
         run: >-
           npx playwright test
           tests/e2e/admin-responsive.spec.ts
+          tests/e2e/video-rule-snapshots.spec.ts
           tests/e2e/birthday-system.spec.ts
           --project=admin-desktop
           --project=admin-mobile

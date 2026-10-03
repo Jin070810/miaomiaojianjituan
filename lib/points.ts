@@ -1,8 +1,7 @@
 import { db } from "./db";
 import { LedgerType, Prisma, PrismaClient, Role } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
-import { calculateVideoPoints } from "./kuaishou";
-import { getVideoPointRule } from "./point-rules";
+import { calculateSnapshotVideoPoints, captureVideoPointRule, snapshotRule, videoRuleEvidence } from "./video-point-rule-snapshots";
 import { createNotification } from "./notifications";
 import { writeAuditLog } from "./audit";
 import { isMemberParticipantRole, memberParticipantRoles } from "./member-roles";
@@ -621,9 +620,11 @@ export async function creditVideoReward(input: {
   actorId?: string;
   ip?: string;
 }) {
+  if (!Number.isSafeInteger(input.points) || input.points < 0) throw new Error("视频积分必须是非负整数");
   return db.$transaction(async (tx) => {
     const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
     if (!video) throw new Error("视频记录不存在");
+    if (video.userId !== input.userId) throw new Error("视频与积分账户不匹配");
     if (video.status === "APPROVED" && (!input.actorId || video.points === input.points)) return video;
     if (video.status === "APPROVED" && input.actorId && video.points !== input.points) {
       const delta = input.points - video.points;
@@ -655,6 +656,12 @@ export async function creditVideoReward(input: {
     }
     if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
       throw new Error("只有处理中视频可以自动入账");
+    }
+    const pointRuleSnapshot = await tx.videoPointRuleSnapshot.findUnique({ where: { videoId: video.id } });
+    // An old in-flight caller without a snapshot retains its trusted input, explicitly recorded as
+    // unavailable evidence. Every current fetch path captures before network access.
+    if (pointRuleSnapshot && (video.likes === null || input.points !== calculateSnapshotVideoPoints(video.likes, pointRuleSnapshot))) {
+      throw new Error("自动入账积分与视频锁定规则不一致");
     }
     const canApprove = await refreshEligibilityAfterApprovedVideo(tx, input.userId, new Date());
     if (!canApprove) {
@@ -693,7 +700,7 @@ export async function creditVideoReward(input: {
         entity: "VideoSubmission",
         entityId: video.id,
         beforeValue: { status: video.status, points: video.points },
-        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus },
+        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus, calculation: videoRuleEvidence(pointRuleSnapshot, video.likes, input.points) },
         ip: input.ip,
       },
     });
@@ -762,6 +769,8 @@ export async function resolveVideoAppeal(input: {
   actorId: string;
   reason?: string;
   points?: number;
+  expectedRuleRevision?: string;
+  expectedCalculatedPoints?: number;
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
@@ -806,6 +815,7 @@ export async function resolveVideoAppeal(input: {
     }
 
     if (appeal.video.status !== "REJECTED") throw new Error("只有已自动驳回的视频可以通过申诉");
+    const observedPhotoId = appeal.video.photoId;
     if (appeal.video.photoId) {
       // 与视频入账路径共用同一把 photoId 事务锁：两条并发申诉（或申诉与提交）
       // 各自判重后再写入会双双入账，必须在锁内串行化后重新判重。
@@ -819,8 +829,24 @@ export async function resolveVideoAppeal(input: {
         });
       if (duplicate) throw new Error("该视频已被其他记录结算，不能通过申诉");
     }
-    const rule = await getVideoPointRule(tx);
-    const points = input.points ?? calculateVideoPoints(appeal.video.likes ?? 0, rule);
+    // Photo lock -> video row lock matches the automatic approval order. Re-read after waiting:
+    // a concurrent reprocess must not be overwritten using metadata from before the wait.
+    await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${appeal.video.id} FOR UPDATE`;
+    const currentAppeal = await tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
+    if (currentAppeal.status !== "PENDING") return currentAppeal;
+    const currentVideo = await tx.videoSubmission.findUniqueOrThrow({ where: { id: appeal.video.id } });
+    if (currentVideo.status !== "REJECTED" || currentVideo.photoId !== observedPhotoId) {
+      throw new Error("视频状态已变化，请刷新申诉列表后重新确认");
+    }
+    appeal.video = currentVideo;
+    const pointRuleSnapshot = await captureVideoPointRule(appeal.video.id, "LEGACY_APPEAL", tx);
+    const rule = snapshotRule(pointRuleSnapshot);
+    const calculatedPoints = calculateSnapshotVideoPoints(appeal.video.likes ?? 0, pointRuleSnapshot);
+    if ((input.expectedRuleRevision !== undefined && input.expectedRuleRevision !== pointRuleSnapshot.revision)
+      || (input.points === undefined && input.expectedCalculatedPoints !== undefined && input.expectedCalculatedPoints !== calculatedPoints)) {
+      throw new Error("视频计算依据已变化，请刷新申诉列表后重新确认");
+    }
+    const points = input.points ?? calculatedPoints;
     if (!Number.isInteger(points) || points < 0 || points > rule.maximumPoints) {
       throw new Error(`申诉积分必须是 0 至 ${rule.maximumPoints} 的整数`);
     }
@@ -860,7 +886,7 @@ export async function resolveVideoAppeal(input: {
         entity: "VideoAppeal",
         entityId: appeal.id,
         beforeValue: { appealStatus: appeal.status, videoStatus: appeal.video.status, points: appeal.video.points },
-        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus },
+        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus, calculation: videoRuleEvidence(pointRuleSnapshot, appeal.video.likes, points) },
         reason: input.reason,
         ip: input.ip,
       },

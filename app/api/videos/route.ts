@@ -1,3 +1,5 @@
+import { observeApi } from "@/lib/observe-api";
+import { currentRequestId } from "@/lib/request-context";
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -14,7 +16,7 @@ import { birthdaySubmissionEligibility } from "@/lib/birthdays";
 
 const schema = z.object({ link: z.string().trim().min(8).max(2000) });
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await currentUser();
@@ -78,7 +80,7 @@ export async function POST(request: Request) {
           action: "VIDEO_SUBMITTED",
           entity: "VideoSubmission",
           entityId: created.id,
-          afterValue: { sourceKind: normalized.sourceKind, requestUrl: normalized.requestUrl, birthdayBenefitYear: birthdayEligibility?.benefitYear },
+          afterValue: { sourceKind: normalized.sourceKind, requestUrl: normalized.requestUrl, birthdayBenefitYear: birthdayEligibility?.benefitYear, traceId: currentRequestId() },
           ip: getClientIp(request),
           requestId: idempotencyKey,
         },
@@ -118,7 +120,7 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const url = new URL(request.url);
@@ -159,3 +161,7 @@ export async function GET(request: Request) {
     },
   });
 }
+
+export const GET = observeApi("videos_get", handleGET);
+
+export const POST = observeApi("videos_post", handlePOST);

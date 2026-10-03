@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -24,7 +25,7 @@ function shanghaiDayLabel(value: Date) {
   return `${parts.find((part) => part.type === "month")?.value ?? ""}/${parts.find((part) => part.type === "day")?.value ?? ""}`;
 }
 
-export async function GET() {
+async function handleGET() {
   try {
     await requireAdmin();
     const trendStart = new Date(Date.now() - 6 * 86_400_000);
@@ -83,3 +84,5 @@ export async function GET() {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }
 }
+
+export const GET = observeApi("admin_dashboard_get", handleGET);

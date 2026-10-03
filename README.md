@@ -163,6 +163,8 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 ## 验证命令
 
+管理员可从后台菜单打开“性能观测”，查看主要 API、抽样页面体验、查询耗时、锁等待、队列和进程资源。采样比例、数据隐私、统计区间和诊断步骤见 [性能观测说明](docs/PERFORMANCE-OBSERVABILITY.md)；缺失样本不代表系统健康。
+
 ```powershell
 npm run lint
 npm test

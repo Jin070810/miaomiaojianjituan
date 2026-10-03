@@ -1,5 +1,7 @@
 import { Worker } from "bullmq";
 import "dotenv/config";
+import { currentRequestId, requestContext, safeRequestId } from "./lib/request-context";
+import { recordPerformance, recordProcessResources, closePerformanceStore } from "./lib/performance-store";
 import { closeDouyinBrowser, connection, processVideoSubmission } from "./lib/video-jobs";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
@@ -17,13 +19,15 @@ import {
 import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "./lib/member-clearance-operations";
 
 const worker = new Worker("kuaishou-video", async (job) => {
-  await processVideoSubmission(job.data.videoId);
+  void recordPerformance("video_queue_age", Math.max(0, Date.now() - job.timestamp));
+  await requestContext.run({ id: safeRequestId(job.data.requestId) ?? currentRequestId() }, () => processVideoSubmission(job.data.videoId));
 }, {
   connection: connection(),
   concurrency: Math.min(12, Math.max(1, Number(process.env.VIDEO_WORKER_CONCURRENCY ?? 4))),
 });
 
 const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
+  void recordPerformance("weekly_queue_age", Math.max(0, Date.now() - job.timestamp));
   if (job.name === "scheduled-generate") {
     const maintenance = await runWeeklyChallengeMaintenance();
     if (!maintenance.generationDue || !maintenance.periodStart) return;
@@ -45,10 +49,10 @@ const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
   concurrency: 1,
 });
 
-worker.on("completed", (job) => console.log(`[video-worker] completed ${job.id}`));
+worker.on("completed", (job) => console.log(JSON.stringify({ event: "video_completed", jobId: job.id, requestId: safeRequestId(job.data.requestId) })));
 worker.on("failed", (job, error) => {
   console.error(`[video-worker] failed ${job?.id}`, error);
-  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, error: error.message } });
+  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, requestId: safeRequestId(job?.data.requestId), error: error.message } });
 });
 worker.on("error", (error) => {
   console.error("[video-worker] redis error", error);
@@ -149,6 +153,7 @@ async function maintenance() {
 
 async function heartbeat() {
   if (closing) return;
+  void recordProcessResources("worker");
   try {
     await writeWorkerHeartbeat();
   } catch (error) {
@@ -180,6 +185,7 @@ async function shutdown(signal: string) {
     closeDouyinBrowser(),
     db.$disconnect(),
   ]);
+  closePerformanceStore();
   process.exit(0);
 }
 

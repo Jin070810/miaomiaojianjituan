@@ -1,7 +1,8 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-export async function GET() {
+async function handleGET() {
   const [gifts, sales] = await Promise.all([
     db.gift.findMany({
       where: { active: true, deletedAt: null },
@@ -16,3 +17,5 @@ export async function GET() {
   const salesByGiftId = new Map(sales.map((row) => [row.giftId, row._sum.quantity ?? 0]));
   return NextResponse.json({ gifts: gifts.map((gift) => ({ ...gift, salesCount: salesByGiftId.get(gift.id) ?? 0 })) });
 }
+
+export const GET = observeApi("gifts_get", handleGET);

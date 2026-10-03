@@ -5,7 +5,7 @@ import { periodBounds } from "@/lib/rankings";
 import { memberParticipantRoles } from "@/lib/member-roles";
 
 export async function GET() {
-  const user = await currentUser();
+  const user = await currentUser({ profile: true });
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
   const startOfMonth = periodBounds("month").start;

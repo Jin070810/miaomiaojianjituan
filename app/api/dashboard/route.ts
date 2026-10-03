@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { publicAvatarUrl, withPublicGiftImage } from "@/lib/public-images";
 import { periodBounds } from "@/lib/rankings";
 import { memberParticipantRoles } from "@/lib/member-roles";
 
@@ -36,7 +37,7 @@ export async function GET() {
     }),
     db.redemptionOrder.findMany({
       where: { userId: user.id },
-      include: { gift: { select: { name: true, kind: true, imageUrl: true } } },
+      include: { gift: { select: { id: true, name: true, kind: true, imageUrl: true } } },
       orderBy: { createdAt: "desc" },
       take: 50,
     }),
@@ -93,7 +94,7 @@ export async function GET() {
       id: user.id,
       kuaishouId: user.kuaishouId,
       nickname: user.nickname,
-      avatarUrl: user.avatarUrl,
+      avatarUrl: publicAvatarUrl(user),
       role: user.role,
       guildStatus: user.guildStatus,
       invited: user.invited,
@@ -112,11 +113,12 @@ export async function GET() {
     ledger,
     videos,
     gifts: gifts.map((gift) => ({
-      ...gift,
+      ...withPublicGiftImage(gift),
       salesCount: giftSales.find((row) => row.giftId === gift.id)?._sum.quantity ?? 0,
     })),
     orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...order }) => ({
       ...order,
+      gift: withPublicGiftImage(order.gift),
       fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
@@ -128,7 +130,7 @@ export async function GET() {
       userId: item.user.id,
       kuaishouId: item.user.kuaishouId,
       nickname: item.user.nickname,
-      avatarUrl: item.user.avatarUrl,
+      avatarUrl: publicAvatarUrl(item.user),
       points: item.balance,
       current: item.user.id === user.id,
     })),

@@ -57,11 +57,11 @@ describe("成员端品牌视觉库", () => {
     }
   });
 
-  it("成功态按钮进入对应记录页", () => {
+  it("投稿成功态按钮进入切片记录页", () => {
     const source = readFileSync(path.resolve(__dirname, "..", "app", "page.tsx"), "utf8");
 
     expect(source).toContain('invalidateSections(["videos", "ledger"]); closeDialog(); handleNavigate("videos");');
-    expect(source).toContain('invalidateSections(["gifts", "ledger", "orders"]); closeDialog(); handleNavigate("orders");');
+    // Gift redemption/navigation/stock refresh are exercised by gift-catalog.spec.ts.
   });
 
   it("登录后先确认会话，再用完整页面跳转", () => {

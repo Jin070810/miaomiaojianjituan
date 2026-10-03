@@ -132,12 +132,16 @@ jobs:
       - run: npx prisma migrate deploy
       - run: npm run build
       - run: npm run test:e2e
+        env:
+          PLAYWRIGHT_EVIDENCE_DIR: ${{ runner.temp }}
       - name: Upload Playwright screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-screenshots
-          path: output/playwright/*.png
+          path: |
+            output/playwright/*.png
+            ${{ runner.temp }}/miaomiao-gift-catalog/
           if-no-files-found: error
           retention-days: 14
 
@@ -156,6 +160,7 @@ jobs:
       ADMIN_NICKNAME: Staging Health Admin
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
+      SESSION_COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -220,14 +225,19 @@ jobs:
       - name: Install Chromium for staging acceptance
         run: npx playwright install --with-deps chromium
       - name: Run admin staging acceptance at 390x844 and 1440x900
+        env:
+          PLAYWRIGHT_EVIDENCE_DIR: ${{ runner.temp }}
         run: >-
           npx playwright test
           tests/e2e/admin-responsive.spec.ts
           tests/e2e/birthday-system.spec.ts
+          tests/e2e/gift-catalog.spec.ts
           --project=admin-desktop
           --project=admin-mobile
           --project=birthday-desktop
           --project=birthday-mobile
+          --project=catalog-desktop
+          --project=catalog-mobile
       - name: Collect staging container evidence
         if: always()
         run: |
@@ -239,7 +249,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: staging-acceptance
-          path: output/playwright/
+          path: |
+            output/playwright/
+            ${{ runner.temp }}/miaomiao-gift-catalog/
           if-no-files-found: error
           retention-days: 14
       - name: Tear down isolated staging

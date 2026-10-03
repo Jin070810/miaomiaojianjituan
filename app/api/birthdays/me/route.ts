@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { publicAvatarUrl, withPublicGiftImage } from "@/lib/public-images";
 import { BIRTHDAY_WISH_PRESETS, updateMemberBirthday } from "@/lib/birthdays";
 import { assertSameOrigin, decryptSensitive, getClientIp, rateLimitResponse } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
@@ -59,11 +60,11 @@ export async function GET() {
         claimedAt: benefit.prize.claimedAt,
         expiredAt: benefit.prize.expiredAt,
         revokedAt: benefit.prize.revokedAt,
-        gift: benefit.prize.gift,
+        gift: benefit.prize.gift ? withPublicGiftImage(benefit.prize.gift) : null,
         redemptionOrder: benefit.prize.redemptionOrder,
       } : null,
     })),
-    wishes: wishes.map((wish) => ({ id: wish.id, benefitYear: wish.benefitYear, presetCode: wish.presetCode, createdAt: wish.createdAt, sender: wish.sender })),
+    wishes: wishes.map((wish) => ({ id: wish.id, benefitYear: wish.benefitYear, presetCode: wish.presetCode, createdAt: wish.createdAt, sender: { ...wish.sender, avatarUrl: publicAvatarUrl(wish.sender) } })),
     presets: BIRTHDAY_WISH_PRESETS,
   });
 }

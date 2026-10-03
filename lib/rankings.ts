@@ -1,5 +1,6 @@
 import { RankingPeriodType, Prisma } from "@prisma/client";
 import { db } from "./db";
+import { publicImageUrl } from "./public-images";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { createNotification } from "./notifications";
 import { memberParticipantRoles } from "./member-roles";
@@ -104,7 +105,7 @@ export async function getLiveRanking(kind: RankingKind, userId?: string, referen
       userId: row.userId,
       kuaishouId: byId.get(row.userId)?.kuaishouId ?? "",
       nickname: byId.get(row.userId)?.nickname ?? "未知成员",
-      avatarUrl: byId.get(row.userId)?.avatarUrl ?? null,
+      avatarUrl: publicImageUrl("avatar", row.userId, byId.get(row.userId)?.avatarUrl),
       value: row.value,
       videoCount: row.videoCount,
       likes: row.likes,

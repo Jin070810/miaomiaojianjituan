@@ -1,5 +1,6 @@
 import { db } from "../lib/db";
-import { processVideoSubmission } from "../lib/video-jobs";
+import { closeVideoQueue, enqueueVideo, runInlineVideoSubmission } from "../lib/video-jobs";
+import { lockVideoProcessing, resetVideoProcessingBudget } from "../lib/video-processing";
 
 const apply = process.argv.includes("--apply");
 const includeMismatches = process.argv.includes("--include-mismatches");
@@ -46,11 +47,13 @@ async function main() {
   const results = [];
   for (const candidate of candidates) {
     await db.$transaction(async (tx) => {
+      await lockVideoProcessing(tx, candidate.id);
       const claimed = await tx.videoSubmission.updateMany({
         where: { id: candidate.id, status: { in: ["PENDING_REVIEW", "FAILED"] } },
         data: { status: "PROCESSING", reviewReason: null },
       });
       if (claimed.count !== 1) return;
+      await resetVideoProcessingBudget(tx, candidate.id);
       await tx.auditLog.create({
         data: {
           action: "VIDEO_BULK_REPROCESS_REQUESTED",
@@ -64,10 +67,11 @@ async function main() {
     });
 
     try {
-      await processVideoSubmission(candidate.id);
+      if (process.env.REDIS_URL) await enqueueVideo(candidate.id, { retryFailed: true });
+      else await runInlineVideoSubmission(candidate.id);
     } catch {
-      // processVideoSubmission persists an automatic REJECTED result when
-      // retries are exhausted; a later run can still inspect the audit trail.
+      // The durable processing budget and audit survive interruption; with
+      // Redis the returned status may still be PROCESSING until the Worker runs.
     }
     const final = await db.videoSubmission.findUniqueOrThrow({
       where: { id: candidate.id },
@@ -99,4 +103,4 @@ main()
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => db.$disconnect());
+  .finally(async () => { await closeVideoQueue(); await db.$disconnect(); });

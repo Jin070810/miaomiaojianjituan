@@ -60,6 +60,7 @@ COPY scripts/download-oss-backup.ts ./scripts/download-oss-backup.ts
 COPY scripts/send-ops-alert.ts ./scripts/send-ops-alert.ts
 RUN npx prisma generate
 COPY scripts/worker-healthcheck.js ./scripts/worker-healthcheck.js
+COPY scripts/worker-supervisor.js ./scripts/worker-supervisor.js
 # Worker 仍以 root 运行：backups 卷来自宿主机目录（root 属主），切换非 root 需要
 # 在部署脚本中同步调整宿主机目录属主，属于单独的运维变更。
-CMD ["./node_modules/.bin/tsx", "worker.ts"]
+CMD ["node", "scripts/worker-supervisor.js"]

@@ -620,8 +620,8 @@ export async function creditVideoReward(input: {
   points: number;
   actorId?: string;
   ip?: string;
-}) {
-  return db.$transaction(async (tx) => {
+}, transaction?: Prisma.TransactionClient) {
+  const apply = async (tx: Prisma.TransactionClient) => {
     const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
     if (!video) throw new Error("视频记录不存在");
     if (video.status === "APPROVED" && (!input.actorId || video.points === input.points)) return video;
@@ -717,7 +717,8 @@ export async function creditVideoReward(input: {
     });
     await reconcileMemberAchievements(tx, input.userId);
     return updated;
-  });
+  };
+  return transaction ? apply(transaction) : db.$transaction(apply);
 }
 
 export async function rejectVideo(input: { videoId: string; reason: string; actorId: string; ip?: string }) {

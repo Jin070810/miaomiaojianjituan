@@ -457,11 +457,27 @@ model VideoSubmission {
   user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   appeals                VideoAppeal[]
   secondaryReview        VideoSecondaryReview?
+  processingState        VideoProcessingState?
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
   @@index([photoId, status])
   @@index([userId, birthdayBenefitYear])
+}
+
+// Durable retry budget and lease survive Redis loss and Worker restarts.
+model VideoProcessingState {
+  videoId        String   @id
+  attempts       Int      @default(0)
+  startedAt      DateTime @default(now())
+  nextAttemptAt  DateTime @default(now())
+  leaseToken     String?
+  leaseExpiresAt DateTime?
+  lastFailure    String?
+  updatedAt      DateTime @updatedAt
+  video          VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([nextAttemptAt])
 }
 
 model VideoSecondaryReview {

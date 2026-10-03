@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ArrowLeft, Check, ChevronDown, ExternalLink, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronDown, ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { canonicalVideoUrl } from "@/lib/kuaishou-url";
@@ -30,7 +30,7 @@ type SecondaryReview = {
 };
 
 const statusLabels: Record<ReviewStatus, string> = {
-  PENDING: "待二审",
+  PENDING: "历史未处理",
   APPROVED: "已通过",
   REJECTED: "已驳回",
 };
@@ -49,50 +49,23 @@ export default function ReviewerPage() {
   const [reviews, setReviews] = useState<SecondaryReview[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, take: 50, total: 0, pages: 1 });
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [feedback, setFeedback] = useState("");
 
   async function load(nextStatus = status, page = 1, append = false) {
     setLoading(true);
+    setStatus(nextStatus);
     setError("");
     try {
       const params = new URLSearchParams({ status: nextStatus, page: String(page), take: String(pagination.take) });
       const response = await fetch(`/api/reviewer/video-reviews?${params}`, { cache: "no-store" });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "二次审核池加载失败");
-      setStatus(nextStatus);
+      if (!response.ok) throw new Error(result.error ?? "历史记录加载失败");
       setReviews((current) => append ? [...current, ...(result.reviews ?? [])] : (result.reviews ?? []));
       setPagination(result.pagination);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "二次审核池加载失败");
+      setError(loadError instanceof Error ? loadError.message : "历史记录加载失败");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function reviewVideo(review: SecondaryReview, action: "approve" | "reject") {
-    const reason = action === "reject" ? window.prompt("请输入二审驳回原因，系统会扣回该视频已到账积分。")?.trim() : undefined;
-    if (action === "reject" && !reason) return;
-    if (!window.confirm(action === "approve" ? "确认二审通过该视频？" : `确认驳回并扣回 ${review.video.points} 积分？`)) return;
-    setBusyId(review.id);
-    setError("");
-    setFeedback("");
-    try {
-      const response = await fetch(`/api/reviewer/video-reviews/${review.id}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, reason }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "二次审核操作失败");
-      setReviews((current) => current.filter((item) => item.id !== review.id));
-      setPagination((current) => ({ ...current, total: Math.max(0, current.total - 1) }));
-      setFeedback(action === "approve" ? "二审已通过。" : "二审已驳回，积分已扣回。");
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "二次审核操作失败");
-    } finally {
-      setBusyId(null);
     }
   }
 
@@ -102,23 +75,22 @@ export default function ReviewerPage() {
 
   return (
     <main className="reviewer-shell">
-      <section className="reviewer-page">
+      <section className="reviewer-page" aria-busy={loading}>
         <header className="reviewer-header">
           <Link href="/" className="reviewer-back" aria-label="返回成员首页"><ArrowLeft size={18} />返回</Link>
-          <div><span className="eyebrow">SECOND REVIEW</span><h1>视频二次审核台</h1><p>逐条打开视频核查；驳回会自动扣回已到账积分。</p><Link className="reviewer-back" href="/registration-support">入团申请审核</Link></div>
-          <button className="icon-button" title="刷新" aria-label="刷新二次审核池" onClick={() => void load(status)}><RefreshCw size={18} /></button>
+          <div><span className="eyebrow">REVIEW HISTORY</span><h1>历史二审记录</h1><p>普通视频自动审核；此处仅供查询历史二审记录，人工仅处理成员申诉。</p><Link className="reviewer-back" href="/registration-support">入团申请审核</Link></div>
+          <button className="icon-button" title="刷新" aria-label="刷新历史记录" disabled={loading} onClick={() => void load(status)}><RefreshCw size={18} /></button>
         </header>
         <div className="reviewer-tabs">
           {(["PENDING", "APPROVED", "REJECTED"] as const).map((item) => (
-            <button key={item} className={status === item ? "active" : ""} onClick={() => void load(item)}>{statusLabels[item]}</button>
+            <button key={item} disabled={loading} className={status === item ? "active" : ""} onClick={() => void load(item)}>{statusLabels[item]}</button>
           ))}
         </div>
-        {feedback && <p className="reviewer-feedback success" role="status"><ShieldCheck size={17} />{feedback}</p>}
         {error && <p className="reviewer-feedback error" role="alert"><AlertTriangle size={17} />{error}</p>}
-        {loading && reviews.length === 0 ? (
-          <section className="reviewer-state" role="status"><RefreshCw size={24} /><strong>正在加载二审任务...</strong></section>
+        {error ? null : loading && reviews.length === 0 ? (
+          <section className="reviewer-state" role="status"><RefreshCw size={24} /><strong>正在加载历史记录...</strong></section>
         ) : reviews.length === 0 ? (
-          <section className="reviewer-state"><ShieldCheck size={24} /><strong>暂无{statusLabels[status]}任务</strong><span>切换状态可查看历史处理记录。</span></section>
+          <section className="reviewer-state"><ShieldCheck size={24} /><strong>暂无{statusLabels[status]}记录</strong><span>切换状态可查看历史处理记录。</span></section>
         ) : (
           <div className="reviewer-list">
             {reviews.map((review) => (
@@ -133,14 +105,12 @@ export default function ReviewerPage() {
                 <span className={`status-chip ${review.status === "APPROVED" ? "success" : review.status === "REJECTED" ? "danger" : "warning"}`}>{statusLabels[review.status]}</span>
                 <div className="reviewer-actions">
                   <a className="secondary-button mini-button" href={videoHref(review)} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} />打开视频</a>
-                  {review.status === "PENDING" && <button className="secondary-button mini-button" disabled={busyId === review.id} onClick={() => void reviewVideo(review, "approve")}><Check size={15} />通过</button>}
-                  {review.status === "PENDING" && <button className="danger-button mini-button" disabled={busyId === review.id} onClick={() => void reviewVideo(review, "reject")}><X size={15} />驳回</button>}
                 </div>
               </article>
             ))}
           </div>
         )}
-        {pagination.page < pagination.pages && <button className="secondary-button full-button" onClick={() => void load(status, pagination.page + 1, true)}>加载更多 <ChevronDown size={15} /></button>}
+        {pagination.page < pagination.pages && <button disabled={loading} className="secondary-button full-button" onClick={() => void load(status, pagination.page + 1, true)}>加载更多 <ChevronDown size={15} /></button>}
       </section>
     </main>
   );

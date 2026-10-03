@@ -11,6 +11,8 @@ output
 *.log
 .git
 releases
+.release-private
+.production.lock
 # Type checks and tests still run in core; these files are not runtime inputs.
 tests
 docs

@@ -26,7 +26,7 @@ flowchart LR
 6. publish 校验原 image ID、OCI revision 和验收记录后推送 GHCR，不执行 Docker build。App/Worker 每个标签包含 SHA、run ID 和 attempt；部署只用 digest。
 7. 成功的 main CI 产生 `release-candidate-<runId>-<attempt>` artifact。manifest 记录 commit、构建时间、App/Worker registry digest 与 image config ID、CI 来源、验收项、schema 和每个 migration 文件 SHA-256。
 8. Deploy Production 输入 `release_commit`、`candidate_run_id` 和既有明确确认项。任何生产配置注入、拉取或切换前，先验证候选来源及文件内容。
-9. 生产按 manifest digest 拉取，先校验两个 OCI revision 和两个 image ID，全部一致才更新本地 production 标签。登录最多 30 秒，每个 pull 最多 300 秒。禁止用“同 SHA 重新构建”的镜像替换已验收镜像。
+9. 生产按 manifest digest 拉取，先校验两个 OCI revision 和两个 image ID，全部一致才进入迁移和切换，最终健康通过后才更新兼容的本地 production 标签。登录最多 30 秒，每个 pull 最多 300 秒。禁止用“同 SHA 重新构建”的镜像替换已验收镜像。
 10. 继续执行既有生产前置检查、备份校验、migration、Web/Worker 切换和 HTTPS 健康检查。最终健康通过才保存 current manifest；前一 current 单独保留作为回滚参考。
 
 ## 来源与失败门禁
@@ -53,9 +53,9 @@ Actions 原镜像归档留存 2 天，仅用于传递同一镜像；验收截图
 
 回滚必须先确认数据库与旧应用兼容，再选择旧 SHA 和原成功 CI run ID。应用使用旧 manifest 的原摘要，仍先备份、校验镜像、执行兼容的 migration 检查和健康检查；不自动回退数据库。不可逆 migration 使用前向修复。
 
-当前 workflow 从原 CI artifact 取清单，超过 90 天或已删除时会停止；服务器留存用于审计/恢复证据，不自动绕过可信 run 验证。长期归档恢复和主机切换互斥将在后续部署执行批次补齐，不能据此宣称任意历史版本都可一键回滚。首次采用新链路前应演练候选失败、同版本启动和旧兼容候选回滚；过去未生成 manifest 的发布不伪装成新链路已验收候选。
+当前 workflow 从原 CI artifact 取清单，超过 90 天或已删除时会停止；服务器留存用于审计/恢复证据，不自动绕过可信 run 验证。主机互斥与阶段记录见下文；长期归档恢复仍在后续部署执行范围内，不能据此宣称任意历史版本都可一键回滚。首次采用新链路前应演练候选失败、同版本启动和旧兼容候选回滚；过去未生成 manifest 的发布不伪装成新链路已验收候选。
 
-当前批次不改变 nginx 的既有重启切换或数据库停写规则。候选预热、健康分层、主机级发布锁和流量切换由下一批负责。Worker 运行依赖瘦身另行验证，避免把发布来源改造与运行时依赖删减混在一起。
+完整主机发布已改为一次 SSH、同一把主机锁、分阶段 journal、私有配置预检与原子替换、显式迁移和有界执行；Nginx 改为配置验证后 reload。参见 [生产主机发布控制器](SERIALIZED-PRODUCTION-RELEASE.md)。候选预热、流量切换、长期可信回滚归档及 Worker 运行依赖瘦身仍需独立验证；目前不承诺零停机。
 
 ## 验收与时间目标
 

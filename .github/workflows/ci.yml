@@ -60,6 +60,7 @@ jobs:
       - run: bash scripts/test-pull-release-images.sh
       - run: bash scripts/test-publish-release-candidate.sh
       - run: bash scripts/test-release-health.sh
+      - run: bash scripts/test-production-release.sh
 
   # Full browser matrix now runs against these exact final images, once.
   # This replaces both host "next start" E2E and the second staging build.
@@ -166,6 +167,7 @@ jobs:
           docker compose run --rm --no-deps worker npm run data:reconcile
           bash scripts/verify-release-health.sh "$PLAYWRIGHT_BASE_URL" "$GITHUB_SHA"
       - name: Record verified candidate identities
+        # The controller uses only the disposable staging stack and synthetic credentials.
         id: proof
         run: |
           app_id="$(docker image inspect --format '{{.Id}}' miaomiao-points-app:production)"
@@ -193,6 +195,18 @@ jobs:
           compression-level: 0
           retention-days: 2
           if-no-files-found: error
+      - name: Exercise the release controller on disposable staging
+        env:
+          RUN_RELEASE_CONTROLLER_TEST: "1"
+        run: bash scripts/test-staging-release-controller.sh
+      - name: Preserve release controller evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-release-controller-${{ github.run_attempt }}
+          path: output/release-controller/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Collect staging evidence
         if: always()
         run: |

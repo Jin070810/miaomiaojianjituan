@@ -1,5 +1,7 @@
 "use client";
 
+import "./admin-theme.css";
+
 import {
   Activity,
   AlertTriangle,

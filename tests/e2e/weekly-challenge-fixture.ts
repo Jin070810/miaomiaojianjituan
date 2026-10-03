@@ -2,6 +2,9 @@ import { expect } from "@playwright/test";
 import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { nextShanghaiWeekBounds, shanghaiWeekBounds } from "@/lib/weekly-challenges";
+import { preserveTestSettings } from "./setting-fixture";
+
+let restoreSettings: (() => Promise<void>) | null = null;
 
 export const e2ePassword = "WeeklyE2E-2026";
 export const e2eIds = {
@@ -16,6 +19,7 @@ export async function seedWeeklyChallengeE2E() {
     throw new Error("E2E 必须使用显式指定 schema 的测试数据库");
   }
   await cleanupWeeklyChallengeE2E();
+  restoreSettings = await preserveTestSettings(["WEEKLY_CHALLENGES"]);
   const passwordHash = await argon2.hash(e2ePassword);
   const [member, noTaskMember, admin] = await Promise.all([
     db.user.create({
@@ -150,6 +154,10 @@ export async function seedWeeklyChallengeE2E() {
 }
 
 export async function cleanupWeeklyChallengeE2E() {
+  if (restoreSettings) {
+    await restoreSettings();
+    restoreSettings = null;
+  }
   const gifts = await db.gift.findMany({ where: { name: e2eGiftName }, select: { id: true } });
   const giftIds = gifts.map((gift) => gift.id);
   if (giftIds.length) {

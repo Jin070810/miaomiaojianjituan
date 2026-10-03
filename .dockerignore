@@ -10,3 +10,14 @@ output
 *.sha256
 *.log
 .git
+releases
+.release-private
+.production.lock
+# Type checks and tests still run in core; these files are not runtime inputs.
+tests
+docs
+.github
+AGENTS.md
+README.md
+playwright.config.ts
+vitest.config.ts

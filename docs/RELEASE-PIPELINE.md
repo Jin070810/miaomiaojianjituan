@@ -1,59 +1,72 @@
 # 发布流水线
 
-## 目标
+关联 #105。当前变更建立“一次构建、同一镜像验收、按摘要晋级”的发布契约。合并和部署仍需要维护者明确确认，CI 通过不表示已上线。
 
-- 一个 PR commit 只执行一次 PR CI；合并到 `main` 后再执行一次主分支 CI。
-- 同一 PR 的旧 CI 自动取消，避免重复占用构建时间。
-- 正式发布不经 SSH 传输完整 App/Worker 镜像，也不在生产主机执行构建。
-- GitHub Actions 只构建已经合并到 `main` 且由发布人明确确认的完整 commit SHA。
-- Docker 依赖下载使用 BuildKit GitHub Actions cache；依赖未变化时复用镜像层。
-- 生产只按 GHCR digest 拉取镜像，并校验 OCI revision 与 release commit 一致。
-- 镜像构建成功后才执行数据库备份、migration 和容器切换。
-- App 切换后刷新 Nginx，避免旧容器 IP 缓存导致 502。
+## 候选与生产链路
 
-常规目标是 PR CI 不重复运行、缓存命中的 Actions 镜像构建在 5 分钟内完成、生产镜像拉取、容器切换和健康检查在 5 分钟内完成。首次安装依赖或基础镜像变化允许更久，但不得让构建负载影响生产服务。
+```mermaid
+flowchart LR
+  A[PR 或 main commit] --> B[core: 类型/单测/数据库/依赖审计]
+  B --> C[构建一对 App 与 Worker]
+  C --> D[staging: 迁移/健康/完整浏览器矩阵/对账]
+  D --> E{main push?}
+  E -->|否| F[PR 验收证据]
+  E -->|是| G[原镜像归档转交 publish]
+  G --> H[校验 image ID / 推送 GHCR / 保存 manifest]
+  H --> I[人工批准 SHA + CI run ID]
+  I --> J[校验来源/摘要/迁移/当前生产健康]
+  J --> K[拉取原摘要/备份/迁移/切换/健康]
+```
 
-## 流程
+1. PR 仅触发一次 CI，旧 PR run 自动取消。main 合并后校验实际合并 SHA，不能用 PR 临时 merge SHA 的证据替代。
+2. core 执行 lint、普通测试、数据库集成测试、数据对账、生产依赖审计、Compose 配置及发布脚本故障测试。
+3. staging 构建一次 App、一次 Worker。Next 生产构建包含在 App Docker builder 中，不再为独立 host E2E 和 staging 重复编译。
+4. 使用隔离数据库、随机密钥及测试管理员启动最终镜像，执行 migration、App/Worker 同 SHA 健康、20 并发健康检查、完整 Playwright Chromium/WebKit 矩阵和数据对账。保留桌面 1440×900、手机 390×844 及原有其他尺寸覆盖。
+5. PR 不导出发布镜像，也没有 registry 写入权限。main 将验收后原镜像压缩归档交给独立 publish job；这是 Actions runner 之间的传输，不是向生产主机发送完整镜像。
+6. publish 校验原 image ID、OCI revision 和验收记录后推送 GHCR，不执行 Docker build。App/Worker 每个标签包含 SHA、run ID 和 attempt；部署只用 digest。
+7. 成功的 main CI 产生 `release-candidate-<runId>-<attempt>` artifact。manifest 记录 commit、构建时间、App/Worker registry digest 与 image config ID、CI 来源、验收项、schema 和每个 migration 文件 SHA-256。
+8. Deploy Production 输入 `release_commit`、`candidate_run_id` 和既有明确确认项。任何生产配置注入、拉取或切换前，先验证候选来源及文件内容。
+9. 生产按 manifest digest 拉取，先校验两个 OCI revision 和两个 image ID，全部一致才进入迁移和切换，最终健康通过后才更新兼容的本地 production 标签。登录最多 30 秒，每个 pull 最多 300 秒。禁止用“同 SHA 重新构建”的镜像替换已验收镜像。
+10. 继续执行既有生产前置检查、备份校验、migration、Web/Worker 切换和 HTTPS 健康检查。最终健康通过才保存 current manifest；前一 current 单独保留作为回滚参考。
 
-1. PR 的 `pull_request` 事件执行完整 CI；功能分支的普通 `push` 不再重复触发同一套检查。
-2. 合并到 `main` 后执行主分支 CI，形成可发布 commit。
-3. 发布人输入完整 SHA，并确认 staging、备份、证书和回滚点。
-4. workflow 验证 SHA 是 `origin/main` 的祖先。
-5. GitHub Actions 使用 BuildKit 构建 App/Worker，将完整 SHA 写入 OCI revision，并推送 GHCR。
-6. workflow 在任何生产变更前检查当前 App、Worker、Database 和 Redis 健康。
-7. workflow 通过专用 `deploy` SSH 账号进入生产服务器，使用短时 GitHub token 按 digest 拉取镜像。
-8. 生产校验 App/Worker OCI revision 均等于批准 SHA 后，才标记本地 `production` 镜像。
-9. 生产前置检查通过后备份数据库并校验 SHA-256。
-10. Compose 执行 migration，切换 App/Worker，刷新 Nginx。
-11. 外部 HTTPS `/api/health` 必须确认 Database、Redis、Worker、Queue 和 release SHA 正常。
+## 来源与失败门禁
 
-## 周挑战开关
+候选 run 必须来自当前仓库的 `.github/workflows/ci.yml`，事件为 main push，head SHA 与批准 SHA 完全一致，整体 completed/success。拒绝 fork、PR、其他 workflow、失败/取消/运行中 run、不同 attempt 的 manifest，以及未合并 SHA。
 
-周挑战首次启用或恢复发放时，使用 `Weekly Challenge Production Switch` workflow，不直接修改生产数据库。输入当前生产完整 commit SHA、成功的 `Weekly Challenge DeepSeek Shadow` run ID，选择 `enabled=true` 并确认生产变更。workflow 会验证双周期 300 人影子报告、奖励预算、最终失败批次、App/Worker SHA、DeepSeek 配置和健康状态，再通过管理员 API 更新开关并写入审计日志。
+run 元数据通过 GitHub API 单独读取，与下载的 artifact 分目录存放。镜像路径必须是当前仓库的 `ghcr.io/<owner>/<repository>-app|worker`，摘要与 config ID 必须是完整 SHA-256。schema/migration 清单与单独检出的 release source 逐个比较，不能只信任清单中的声明。
 
-紧急停止时运行同一 workflow 并选择 `enabled=false`；关闭路径不依赖历史影子 artifact 或健康全绿，只要求管理员 API 成功并确认开关已关闭。关闭后不激活新周期、不允许领取个人奖励，也不发放竞速奖励；历史任务和审计记录保留。
+缺少任何产物或验证失败立即终止，不降级为 tag 拉取，不静默重建，不跳过 staging。生产 workflow 只有 registry 读取权限。GitHub environment 的维护者批准、自审和 release tag 记录仍须按工程流程执行。
 
-生产 SSH 只允许密钥认证。日常发布使用专用 `deploy` 账号；不得在 workflow 或仓库中保存 root 密码、私钥或服务器 `.env.production`。
+## 缓存与运行时
 
-## 为什么使用 GHCR digest
+- App 和 Worker 使用独立 GHA cache scope：release-app、release-worker，防止互相覆盖。缓存导出最多 3 分钟；缓存服务故障不掩盖实际构建失败，也不使已成功构建变成业务发布失败。
+- 测试、文档和 workflow 不进入 Docker context；它们仍由 core 检查，单独修改这些文件不会让 App 的 COPY 层和 Next 编译缓存失效。
+- APP_COMMIT_SHA/APP_BUILD_TIME 在最终运行镜像末尾注入，metadata 变化不使依赖安装、Next 编译和 Worker 文件层失效；健康接口仍返回精确版本。
+- App 以 node 用户运行，明确授予 .next/cache 写权限，其他代码目录保持只读权限语义。CI 用同一非 root 用户验证图片缓存写入。
+- HTTP staging 显式 SESSION_COOKIE_SECURE=false；Compose 默认 true，production-preflight 拒绝 false，生产 HTTPS 继续使用 Secure Cookie。
+- 测试夹具在清理时恢复周挑战和生日开关的原始记录，避免 fixture 残留改变验收后的运行状态。随机 staging 密钥通过 Actions masking 隐藏，失败健康检查保留状态和 issues 诊断。
+- 完整浏览器测试已并入 staging job，旧独立 e2e job 移除。仓库如配置必需状态检查，应使用 core、staging；main 的发布候选还须 publish 成功。不能把 skipped publish（PR 正常跳过）当作可部署产物。
 
-当前 App 和 Worker 解压后合计约 1.8GB，其中 Worker 的 `node_modules` 层约 837MB。`docker save | gzip | ssh | docker load` 每次都会发送完整归档，无法利用生产服务器已有层；在低带宽链路下单次传输可超过一小时。
+## 留存、回滚与首次切换
 
-生产主机只有 2 vCPU / 4 GiB。2026-08-04 的发布在生产本机执行 Next.js 类型检查时耗尽资源，导致旧服务和 SSH 同时失去响应，最终需要实例重启。构建发布镜像因此被定义为生产主机禁止操作。
+Actions 原镜像归档留存 2 天，仅用于传递同一镜像；验收截图/容器日志 14 天；release manifest 与部署候选记录 90 天。生产成功发布后将清单长期保存在 `releases/<SHA>/deploy-<run>-<attempt>.json`，同时保留 previous 清单及 releases/current.json；目录不进入 Git 或 Docker context。GHCR 已发布 digest 不能被清理策略删除，否则回滚将明确失败。
 
-GHCR 只传输缺失镜像层，Actions 构建缓存与生产运行资源完全隔离。部署使用构建输出 digest，而不是可变 tag；生产拉取后还会校验 OCI revision，避免 tag 漂移或 App/Worker 版本不一致。GHCR 凭据使用单次 workflow 的短时 token，并放在临时 Docker 配置目录中，步骤结束即删除。
+回滚必须先确认数据库与旧应用兼容，再选择旧 SHA 和原成功 CI run ID。应用使用旧 manifest 的原摘要，仍先备份、校验镜像、执行兼容的 migration 检查和健康检查；不自动回退数据库。不可逆 migration 使用前向修复。
 
-## 依据
+当前 workflow 从原 CI artifact 取清单，超过 90 天或已删除时会停止；服务器留存用于审计/恢复证据，不自动绕过可信 run 验证。主机互斥与阶段记录见下文；长期归档恢复仍在后续部署执行范围内，不能据此宣称任意历史版本都可一键回滚。首次采用新链路前应演练候选失败、同版本启动和旧兼容候选回滚；过去未生成 manifest 的发布不伪装成新链路已验收候选。
 
-- [Docker: Optimize cache usage in builds](https://docs.docker.com/build/cache/optimize/)
-- [Docker: GitHub Actions cache backend](https://docs.docker.com/build/cache/backends/gha/)
-- [Docker: Multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
-- [Docker: Building best practices](https://docs.docker.com/build/building/best-practices/)
-- [GitHub: Control workflow concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
-- [GitHub: Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+完整主机发布已改为一次 SSH、同一把主机锁、分阶段 journal、私有配置预检与原子替换、显式迁移和有界执行；Nginx 改为配置验证后 reload。参见 [生产主机发布控制器](SERIALIZED-PRODUCTION-RELEASE.md)。候选预热、流量切换、长期可信回滚归档及 Worker 运行依赖瘦身仍需独立验证；目前不承诺零停机。
 
-## 后续优化
+## 验收与时间目标
 
-- 将 Worker 拆成独立运行时依赖，移除 Next.js、测试和 TypeScript 开发依赖，目标镜像小于 400MB。
-- 记录每次 CI、生产构建、备份、migration、切换和健康检查的持续时间。
-- 将生产部署拆成预发布、migration 和流量切换三个可独立观测的阶段。
+发布门禁测试覆盖错误 run/SHA/attempt、失败 CI、篡改 digest/仓库/migration、旧镜像 ID 被替换、无 staging 证据、PR 发布和两镜像校验失败不修改 production 标签。脚本必须通过 actionlint、ShellCheck、Node manifest 测试及 shell 故障测试；实际镜像和全部 UI 在 GitHub staging 验证。
+
+历史串行链路包含 core 构建、host E2E 构建、staging 再构建和生产再构建。本实现消除后面三类重复构建；main 增加原镜像归档传递成本。耗时收益以同仓库 CI run 实测为准，不把目标值写成已实现值。生产切换时长与总 workflow 时长分别记录。
+
+## 周挑战开关与依据
+
+周挑战启停继续使用 Weekly Challenge Production Switch workflow；首次启用仍需独立 DeepSeek shadow 验收和管理员 API 审计，不因发布提速而省略。生产 SSH 继续使用专用部署账号和短时 GHCR token，不提交环境文件或服务器密钥。
+
+- [Docker：独立 GHA cache scope](https://docs.docker.com/build/cache/backends/gha/)
+- [GitHub：Workflow run 元数据与状态](https://docs.github.com/en/rest/actions/workflow-runs)
+- [GitHub：跨 workflow 下载指定 artifact](https://github.com/actions/download-artifact)

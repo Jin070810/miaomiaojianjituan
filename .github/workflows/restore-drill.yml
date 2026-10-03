@@ -28,7 +28,7 @@ jobs:
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
-          ssh-keyscan -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+          timeout 20 ssh-keyscan -T 10 -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
 
       - name: Restore latest backup into isolated PostgreSQL
         timeout-minutes: 20
@@ -49,6 +49,9 @@ jobs:
           storage_mode="$3"
           [[ "$run_id" =~ ^[0-9]+$ ]]
           cd "$project_path"
+          umask 077
+          exec 9>.production.lock
+          flock --exclusive --wait 120 9
           container="miaomiao-restore-drill-$run_id"
           drill_dir="backups/restore-drill-$run_id"
           alert_failure() {
@@ -94,8 +97,8 @@ jobs:
             'SELECT json_build_object('"'"'users'"'"', COUNT(*)) FROM "User";'
           REMOTE_SCRIPT
           )"
-          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" \
-            "bash -s -- $(printf '%q' "$PRODUCTION_PATH") $(printf '%q' "$RUN_ID") $(printf '%q' "$backup_storage_mode")" \
+          printf '%s\n' "$remote_script" | ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "timeout --signal=TERM --kill-after=30s 20m bash -s -- $(printf '%q' "$PRODUCTION_PATH") $(printf '%q' "$RUN_ID") $(printf '%q' "$backup_storage_mode")" \
             | tee "restore-drill-$RUN_ID.log"
 
       - name: Preserve restore drill evidence

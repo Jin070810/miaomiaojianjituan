@@ -541,6 +541,8 @@ model Gift {
   birthdayPrizes    BirthdayPrize[]
 
   @@index([deletedAt, active, pinned, displayOrder])
+  // Retained by the historical catalog migration; do not implicitly drop it.
+  @@index([deletedAt, active, displayOrder])
   @@index([deletedAt, active, category])
 }
 
@@ -875,7 +877,7 @@ model SystemSetting {
   description String?
   updatedById String?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   updatedBy   User?    @relation("OperationSettingUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([updatedAt])
@@ -970,9 +972,10 @@ model WeeklyChallengeGenerationAttempt {
   updatedAt       DateTime                        @updatedAt
   period          WeeklyChallengePeriod           @relation(fields: [periodId], references: [id], onDelete: Cascade)
 
-  @@unique([periodId, batchNumber, attemptNumber])
+  // Historical SQL names were truncated by PostgreSQL's 63-byte identifier limit.
+  @@unique([periodId, batchNumber, attemptNumber], map: "WeeklyChallengeGenerationAttempt_periodId_batchNumber_attemptNu")
   @@index([periodId, status, createdAt])
-  @@index([periodId, batchNumber, inputHash, status])
+  @@index([periodId, batchNumber, inputHash, status], map: "WeeklyChallengeGenerationAttempt_periodId_batchNumber_inputHash")
 }
 
 model WeeklyRaceWinner {

@@ -10,6 +10,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
+    "db:check-drift": "prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code",
     "feishu:inspect": "tsx scripts/inspect-feishu.ts",
     "feishu:migrate": "tsx scripts/migrate-feishu.ts",
     "feishu:gifts": "tsx scripts/migrate-feishu-gift-assets.ts",

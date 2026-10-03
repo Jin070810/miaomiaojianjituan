@@ -17,6 +17,8 @@
 
 完整 Docker 部署可使用 `docker compose up -d`。`migrate` 服务会等待 PostgreSQL 健康后执行版本化的 `prisma migrate deploy`。
 
+执行 migration 后运行 `npm run db:check-drift`，只读检查数据库结构是否与 Prisma 声明一致。CI 会重放全部 migration 并执行这一门禁；检查范围与故障处理见 [`docs/SCHEMA-DRIFT-CHECK.md`](docs/SCHEMA-DRIFT-CHECK.md)。
+
 生产环境准备证书到 `certs/fullchain.pem` 和 `certs/privkey.pem` 后，使用 `docker compose --profile production up -d` 启动 Nginx HTTPS 入口。
 
 Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份，恢复使用 `bash scripts/restore-db.sh <备份文件> .env.production`；Windows 运维可使用对应的 `.ps1` 脚本。生产默认 `BACKUP_STORAGE_MODE=local`，每日生成并校验 SHA-256、保留 7 天；OSS 保留为显式可选模式，不配置时不要求 Bucket 或密钥。零成本方案的本地 dump 与服务器同盘，发布前还必须创建轻量应用服务器免费快照作为回滚点。详见 [`docs/OSS-BACKUP-RUNBOOK.md`](docs/OSS-BACKUP-RUNBOOK.md)。

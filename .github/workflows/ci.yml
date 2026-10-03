@@ -46,6 +46,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx prisma migrate deploy
+      - name: Check schema matches applied migrations
+        run: npm run db:check-drift
       - run: npm run lint
       - name: Unit tests
         run: npm test

@@ -528,7 +528,7 @@ function AdminSidebar({
         ))}
       </nav>
       <div className="admin-sidebar-footer">
-        <button onClick={() => window.location.assign("/registration-support")}><UserRound size={17} />入团申请审核</button>
+        <button onClick={() => window.location.assign("/admin/platform-bindings")}><ShieldCheck size={17} />账号归属核验</button><button onClick={() => window.location.assign("/registration-support")}><UserRound size={17} />入团申请审核</button>
         <button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button>
         <button className={active === "settings" ? "active" : ""} onClick={() => onChange("settings")}><Settings2 size={17} />系统设置</button>
         <button onClick={onLogout}><LogOut size={17} />退出后台</button>
@@ -1956,7 +1956,7 @@ function AdminMobileNav({ active, open, pendingVideos, pendingOrders, onClose, o
   const items: Array<{ id: AdminSection; label: string; badge?: number }> = [
     { id: "workbench", label: "运营工作台" }, { id: "videos", label: "视频与申诉", badge: pendingVideos }, { id: "users", label: "用户与公会" }, { id: "points", label: "积分管理" }, { id: "gifts", label: "礼品管理" }, { id: "orders", label: "兑换订单", badge: pendingOrders }, { id: "rankings", label: "榜单结算" }, { id: "challenges", label: "AI 周挑战" }, { id: "birthdays", label: "生日运营" }, { id: "announcements", label: "公告通知" }, { id: "logs", label: "审计日志" }, { id: "settings", label: "系统设置" },
   ];
-  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}><span>{item.label}</span>{Boolean(item.badge) && <b>{item.badge}</b>}</button>)}<div className="admin-mobile-nav-footer"><button onClick={() => window.location.assign("/registration-support")}><UserRound size={17} />入团申请审核</button><button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button><button onClick={onLogout}><LogOut size={17} />退出后台</button></div></nav></div>;
+  return <div className="admin-mobile-nav-backdrop" role="presentation" onMouseDown={onClose}><nav className="admin-mobile-nav" aria-label="管理后台导航" onMouseDown={(event) => event.stopPropagation()}><header><strong>管理后台</strong><button className="icon-button" aria-label="关闭菜单" onClick={onClose}><X size={18} /></button></header>{items.map((item) => <button className={active === item.id ? "active" : ""} key={item.id} onClick={() => { onChange(item.id); onClose(); }}><span>{item.label}</span>{Boolean(item.badge) && <b>{item.badge}</b>}</button>)}<div className="admin-mobile-nav-footer"><button onClick={() => window.location.assign("/admin/platform-bindings")}><ShieldCheck size={17} />账号归属核验</button><button onClick={() => window.location.assign("/registration-support")}><UserRound size={17} />入团申请审核</button><button onClick={() => window.location.assign("/password-support")}><ShieldCheck size={17} />密码协助中心</button><button onClick={onLogout}><LogOut size={17} />退出后台</button></div></nav></div>;
 }
 
 function auditActorLabel(row: AdminAuditRow) {

@@ -9,6 +9,7 @@ import { creditVideoReward } from "./points";
 import { getVideoPointRule } from "./point-rules";
 import { createNotification } from "./notifications";
 import { isPermanentFetchError } from "./fetch-errors";
+import { PlatformBindingError, requireVerifiedVideoAuthor } from "./platform-bindings";
 
 export type VideoFetchFailureAction = "reject-permanent" | "reject-final" | "retry";
 
@@ -63,12 +64,16 @@ async function autoRejectVideoWithTx(
         likes: current.likes,
         photoId: current.photoId,
         matchedOwner: current.matchedOwner,
+        authorUid: current.fetchedAuthorUid,
+        authorEvidenceVersion: current.authorEvidenceVersion,
       },
       afterValue: {
         status: updated.status,
         likes: updated.likes,
         photoId: updated.photoId,
         matchedOwner: updated.matchedOwner,
+        authorUid: updated.fetchedAuthorUid,
+        authorEvidenceVersion: updated.authorEvidenceVersion,
       },
       reason,
     },
@@ -135,18 +140,23 @@ export async function processVideoSubmission(
       metadataFetchedAt: new Date(),
       publishedAt: fetched.publishedAt,
       fetchedOwner: fetched.owner,
-      matchedOwner: fetched.ownerMatches,
+      fetchedAuthorUid: fetched.authorUid,
+      authorEvidenceVersion: fetched.authorUid ? 1 : null,
+      matchedOwner: false,
       rawPayload: {
         sourceUrl: fetched.source.sourceUrl,
-        ownerMatchMethod: fetched.ownerMatchMethod,
+        nicknameMatchMethod: fetched.ownerMatchMethod,
+        authorEvidenceVersion: fetched.authorUid ? 1 : null,
         ...("rawPayload" in fetched ? fetched.rawPayload : {}),
       },
     };
-    // 同一 photoId 的判重与占位必须在同一把事务级咨询锁内完成：两条并发提交各自
-    // findFirst 后再写入会双双入账（重复发积分）。photoId 没有数据库唯一约束
-    // （已驳回记录允许复用），只能靠这把锁串行化同一视频的全部入账路径。
+    // Serialize ownership/metadata changes for a work. The database also keeps
+    // the existing partial unique index for PROCESSING/PENDING_REVIEW/APPROVED.
     const outcome = await db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${fetched.photoId}`})::bigint)`;
+      await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${video.id} FOR UPDATE`;
+      const current = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+      if (!["PROCESSING", "FAILED", "PENDING_REVIEW"].includes(current.status)) return { kind: "rejected" as const, result: current };
       const duplicate = await tx.videoSubmission.findFirst({
         where: { photoId: fetched.photoId, id: { not: video.id }, status: { in: ["APPROVED", "PENDING_REVIEW", "PROCESSING"] } },
       });
@@ -160,13 +170,13 @@ export async function processVideoSubmission(
       if (eligibilityError) {
         return { kind: "rejected" as const, result: await autoRejectVideoWithTx(tx, video.id, eligibilityError, fetchedFields) };
       }
-      if (!fetched.ownerMatches) {
-        return { kind: "rejected" as const, result: await autoRejectVideoWithTx(
-          tx,
-          video.id,
-          `作者不一致：抓取到“${fetched.owner}”，提交昵称为“${video.submittedNickname}”`,
-          fetchedFields,
-        ) };
+      try {
+        await requireVerifiedVideoAuthor(tx, { userId: video.userId, sourceKind: fetched.source.sourceKind, fetchedAuthorUid: fetched.authorUid, authorEvidenceVersion: fetched.authorUid ? 1 : null });
+        fetchedFields.matchedOwner = true;
+        fetchedFields.rawPayload = { ...fetchedFields.rawPayload as object, ownerMatchMethod: "verified-platform-uid" };
+      } catch (error) {
+        if (!(error instanceof PlatformBindingError)) throw error;
+        return { kind: "rejected" as const, result: await autoRejectVideoWithTx(tx, video.id, error.message, fetchedFields) };
       }
       try {
         const updated = await tx.videoSubmission.update({
@@ -192,7 +202,12 @@ export async function processVideoSubmission(
       }
     });
     if (outcome.kind === "rejected") return outcome.result;
-    return creditVideoReward({ videoId: video.id, userId: video.userId, points: fetched.points });
+    try {
+      return await creditVideoReward({ videoId: video.id, userId: video.userId, points: fetched.points });
+    } catch (error) {
+      if (!(error instanceof PlatformBindingError)) throw error;
+      return autoRejectVideo(video.id, error.message, { matchedOwner: false });
+    }
 }
 
 export async function prepareVideoReprocess(input: { videoId: string; actorId: string; ip?: string }) {
@@ -222,6 +237,10 @@ export async function prepareVideoReprocess(input: { videoId: string; actorId: s
         processedAt: null,
         reviewedAt: null,
         reviewReason: null,
+        fetchedAuthorUid: null,
+        authorEvidenceVersion: null,
+        verifiedBindingId: null,
+        matchedOwner: null,
       },
     });
     if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });

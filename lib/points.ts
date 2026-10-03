@@ -14,6 +14,7 @@ import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
 import { reconcileMemberAchievements } from "./member-achievements";
 import { applyBirthdayVideoBonus, revokeBirthdayVideoBonus } from "./birthdays";
+import { requireVerifiedVideoAuthor } from "./platform-bindings";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -622,8 +623,15 @@ export async function creditVideoReward(input: {
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
-    const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
+    let video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
     if (!video) throw new Error("视频记录不存在");
+    const initialPhotoId = video.photoId;
+    if (initialPhotoId) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${initialPhotoId}`})::bigint)`;
+    await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${video.id} FOR UPDATE`;
+    video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    if (video.photoId !== initialPhotoId) throw new Error("视频作品证据已变化，请重新处理");
+    if (video.userId !== input.userId) throw new Error("视频不属于该成员");
+    if (!Number.isSafeInteger(input.points) || input.points < 0) throw new Error("视频积分必须是非负整数");
     if (video.status === "APPROVED" && (!input.actorId || video.points === input.points)) return video;
     if (video.status === "APPROVED" && input.actorId && video.points !== input.points) {
       const delta = input.points - video.points;
@@ -656,6 +664,7 @@ export async function creditVideoReward(input: {
     if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
       throw new Error("只有处理中视频可以自动入账");
     }
+    const authorBinding = await requireVerifiedVideoAuthor(tx, video);
     const canApprove = await refreshEligibilityAfterApprovedVideo(tx, input.userId, new Date());
     if (!canApprove) {
       const rejected = await tx.videoSubmission.update({
@@ -671,11 +680,11 @@ export async function creditVideoReward(input: {
     const claimedAt = new Date();
     const claimed = await tx.videoSubmission.updateMany({
       where: { id: video.id, status: { in: ["PROCESSING", "PENDING_REVIEW", "FAILED"] } },
-      data: { status: "APPROVED", points: input.points, processedAt: claimedAt, reviewedAt: claimedAt },
+      data: { status: "APPROVED", points: input.points, processedAt: claimedAt, reviewedAt: claimedAt, verifiedBindingId: authorBinding.id },
     });
     if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
     // updateMany 已写入状态、积分和时间戳，这里直接推导 updated，避免对同一行的第二次冗余 UPDATE。
-    const updated = { ...video, status: "APPROVED" as const, points: input.points, processedAt: claimedAt, reviewedAt: claimedAt };
+    const updated = { ...video, status: "APPROVED" as const, points: input.points, processedAt: claimedAt, reviewedAt: claimedAt, verifiedBindingId: authorBinding.id };
     if (input.points > 0) {
       await credit(tx, input.userId, input.points, "VIDEO_REWARD", video.id, "视频审核通过");
     }
@@ -693,7 +702,7 @@ export async function creditVideoReward(input: {
         entity: "VideoSubmission",
         entityId: video.id,
         beforeValue: { status: video.status, points: video.points },
-        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus },
+        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus, verifiedBindingId: authorBinding.id, authorUid: authorBinding.authorUid, platform: authorBinding.platform, authorEvidenceVersion: video.authorEvidenceVersion },
         ip: input.ip,
       },
     });
@@ -765,7 +774,7 @@ export async function resolveVideoAppeal(input: {
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
-    const appeal = await tx.videoAppeal.findUnique({
+    let appeal = await tx.videoAppeal.findUnique({
       where: { id: input.appealId },
       include: { video: true },
     });
@@ -819,6 +828,12 @@ export async function resolveVideoAppeal(input: {
         });
       if (duplicate) throw new Error("该视频已被其他记录结算，不能通过申诉");
     }
+    const originalPhotoId = appeal.video.photoId;
+    await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${appeal.videoId} FOR UPDATE`;
+    appeal = await tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id }, include: { video: true } });
+    if (appeal.status !== "PENDING") return appeal;
+    if (appeal.video.status !== "REJECTED" || appeal.video.photoId !== originalPhotoId) throw new Error("视频状态或作品证据已变化，请刷新后重试");
+    const authorBinding = await requireVerifiedVideoAuthor(tx, appeal.video);
     const rule = await getVideoPointRule(tx);
     const points = input.points ?? calculateVideoPoints(appeal.video.likes ?? 0, rule);
     if (!Number.isInteger(points) || points < 0 || points > rule.maximumPoints) {
@@ -840,7 +855,7 @@ export async function resolveVideoAppeal(input: {
     if (claimed.count !== 1) return tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
     const video = await tx.videoSubmission.update({
       where: { id: appeal.video.id },
-      data: { status: "APPROVED", points, reviewedAt: new Date(), reviewReason: input.reason?.trim() || "申诉复查通过" },
+      data: { status: "APPROVED", points, reviewedAt: new Date(), reviewReason: input.reason?.trim() || "申诉复查通过", verifiedBindingId: authorBinding.id },
     });
     if (points > 0) {
       await credit(tx, appeal.video.userId, points, "VIDEO_REWARD", appeal.video.id, "视频申诉通过");
@@ -860,7 +875,7 @@ export async function resolveVideoAppeal(input: {
         entity: "VideoAppeal",
         entityId: appeal.id,
         beforeValue: { appealStatus: appeal.status, videoStatus: appeal.video.status, points: appeal.video.points },
-        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus },
+        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus, verifiedBindingId: authorBinding.id, authorUid: authorBinding.authorUid, platform: authorBinding.platform, authorEvidenceVersion: appeal.video.authorEvidenceVersion },
         reason: input.reason,
         ip: input.ip,
       },

@@ -14,6 +14,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
+    { name: "bindings-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /platform-bindings\.spec\.ts/ },
+    { name: "bindings-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /platform-bindings\.spec\.ts/ },
     {
       name: "member-mobile",
       use: { viewport: { width: 390, height: 844 } },

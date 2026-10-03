@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { db } from "../lib/db";
 import { fetchKuaishouVideo } from "../lib/kuaishou-fetch";
+import { closeDouyinBrowser, fetchDouyinVideo } from "../lib/douyin-fetch";
+import { videoPlatform } from "../lib/platform-bindings";
+import { historicalAuthorIssues } from "../lib/video-author-audit";
 import { calculateVideoPoints, videoEligibilityError } from "../lib/kuaishou";
 import { getVideoPointRule } from "../lib/point-rules";
 
@@ -16,7 +19,7 @@ type AuditResult = {
   outcome: "ok" | "warning" | "error";
   issues: string[];
   stored: { likes: number | null; points: number; photoId: string | null; submittedNickname: string };
-  fetched?: { likes: number; points: number; photoId: string; owner: string; ownerMatches: boolean; ownerMatchMethod: string };
+  fetched?: { likes: number; points: number; photoId: string; owner: string; authorUid: string | null; nicknameMatches: boolean; nicknameMatchMethod: string };
   error?: string;
 };
 
@@ -29,6 +32,10 @@ async function main() {
       take: limit,
       select: {
         id: true,
+        userId: true,
+        fetchedAuthorUid: true,
+        authorEvidenceVersion: true,
+        verifiedBindingId: true,
         sourceUrl: true,
         sourceKind: true,
         likes: true,
@@ -49,9 +56,10 @@ async function main() {
       if (index >= rows.length) return;
       const row = rows[index];
       try {
-        const fetched = await fetchKuaishouVideo(row.sourceUrl, row.submittedNickname, rule);
-        const issues: string[] = [];
-        if (!fetched.ownerMatches) issues.push("owner-mismatch");
+        const platform = videoPlatform(row.sourceKind);
+        const fetched = await (platform === "douyin" ? fetchDouyinVideo : fetchKuaishouVideo)(row.sourceUrl, row.submittedNickname, rule);
+        const binding = row.verifiedBindingId ? await db.platformAccountBinding.findUnique({ where: { id: row.verifiedBindingId }, select: { id: true, userId: true, platform: true, authorUid: true } }) : null;
+        const issues = historicalAuthorIssues(row, platform, fetched.authorUid, binding);
         if (row.photoId && row.photoId !== fetched.photoId) issues.push("photo-id-mismatch");
         if (row.likes !== null && row.points !== calculateVideoPoints(row.likes, rule)) issues.push("stored-points-rule-mismatch");
         const eligibility = videoEligibilityError(fetched.likes, fetched.publishedAt, row.submittedAt, rule);
@@ -67,8 +75,9 @@ async function main() {
             points: fetched.points,
             photoId: fetched.photoId,
             owner: fetched.owner,
-            ownerMatches: fetched.ownerMatches,
-            ownerMatchMethod: fetched.ownerMatchMethod,
+            authorUid: fetched.authorUid,
+            nicknameMatches: fetched.ownerMatches,
+            nicknameMatchMethod: fetched.ownerMatchMethod,
           },
         };
       } catch (error) {
@@ -126,4 +135,4 @@ main()
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => db.$disconnect());
+  .finally(async () => { await closeDouyinBrowser(); await db.$disconnect(); });

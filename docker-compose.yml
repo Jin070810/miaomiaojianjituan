@@ -45,6 +45,7 @@ services:
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-miaomiao}?schema=public}
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
       SESSION_SECRET: ${SESSION_SECRET}

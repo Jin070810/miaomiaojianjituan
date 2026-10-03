@@ -70,7 +70,7 @@ PR 必须填写 `.github/pull_request_template.md`，并包含：
 
 1. 进入维护或限制高风险写操作；
 2. 备份数据库并校验 `.sha256`；
-3. GitHub Actions 拉取已批准 commit，构建并扫描镜像，生产按 digest 拉取并校验 revision；
+3. GitHub Actions 校验批准 SHA 对应的成功 main CI run 和 release manifest，生产按已验收 digest 拉取并校验 revision、镜像 ID；禁止在部署阶段重建；
 4. 执行 `prisma migrate deploy`；
 5. 启动/滚动更新 Web 和 Worker；
 6. 检查 `/api/health`、登录、视频队列、积分账户和订单；
@@ -79,7 +79,7 @@ PR 必须填写 `.github/pull_request_template.md`，并包含：
 
 ## 6. 回滚与事故
 
-应用回滚通过 `Deploy Production` workflow 重新发布已批准的旧 release commit，App 与 Worker 必须使用同一完整 SHA。生产主机不得为回滚执行 Docker 构建；workflow 仍需完成镜像构建、digest 拉取、revision 校验、发布前备份和健康检查。
+应用回滚通过 `Deploy Production` workflow 选择已批准旧 release commit 和对应成功 CI run ID，复用原 release manifest 中的 App/Worker digest。App 与 Worker 必须使用同一完整 SHA；workflow 和生产主机均不得为回滚重新构建。仍需执行来源及 migration 校验、digest 拉取、revision/镜像 ID 校验、发布前备份和健康检查。先评估当前数据库是否兼容旧应用；Actions artifact 过期时可显式使用已部署候选的签名留存，并验证原成功 CI attempt；缺少可信清单、CI 历史不可验证或 migration 不兼容时停止回滚，执行经过验收的前向修复，不能把临时重建伪装成原发布物。
 
 数据库恢复前必须停止 Web 和 Worker、核对备份校验值，并由维护者确认恢复时间点。若 migration 不可逆，不回退数据库，改用前向修复 migration。
 

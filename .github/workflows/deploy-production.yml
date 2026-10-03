@@ -11,6 +11,17 @@ on:
         description: "该 release SHA 在 main push 后成功生成候选镜像的 CI run ID"
         required: true
         type: string
+      candidate_source:
+        description: "ci-artifact 用原 CI 产物；server-archive 用已部署版本的签名留存副本"
+        required: true
+        default: ci-artifact
+        type: choice
+        options: [ci-artifact, server-archive]
+      candidate_attempt:
+        description: "server-archive 必填：原成功 CI attempt；ci-artifact 忽略此项"
+        required: false
+        default: "1"
+        type: string
       migration_compatibility_note:
         description: "应用回滚时，说明已执行但旧版没有的迁移为何仍兼容；不得用于数据库回退"
         required: false
@@ -98,44 +109,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Verify the exact successful main CI run
-        id: candidate_run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-        run: |
-          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          mkdir -p output/release
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" > output/release/run.json
-          node scripts/release-manifest.mjs verify-run output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID"
-
-      - name: Download only that validated attempt's release manifest
-        uses: actions/download-artifact@v8
-        with:
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.candidate_run_id }}
-          name: release-candidate-${{ inputs.candidate_run_id }}-${{ steps.candidate_run.outputs.attempt }}
-          path: output/release/candidate
-
-      - name: Read the merged release schema and migrations
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.release_commit }}
-          path: release-source
-          persist-credentials: false
-
-      - name: Validate manifest, image digests, and migration checksums
-        id: release
-        env:
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-        run: |
-          node scripts/release-manifest.mjs verify output/release/candidate/release-candidate.json \
-            output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" release-source
-          cp output/release/candidate/release-candidate.json output/release/deploy-candidate.json
-
       - name: Configure SSH
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
@@ -158,6 +131,81 @@ jobs:
             TCPKeepAlive yes
           EOF
           chmod 600 "$HOME/.ssh/config"
+
+      - name: Verify the exact successful main CI run
+        id: candidate_run
+        if: inputs.candidate_source == 'ci-artifact'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          mkdir -p output/release
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" > output/release/run.json
+          node scripts/release-manifest.mjs verify-run output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID"
+
+      - name: Download only that validated attempt's release manifest
+        if: inputs.candidate_source == 'ci-artifact'
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: release-candidate-${{ inputs.candidate_run_id }}-${{ steps.candidate_run.outputs.attempt }}
+          path: output/release/candidate
+
+      - name: Read the retained signed candidate (read-only)
+        if: inputs.candidate_source == 'server-archive'
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+        run: |
+          bash scripts/fetch-retained-release.sh "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" \
+            "$CANDIDATE_ATTEMPT" output/release/candidate
+
+      - name: Verify signed bytes and exact main CI identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          bash scripts/verify-signed-release.sh output/release/candidate/release-candidate.json \
+            output/release/candidate/release-candidate.sigstore.json "$RELEASE_COMMIT" \
+            > output/release/signature-verification.json
+
+      - name: Validate the archived candidate's original successful CI attempt
+        if: inputs.candidate_source == 'server-archive'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+        run: |
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ && "$CANDIDATE_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_ATTEMPT" > output/release/run.json
+          node scripts/release-manifest.mjs verify-run output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID"
+
+      - name: Read the merged release schema and migrations
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_commit }}
+          path: release-source
+          persist-credentials: false
+
+      - name: Validate manifest, image digests, and migration checksums
+        id: release
+        env:
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          node scripts/release-manifest.mjs verify output/release/candidate/release-candidate.json \
+            output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" release-source
+          cp output/release/candidate/release-candidate.json output/release/deploy-candidate.json
+          cp output/release/candidate/release-candidate.sigstore.json output/release/deploy-candidate.sigstore.json
 
       - name: Run the entire release under one host lock
         timeout-minutes: 33
@@ -205,7 +253,7 @@ jobs:
           remote="$(printf 'bash -c %q -- %q' "$receiver" "$PRODUCTION_PATH")"
           # The token and optional administrator password are files in this
           # private stdin stream. No secret is interpolated into the SSH command.
-          tar -czf - -C "$payload" request.json manifest.json production-lock.sh production-release.sh \
+          tar -czf - -C "$payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
             production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh \
             | timeout --signal=TERM --kill-after=30s 32m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote"
 

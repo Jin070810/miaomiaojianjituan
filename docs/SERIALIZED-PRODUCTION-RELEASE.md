@@ -42,7 +42,7 @@ Nginx 正常更新使用 reload，避免每次无条件 restart。App/Worker 当
 
 GHCR token 和可选管理员密码仅通过私有 stdin 载荷传输，不出现在 SSH argv 或上传的证据中。环境文件不作为 shell 执行。原配置和候选配置位于 `.release-private/<attempt>/`，目录 700、文件 600；不进入 Git、Docker context 或 Actions artifact。该目录供故障恢复核对，清理前须由运维确认不再需要。备份数据也不上传到发布证据 artifact。
 
-成功清单的长期留存不等于已解决历史回滚来源。原 CI artifact 超过留存期仍会拒绝部署，旧 v1.11.0 等没有 manifest 的发布仍需独立可信基线方案。不得用旧容器 ID 截图替代候选 provenance。长期签名归档、首次回滚基线、候选预热和流量切换仍在全量实施范围内。
+已部署候选的 manifest 和签名 bundle 按原 CI run/attempt 成对留存，过期 artifact 可使用显式签名归档入口，仍需原成功 CI attempt 验证，见 [签名留存与恢复](SIGNED-RELEASE-ARCHIVE.md)。旧 v1.11.0 等没有 manifest 的发布仍需独立可信基线；不得用旧容器 ID 截图替代来源验证。首次基线、候选预热和流量切换仍在全量实施范围内。
 
 ## 验收
 

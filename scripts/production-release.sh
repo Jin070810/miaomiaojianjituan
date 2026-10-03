@@ -10,6 +10,8 @@ cd "$project_dir"
 umask 077
 request="$payload/request.json"
 manifest="$payload/manifest.json"
+attestation="$payload/attestation.json"
+[[ -s "$attestation" ]]
 jq -e '.schemaVersion == 1 and (.id | test("^[1-9][0-9]*-[1-9][0-9]*$"))
   and (.commit | test("^[a-f0-9]{40}$")) and (.actor | test("^[a-zA-Z0-9_-]+$"))
   and (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
@@ -28,7 +30,15 @@ jq -e --arg sha "$commit" --arg repo "${repository,,}" '
   and .images.worker.name == ("ghcr.io/" + $repo + "-worker")
   and all(.images[]; (.digest | test("^sha256:[a-f0-9]{64}$")) and (.configId | test("^sha256:[a-f0-9]{64}$")))
   and (.migrations | type == "array" and length > 0)
+  and (.ci.runId | tostring | test("^[1-9][0-9]*$"))
+  and (.ci.runAttempt | tostring | test("^[1-9][0-9]*$"))
 ' "$manifest" >/dev/null
+candidate_id="$(jq -r '.ci | (.runId|tostring)+"-"+(.runAttempt|tostring)' "$manifest")"
+retained="releases/$commit/candidates/$candidate_id"
+if [[ -e "$retained" ]]; then
+  cmp "$manifest" "$retained/release-candidate.json"
+  cmp "$attestation" "$retained/release-candidate.sigstore.json"
+fi
 
 mkdir -p releases/attempts .release-private
 chmod 700 .release-private
@@ -49,6 +59,7 @@ migrations_started=false
 completed=false
 previous_commit="$(timeout 15 git rev-parse HEAD)"
 cp "$manifest" "$record/manifest.json"
+cp "$attestation" "$record/attestation.json"
 jq -n --arg id "$release_id" --arg actor "$actor" --arg commit "$commit" --arg previous "$previous_commit" \
   --arg version "$(jq -r .version "$request")" --arg hash "$(sha256sum "$manifest" | cut -d' ' -f1)" \
   --arg at "$(date -u +%FT%TZ)" \
@@ -244,6 +255,12 @@ for kind in app worker; do
   timeout 15 docker tag "$ref" "miaomiao-points-$kind:production"
 done
 mkdir -p "releases/$commit"
+if [[ ! -d "$retained" ]]; then
+  mkdir -p "releases/$commit/candidates" "$private/retained"
+  cp "$manifest" "$private/retained/release-candidate.json"
+  cp "$attestation" "$private/retained/release-candidate.sigstore.json"
+  mv "$private/retained" "$retained"
+fi
 cp "$manifest" "releases/$commit/deploy-$release_id.json"
 if [[ -f "$record/previous.json" ]]; then cp "$record/previous.json" "releases/$commit/previous.json"; fi
 cp "$manifest" "$private/current.json"

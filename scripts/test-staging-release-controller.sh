@@ -62,9 +62,12 @@ export APP_IMAGE=ghcr.io/fixture/system-app WORKER_IMAGE=ghcr.io/fixture/system-
 export APP_DIGEST="$TEST_APP_ID" WORKER_DIGEST="$TEST_WORKER_ID" APP_CONFIG_ID="$TEST_APP_ID" WORKER_CONFIG_ID="$TEST_WORKER_ID"
 mkdir -p output/release
 node scripts/release-manifest.mjs create output/release/deploy-candidate.json .
+# This test enters the host controller after the runner trust boundary. The
+# signature orchestration and main-only real signing are tested separately.
+printf '{"syntheticHostFixture":true}\n' > output/release/deploy-candidate.sigstore.json
 node scripts/prepare-production-release.mjs "$fixture/payload"
 set +e
-tar -czf - -C "$fixture/payload" request.json manifest.json production-lock.sh production-release.sh \
+tar -czf - -C "$fixture/payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
   production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh |
   bash scripts/receive-production-release.sh "$project"
 status=$?

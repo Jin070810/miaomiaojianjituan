@@ -60,6 +60,7 @@ fixture() {
   mkdir -p "$TEST_PROJECT/certs" "$test_root/payload-$scenario"
   payload="$test_root/payload-$scenario"
   cp scripts/{production-lock,production-release,production-preflight,pull-release-images,backup-db,verify-release-health}.sh "$payload/"
+  printf '{"syntheticHostFixture":true}\n' > "$payload/attestation.json"
   printf 'test\n' > "$TEST_PROJECT/certs/fullchain.pem"
   printf 'test\n' > "$TEST_PROJECT/certs/privkey.pem"
   printf 'name: miaomiao-points\nservices: {}\n' > "$TEST_PROJECT/docker-compose.yml"
@@ -92,7 +93,7 @@ ENV
   chmod 600 "$TEST_PROJECT/.env.production"
   cp "$TEST_PROJECT/.env.production" "$test_root/old-env"
   jq -n --arg sha "$TEST_SHA" --arg id "$TEST_IMAGE_ID" \
-    '{schemaVersion:1,repository:"example/system",commit:$sha,migrations:[{path:"baseline/migration.sql",sha256:"123"}],
+    '{schemaVersion:1,repository:"example/system",commit:$sha,ci:{runId:"100",runAttempt:1},migrations:[{path:"baseline/migration.sql",sha256:"123"}],
       images:{app:{name:"ghcr.io/example/system-app",digest:$id,configId:$id},worker:{name:"ghcr.io/example/system-worker",digest:$id,configId:$id}}}' > "$payload/manifest.json"
   jq -n --arg sha "$TEST_SHA" \
     '{schemaVersion:1,id:"123-1",version:"v0.0.0",repository:"example/system",commit:$sha,actor:"fixture",domain:"example.invalid",
@@ -115,6 +116,7 @@ fixture
 if ! run_release; then cat "$test_root/run.log"; exit 1; fi
 jq -e '.status=="succeeded" and .phase=="completed" and .migrationsStarted' "$TEST_PROJECT/releases/active.json" >/dev/null
 [[ "$(jq -r .commit "$TEST_PROJECT/releases/current.json")" == "$TEST_SHA" ]]
+cmp "$payload/attestation.json" "$TEST_PROJECT/releases/$TEST_SHA/candidates/100-1/release-candidate.sigstore.json"
 [[ "$(stat -c '%a' "$TEST_PROJECT/.env.production")" == 600 ]]
 [[ "$(stat -c '%a' "$TEST_PROJECT/.release-private/123-1/env-before")" == 600 ]]
 [[ "$(jq -r .sha256 "$TEST_PROJECT/releases/attempts/123-1/backup.json")" =~ ^[a-f0-9]{64}$ ]]

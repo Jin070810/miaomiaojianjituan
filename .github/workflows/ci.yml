@@ -61,6 +61,7 @@ jobs:
       - run: bash scripts/test-publish-release-candidate.sh
       - run: bash scripts/test-release-health.sh
       - run: bash scripts/test-production-release.sh
+      - run: bash scripts/test-signed-release.sh
 
   # Full browser matrix now runs against these exact final images, once.
   # This replaces both host "next start" E2E and the second staging build.
@@ -237,6 +238,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -268,11 +271,26 @@ jobs:
           WORKER_CONFIG_ID: ${{ needs.staging.outputs.worker_id }}
           APP_BUILD_TIME: ${{ needs.staging.outputs.build_time }}
         run: bash scripts/publish-release-candidate.sh
+      - name: Attest the exact accepted release manifest
+        id: attestation
+        # actions/attest v4; pin the reviewed action implementation.
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: output/release/release-candidate.json
+      - name: Retain and verify the real signature before publishing a candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attestation.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE_PATH" output/release/release-candidate.sigstore.json
+          bash scripts/verify-signed-release.sh output/release/release-candidate.json \
+            output/release/release-candidate.sigstore.json "$GITHUB_SHA" > output/release/signature-verification.json
       - name: Preserve immutable release manifest
+        # Both bytes and provenance are retained; a copied JSON alone is insufficient.
         uses: actions/upload-artifact@v7
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: output/release/release-candidate.json
+          path: output/release/release-candidate*.json
           if-no-files-found: error
           retention-days: 90
       - name: Candidate summary

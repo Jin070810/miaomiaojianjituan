@@ -12,7 +12,7 @@ response_file="$(mktemp)"
 cleanup() {
   local status=$?
   trap - EXIT
-  timeout 45s docker compose start postgres redis worker >/dev/null || true
+  timeout 45s docker compose up -d --no-deps --no-build --pull never postgres redis worker >/dev/null || true
   rm -f "$response_file"
   exit "$status"
 }
@@ -43,14 +43,16 @@ wait_status /api/health/ready 200
 # that lease plus the health probe cache to expire without changing Redis data.
 wait_status /api/health 503 60
 jq -e '.worker != "ok" and .database == "ok" and .redis == "ok"' "$response_file" >/dev/null
-timeout 45s docker compose start worker
+# The migration ran as a removed one-off container. Restore only the tested
+# service; Compose start may otherwise try to resolve that missing dependency.
+timeout 45s docker compose up -d --no-deps --no-build --pull never worker
 verify_complete_health
 
 timeout 45s docker compose stop --timeout 15 redis
 wait_status /api/health/ready 503
 jq -e '.redis != "ok" and .database == "ok"' "$response_file" >/dev/null
 wait_status /api/health/live 200
-timeout 45s docker compose start redis
+timeout 45s docker compose up -d --no-deps --no-build --pull never redis
 wait_status /api/health/ready 200
 verify_complete_health
 
@@ -58,7 +60,7 @@ timeout 45s docker compose stop --timeout 15 postgres
 wait_status /api/health/ready 503
 jq -e '.database != "ok"' "$response_file" >/dev/null
 wait_status /api/health/live 200
-timeout 45s docker compose start postgres
+timeout 45s docker compose up -d --no-deps --no-build --pull never postgres
 wait_status /api/health/ready 200
 verify_complete_health
 echo 'PASS: Worker, Redis and PostgreSQL failures have independent health boundaries and recover'

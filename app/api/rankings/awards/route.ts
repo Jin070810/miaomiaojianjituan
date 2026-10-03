@@ -7,13 +7,15 @@ export async function GET() {
   const { db } = await import("@/lib/db");
   const awards = await db.rankingAward.findMany({
     where: { userId: user.id },
-    include: { gift: { select: { id: true, name: true, kind: true, imageUrl: true } }, period: true },
+    include: { gift: { select: { id: true, name: true, kind: true, imageUrl: true } }, period: true, adjustments: { where: { status: "PENDING" }, select: { kind: true } } },
     orderBy: { createdAt: "desc" },
     take: 20,
   });
   return NextResponse.json({
-    awards: awards.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...award }) => ({
+    awards: awards.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, adjustments = [], ...award }) => ({
       ...award,
+      frozen: adjustments.some((task) => task.kind === "FREEZE_UNPAID"),
+      adjustmentPending: adjustments.length > 0,
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
       hasCashQrCode: Boolean(cashQrCodeUrl),

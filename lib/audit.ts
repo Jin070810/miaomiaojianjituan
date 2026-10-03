@@ -38,6 +38,10 @@ const actionLabels: Record<string, string> = {
   RANKING_AWARD_CLAIMED: "填写榜单领奖信息",
   RANKING_AWARD_RECIPIENT_VIEWED: "查看榜单领奖资料",
   RANKING_AWARD_UPDATED: "更新榜单奖励",
+  RANKING_AWARD_FROZEN: "冻结榜单奖励",
+  RANKING_AWARD_ADJUSTMENT_OPENED: "建立已发榜单奖励调整待办",
+  RANKING_AWARD_ADJUSTMENT_RESOLVED: "处理榜单奖励调整",
+  RANKING_AWARD_CANCELLED: "取消未发榜单奖励",
   RANKING_SETTLED: "完成榜单结算",
   TRANSFER_COMPLETED: "完成积分转账",
   USER_REGISTERED: "注册账号",
@@ -88,6 +92,7 @@ const actionLabels: Record<string, string> = {
 };
 
 const entityLabels: Record<string, string> = {
+  RankingAwardAdjustment: "榜单奖励调整待办",
   Announcement: "公告",
   Authentication: "认证",
   Gift: "礼品",

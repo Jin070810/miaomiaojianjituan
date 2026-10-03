@@ -14,6 +14,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
+    { name: "ranking-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /ranking-adjustments\.spec\.ts/ },
+    { name: "ranking-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /ranking-adjustments\.spec\.ts/ },
     {
       name: "member-mobile",
       use: { viewport: { width: 390, height: 844 } },

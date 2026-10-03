@@ -226,6 +226,8 @@ type GrowthData = {
 };
 
 type MemberAward = {
+  frozen?: boolean;
+  adjustmentPending?: boolean;
   id: string;
   rank: number;
   value: number;
@@ -1286,12 +1288,12 @@ function RankView({ data }: { data: DashboardData }) {
       </section>
       {awards.length > 0 && (
         <section className="journal-section award-section">
-          <div className="journal-section-heading ruled"><h2>我的榜单奖励</h2><span>{awards.filter((award) => award.status === "PENDING").length} 份待领取</span></div>
+          <div className="journal-section-heading ruled"><h2>我的榜单奖励</h2><span>{awards.filter((award) => award.status === "PENDING" && !award.frozen).length} 份待领取</span></div>
           <div className="journal-menu">
             {awards.map((award) => (
-              <button key={award.id} disabled={award.status !== "PENDING"} onClick={() => setSelectedAward(award)}>
+              <button key={award.id} disabled={award.status !== "PENDING" || award.frozen} onClick={() => setSelectedAward(award)}>
                 <span><Trophy size={19} />{award.period.type === "WEEK" ? "周榜" : "月榜"}第 {award.rank} 名 · 榜单奖励</span>
-                <span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "填写信息" : award.status === "CLAIMED" ? "待发放" : "已完成"}</span>
+                <span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.frozen ? "已冻结待核实" : award.adjustmentPending ? "已发待核实" : award.status === "PENDING" ? "填写信息" : award.status === "CLAIMED" ? "待发放" : award.status === "EXPIRED" ? "已取消或过期" : "已完成"}</span>
               </button>
             ))}
           </div>

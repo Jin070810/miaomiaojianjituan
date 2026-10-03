@@ -154,6 +154,8 @@ Worker 的累计重试预算保存在数据库中，恢复扫描不会无限补�
 
 ## 数据安全
 
+视频撤销后的历史榜单、冻结奖励和已发奖励审计调整规则见 [`docs/RANKING-REVOCATION-POLICY.md`](docs/RANKING-REVOCATION-POLICY.md)。结算保存规则与贡献快照，旧周期保留证据缺失标记；发布前需完成新增 migration 的生产副本演练。
+
 - 密码使用 Argon2id，Session 使用 HttpOnly、Secure（生产环境）和 SameSite Cookie。
 - 手机号使用 AES-256-GCM 加密保存。
 - 转账、兑换和视频入账在数据库事务内完成，余额使用条件更新防止并发超扣。

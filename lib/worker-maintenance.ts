@@ -5,6 +5,7 @@ import { runWeeklyChallengeMaintenance } from "./weekly-challenge-generation";
 import { runMemberClearanceMaintenance } from "./member-clearance";
 import { runMemberGrowthMonthlyMaintenance } from "./member-achievements";
 import { runBirthdayMaintenance } from "./birthdays";
+import { enqueueStaleAchievementProjections } from "./member-achievement-jobs";
 
 type MaintenanceTask<T> = {
   name: string;
@@ -19,7 +20,7 @@ export type WorkerMaintenanceCycleResult = {
   failures: Array<{ name: string; source: string; error: string }>;
 };
 
-// Worker 每分钟的维护循环：六个子系统彼此独立，任何一个抛错都不应吞掉其余
+// Worker 每分钟的维护循环：各子系统彼此独立，任何一个抛错都不应吞掉其余
 // 结果或让当分钟的周挑战补跑丢失。告警按任务自身的来源上报，而不是统一算在
 // 视频链路头上。
 export async function runWorkerMaintenanceCycle(): Promise<WorkerMaintenanceCycleResult> {
@@ -29,6 +30,7 @@ export async function runWorkerMaintenanceCycle(): Promise<WorkerMaintenanceCycl
     { name: "weekly-challenge", source: "weekly-challenge-worker", run: () => runWeeklyChallengeMaintenance() },
     { name: "member-clearance", source: "member-clearance", run: () => runMemberClearanceMaintenance() },
     { name: "member-growth", source: "member-achievements", run: () => runMemberGrowthMonthlyMaintenance() },
+    { name: "achievement-repair", source: "member-achievements", run: () => enqueueStaleAchievementProjections() },
     { name: "birthday", source: "birthday", run: () => runBirthdayMaintenance() },
   ];
   const settled = await Promise.allSettled(tasks.map((task) => task.run()));

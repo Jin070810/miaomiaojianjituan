@@ -17,7 +17,7 @@ export default defineConfig({
     {
       name: "member-mobile",
       use: { viewport: { width: 390, height: 844 } },
-      testMatch: [/member-weekly-challenge\.spec\.ts/, /member-growth\.spec\.ts/],
+      testMatch: [/member-weekly-challenge\.spec\.ts/, /member-growth\.spec\.ts/, /achievement-projection\.spec\.ts/],
     },
     {
       name: "member-android-320",
@@ -62,7 +62,7 @@ export default defineConfig({
     {
       name: "member-growth-desktop",
       use: { viewport: { width: 1440, height: 900 } },
-      testMatch: /member-growth\.spec\.ts/,
+      testMatch: [/member-growth\.spec\.ts/, /achievement-projection\.spec\.ts/],
     },
     {
       name: "admin-desktop",

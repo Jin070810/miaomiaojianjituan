@@ -156,6 +156,7 @@ jobs:
       ADMIN_NICKNAME: Staging Health Admin
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
+      SESSION_COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -166,13 +167,18 @@ jobs:
         run: |
           database_password="$(openssl rand -hex 24)"
           admin_password="Staging-$(openssl rand -hex 16)"
+          session_secret="$(openssl rand -hex 32)"
+          phone_encryption_key="$(openssl rand -hex 32)"
+          for value in "$database_password" "$admin_password" "$session_secret" "$phone_encryption_key"; do
+            echo "::add-mask::$value"
+          done
           {
             echo "APP_BUILD_TIME=$(date -u --iso-8601=seconds)"
             echo "POSTGRES_PASSWORD=$database_password"
             echo "DOCKER_DATABASE_URL=postgresql://staging_admin:$database_password@postgres:5432/miaomiao_staging?schema=public"
             echo "DATABASE_URL=postgresql://staging_admin:$database_password@127.0.0.1:5433/miaomiao_staging?schema=public"
-            echo "SESSION_SECRET=$(openssl rand -hex 32)"
-            echo "PHONE_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "SESSION_SECRET=$session_secret"
+            echo "PHONE_ENCRYPTION_KEY=$phone_encryption_key"
             echo "ADMIN_PASSWORD=$admin_password"
           } >> "$GITHUB_ENV"
       - name: Build staging App image
@@ -224,10 +230,13 @@ jobs:
           npx playwright test
           tests/e2e/admin-responsive.spec.ts
           tests/e2e/birthday-system.spec.ts
+          tests/e2e/achievement-projection.spec.ts
           --project=admin-desktop
           --project=admin-mobile
           --project=birthday-desktop
           --project=birthday-mobile
+          --project=member-mobile
+          --project=member-growth-desktop
       - name: Collect staging container evidence
         if: always()
         run: |

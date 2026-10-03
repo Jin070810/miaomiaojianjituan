@@ -7,7 +7,8 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   try {
     return NextResponse.json(await getMemberAchievements(user.id), { headers: { "Cache-Control": "private, no-store" } });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "成长档案加载失败" }, { status: 500 });
+  } catch {
+    console.error("[member-achievements] archive read unavailable");
+    return NextResponse.json({ error: "成长档案暂时不可用，请稍后重试" }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
   }
 }

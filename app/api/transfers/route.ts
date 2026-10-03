@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
@@ -15,7 +16,7 @@ const schema = z.object({
   note: z.string().trim().max(200).optional(),
 }).refine((input) => Boolean(input.receiverKuaishouId) !== Boolean(input.receiverId), "请选择一位转入成员");
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await currentUser();
@@ -64,3 +65,5 @@ export async function GET(request: Request) {
   });
   return NextResponse.json({ transfers, pagination: paginationResult(page, take, total) });
 }
+
+export const POST = observeApi("transfers_post", handlePOST);

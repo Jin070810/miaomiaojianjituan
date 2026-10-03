@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { requestContext } from "./request-context";
 import { LedgerType, Prisma, PrismaClient, Role } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { calculateVideoPoints } from "./kuaishou";
@@ -690,6 +691,7 @@ export async function creditVideoReward(input: {
       data: {
         actorId: input.actorId,
         action: "VIDEO_APPROVED",
+        requestId: requestContext.getStore()?.id,
         entity: "VideoSubmission",
         entityId: video.id,
         beforeValue: { status: video.status, points: video.points },

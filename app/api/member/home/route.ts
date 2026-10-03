@@ -1,9 +1,10 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { memberParticipantRoles } from "@/lib/member-roles";
 
-export async function GET() {
+async function handleGET() {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
@@ -78,3 +79,5 @@ export async function GET() {
     } : { registered: false, effective: false, pendingEffectiveAt: null, visibleOnWall: false, benefit: null },
   });
 }
+
+export const GET = observeApi("home_get", handleGET);

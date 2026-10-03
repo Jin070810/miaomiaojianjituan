@@ -1,5 +1,7 @@
 "use client";
 
+import "../admin/admin-theme.css";
+
 import { AlertTriangle, ArrowLeft, ChevronDown, ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";

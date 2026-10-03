@@ -19,6 +19,16 @@ export default defineConfig({
     { name: "bindings-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /platform-bindings\.spec\.ts/ },
     { name: "bindings-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /platform-bindings\.spec\.ts/ },
     {
+      name: "member-loading-mobile",
+      use: { viewport: { width: 390, height: 844 } },
+      testMatch: /member-loading\.spec\.ts/,
+    },
+    {
+      name: "member-loading-desktop",
+      use: { viewport: { width: 1440, height: 900 } },
+      testMatch: /member-loading\.spec\.ts/,
+    },
+    {
       name: "member-mobile",
       use: { viewport: { width: 390, height: 844 } },
       testMatch: [/member-weekly-challenge\.spec\.ts/, /member-growth\.spec\.ts/, /achievement-projection\.spec\.ts/],

@@ -73,10 +73,11 @@ services:
       # 正式环境由 Nginx 反向代理，应用端口不直接对公网开放。
       - "127.0.0.1:3000:3000"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      test: ["CMD", "wget", "-qO-", "-T", "4", "-t", "1", "http://127.0.0.1:3000/api/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *default-logging

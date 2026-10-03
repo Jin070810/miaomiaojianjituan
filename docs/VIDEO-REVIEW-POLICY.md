@@ -15,3 +15,5 @@
 无数据库结构迁移或历史重写。发布时 Web 和 Worker 必须同时晋级同一批准版本，确认旧 Worker 已排空退出，避免旧进程继续创建已停用二审任务。回退旧版本会恢复二审流程，应优先前向修复。历史验收文档仅描述当时行为，以此约定及 AGENTS.md 为当前规则。
 
 验收覆盖不创建二审、自审入口失效、所有旧二审写入无副作用、纠错撤销保留历史、申诉并发单次入账，以及桌面/手机历史查询、加载、失败、空数据和只读状态。CI/staging 与维护者自审通过前，不表示已上线。
+
+容器 staging 在本机 HTTP 地址验收时显式设置 SESSION_COOKIE_SECURE=false，使浏览器和 Playwright API 请求使用一致的 Cookie 规则。Compose 默认仍为 true，正式 HTTPS 环境保持 Secure Cookie。

@@ -64,7 +64,9 @@ test("admin handles appeals without loading or processing secondary reviews", as
   await expect(page.getByText("暂无待复查申诉")).toBeVisible();
   expect(await db.pointLedger.count({ where: { referenceId: appealVideoId, type: "VIDEO_REWARD" } })).toBe(1);
   expect(await db.videoSecondaryReview.count({ where: { videoId: appealVideoId } })).toBe(0);
-  const metrics = (await (await page.request.get("/api/admin/dashboard")).json()).metrics;
+  const metricsResponse = await page.request.get("/api/admin/dashboard");
+  expect(metricsResponse.status()).toBe(200);
+  const metrics = (await metricsResponse.json()).metrics;
   expect(metrics.pendingVideos).toBe(metrics.pendingAppeals);
   expect(metrics.pendingSecondaryReviews).toBe(0);
   const retired = await page.request.post(`/api/reviewer/video-reviews/${legacyReviewId}`, { data: { action: "reject", reason: "旧客户端请求" } });

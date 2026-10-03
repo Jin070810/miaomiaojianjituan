@@ -84,6 +84,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts"
+      - name: Verify pruned Worker runtime and migration tools
+        run: |
+          mkdir -p output/worker-runtime
+          docker image inspect miaomiao-points-worker:ci --format '{{.Size}}' > output/worker-runtime/image-bytes.txt
+          docker run --rm -e DATABASE_URL='postgresql://smoke:smoke@127.0.0.1:1/isolated?schema=public' --entrypoint sh miaomiao-points-worker:ci -ec '
+            node --import tsx scripts/verify-worker-runtime.mjs
+            ./node_modules/.bin/prisma --version
+            ./node_modules/.bin/prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > /tmp/schema.sql
+            test -s /tmp/schema.sql
+            curl --version
+          ' | tee output/worker-runtime/smoke.txt
+          docker run --rm --entrypoint npm miaomiao-points-worker:ci audit --omit=dev --audit-level=high
+      - name: Upload Worker runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-runtime-evidence
+          path: output/worker-runtime/
       - run: bash scripts/test-pull-release-images.sh
 
   e2e:

@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     const periods = await db.rankingPeriod.findMany({
       include: {
         entries: { orderBy: { rank: "asc" }, take: 100, include: { user: { select: { kuaishouId: true, nickname: true } } } },
-        awards: { orderBy: { rank: "asc" }, include: { gift: true, user: { select: { kuaishouId: true, nickname: true } } } },
+        awards: { orderBy: { rank: "asc" }, include: { gift: true, user: { select: { kuaishouId: true, nickname: true } }, adjustments: { where: { status: "PENDING" }, select: { kind: true } } } },
       },
       orderBy: { periodStart: "desc" },
       take: 120,
@@ -39,14 +39,18 @@ export async function GET(request: Request) {
         ...period,
         preview: previewById.get(period.id)?.rankings ?? [],
         settleable: candidateIds.has(period.id),
-        awards: period.awards.map(({ recipientName, recipientPhoneEnc, recipientAddressEnc, ...award }) => summaryView ? ({
+        awards: period.awards.map(({ recipientName, recipientPhoneEnc, recipientAddressEnc, adjustments = [], ...award }) => summaryView ? ({
           ...award,
+          frozen: adjustments.some((task) => task.kind === "FREEZE_UNPAID"),
+          adjustmentPending: adjustments.length > 0,
           recipientName: null,
           recipientPhone: null,
           recipientAddress: null,
           hasRecipientDetails: Boolean(recipientName && recipientPhoneEnc && recipientAddressEnc),
         }) : ({
           ...award,
+          frozen: adjustments.some((task) => task.kind === "FREEZE_UNPAID"),
+          adjustmentPending: adjustments.length > 0,
           recipientName,
           recipientPhone: recipientPhoneEnc ? decryptSensitive(recipientPhoneEnc) : null,
           recipientAddress: recipientAddressEnc ? decryptSensitive(recipientAddressEnc) : null,

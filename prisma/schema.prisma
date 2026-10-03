@@ -747,10 +747,13 @@ model RankingPeriod {
   periodEnd   DateTime
   status      RankingPeriodStatus @default(OPEN)
   settledAt   DateTime?
+  ruleSnapshot Json?
+  contributionsCapturedAt DateTime?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
   entries     RankingEntry[]
   awards      RankingAward[]
+  contributions RankingContribution[]
 
   @@unique([type, periodStart])
   @@index([type, status, periodStart])
@@ -792,10 +795,49 @@ model RankingAward {
   period              RankingPeriod      @relation(fields: [periodId], references: [id], onDelete: Cascade)
   user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   gift                Gift?              @relation(fields: [giftId], references: [id], onDelete: SetNull)
+  adjustments         RankingAwardAdjustment[]
 
   @@unique([periodId, userId])
   @@unique([periodId, rank])
   @@index([userId, status])
+}
+
+// Immutable settlement evidence: source IDs intentionally remain scalar so a
+// later source deletion cannot silently erase the historical contribution.
+model RankingContribution {
+  periodId    String
+  videoId     String
+  userId      String
+  likes       Int
+  submittedAt DateTime
+  period      RankingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@id([periodId, videoId])
+  @@index([videoId, periodId])
+  @@index([periodId, userId])
+}
+
+model RankingAwardAdjustment {
+  id             String       @id @default(cuid())
+  awardId        String
+  videoId        String
+  kind           String
+  status         String       @default("PENDING")
+  source         String
+  videoSnapshot  Json
+  awardSnapshot  Json
+  reason         String
+  createdById    String
+  createdAt      DateTime     @default(now())
+  resolution     String?
+  resolutionNote String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  award          RankingAward @relation(fields: [awardId], references: [id], onDelete: Cascade)
+
+  @@unique([awardId, videoId])
+  @@index([status, createdAt])
+  @@index([awardId, kind, status])
 }
 
 model Announcement {

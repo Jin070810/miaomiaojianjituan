@@ -1,3 +1,5 @@
+import { lockRankingPeriod } from "./ranking-period";
+import { protectRankingsAfterVideoRevocation } from "./ranking-adjustments";
 import { db } from "./db";
 import { LedgerType, Prisma, PrismaClient, Role } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
@@ -542,6 +544,8 @@ async function revokeApprovedVideoInTransaction(
   const video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: input.videoId } });
   if (video.status === "REVOKED") return video;
   if (video.status !== "APPROVED") throw new Error("只有已到账视频可以撤销");
+  await lockRankingPeriod(tx, "week", video.submittedAt);
+  await lockRankingPeriod(tx, "month", video.submittedAt);
   const claimed = await tx.videoSubmission.updateMany({
     where: { id: video.id, status: "APPROVED" },
     data: { status: "REVOKED", reviewReason: input.reason, reviewedAt: new Date() },
@@ -550,6 +554,7 @@ async function revokeApprovedVideoInTransaction(
   if (video.points > 0) {
     await debitCompensating(tx, video.userId, video.points, "REVERSAL", video.id, `撤销视频奖励：${input.reason}`);
   }
+  await protectRankingsAfterVideoRevocation(tx, { video, actorId: input.actorId, reason: input.reason, ip: input.ip });
   const birthdayBonusReversed = await revokeBirthdayVideoBonus(tx, {
     userId: video.userId,
     videoId: video.id,

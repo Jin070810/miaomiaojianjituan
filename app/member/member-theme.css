@@ -3867,6 +3867,8 @@
 .achievement-review-card aside b { color: #39804c; }
 .achievement-local-state { display: grid; min-height: 320px; place-content: center; gap: 12px; color: #786d87; text-align: center; }
 .achievement-local-state.is-error { color: #a7494f; }
+.achievement-summary.is-pending { padding: 20px; }
+.achievement-local-state.achievement-projection-notice { min-height: 0; padding: 16px; background: #f5f1ff; border-radius: 14px; }
 
 @media (max-width: 620px) {
   .achievement-summary { min-height: 110px; padding-left: 92px; }

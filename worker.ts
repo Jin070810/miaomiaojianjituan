@@ -15,6 +15,7 @@ import {
   ensureWeeklyChallengeScheduler,
 } from "./lib/weekly-challenge-jobs";
 import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "./lib/member-clearance-operations";
+import { startMemberAchievementRefreshWorker } from "./lib/member-achievement-worker";
 
 const worker = new Worker("kuaishou-video", async (job) => {
   await processVideoSubmission(job.data.videoId);
@@ -74,6 +75,7 @@ let closing = false;
 let maintenanceRunning = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let stopAchievementRefresh: (() => Promise<void>) | null = null;
 
 async function maintenance() {
   if (closing || maintenanceRunning) return;
@@ -160,6 +162,7 @@ async function start() {
   await ensureWeeklyChallengeScheduler();
   await Promise.all([worker.waitUntilReady(), weeklyChallengeWorker.waitUntilReady()]);
   console.log("[video-worker] listening");
+  stopAchievementRefresh = startMemberAchievementRefreshWorker();
   await Promise.all([maintenance(), heartbeat()]);
   maintenanceTimer = setInterval(() => void maintenance(), 60_000);
   heartbeatTimer = setInterval(() => void heartbeat(), 15_000);
@@ -173,7 +176,7 @@ async function shutdown(signal: string) {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   // 先等队列任务排空，再清除心跳：滚动发布期间健康检查不应在活跃任务尚未
   // 完成时就把 Worker 判死。
-  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close()]);
+  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), stopAchievementRefresh?.()]);
   await Promise.allSettled([
     closeWeeklyChallengeQueue(),
     closeWorkerHealth(),

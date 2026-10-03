@@ -238,6 +238,7 @@ model User {
   rejoinRequests                   RejoinRequest[]
   reviewedRejoinRequests           RejoinRequest[]                    @relation("RejoinReviewer")
   growthProfile                    MemberGrowthProfile?
+  achievementRefresh               MemberAchievementRefresh?
   achievements                     MemberAchievement[]
   monthlyGoals                     MemberMonthlyGoal[]
   monthlyReviews                   MemberMonthlyReview[]
@@ -462,6 +463,7 @@ model VideoSubmission {
   @@index([status, submittedAt])
   @@index([photoId, status])
   @@index([userId, birthdayBenefitYear])
+  @@index([userId, status, likes(sort: Desc), views(sort: Desc), submittedAt(sort: Desc)], map: "VideoSubmission_achievement_highlights_idx")
 }
 
 model VideoSecondaryReview {
@@ -556,6 +558,23 @@ model MemberGrowthProfile {
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+model MemberAchievementRefresh {
+  userId            String    @id
+  generation        BigInt    @default(1)
+  appliedGeneration BigInt    @default(0)
+  pending           Boolean   @default(true)
+  requestedAt       DateTime  @default(now())
+  availableAt       DateTime  @default(now())
+  leaseToken        String?
+  leaseExpiresAt    DateTime?
+  failures          Int       @default(0)
+  lastFailureCode   String?
+  completedAt       DateTime?
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([pending, availableAt, requestedAt])
+}
+
 model MemberAchievement {
   id        String   @id @default(cuid())
   userId    String
@@ -578,6 +597,9 @@ model MemberMonthlyGoal {
   targetVideos       Int
   targetEngagement   Int
   completedAt        DateTime?
+  progressVideos     Int       @default(0)
+  progressEngagement Int       @default(0)
+  calculatedAt       DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)

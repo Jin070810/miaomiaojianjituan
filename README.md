@@ -25,6 +25,8 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 正式发布由 GitHub Actions 校验已合并的 release commit，在隔离的 Actions runner 构建 App/Worker 镜像并推送 GHCR。生产服务器只按不可变 digest 拉取镜像并校验 OCI revision，不执行应用构建；镜像验证成功后才生成发布前备份、执行 migration、切换 Web/Worker 并刷新 Nginx。详细设计和耗时目标见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)。
 
+成员端商品图片与头像使用独立版本 URL 缓存，礼物屋按分类和全局排序分页加载；私密收款码保持原权限链路。兼容范围、测试与回滚见 [公开图片缓存与商品分页](docs/PUBLIC-IMAGE-DELIVERY.md)。
+
 ## 快手与抖音视频抓取
 
 成员可以粘贴快手或抖音的短链接、长链接或包含链接的分享文本。快手仍使用页面源码抓取；抖音短链先由 Worker 内置 Chromium 完成跳转，再监听抖音页面返回的公开视频详情/作品列表接口，从目标 `aweme_id` 对应对象的 `statistics.digg_count` 读取精确点赞数。页面上的“1.9万”等展示缩写不会直接用于积分计算，未拿到精确详情时会自动驳回，避免近似数据入账。

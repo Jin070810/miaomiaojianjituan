@@ -14,6 +14,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
+    { name: "catalog-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /gift-catalog\.spec\.ts/ },
+    { name: "catalog-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /gift-catalog\.spec\.ts/ },
     {
       name: "member-mobile",
       use: { viewport: { width: 390, height: 844 } },

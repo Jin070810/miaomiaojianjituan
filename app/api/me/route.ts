@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { publicAvatarUrl } from "@/lib/public-images";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse } from "@/lib/security";
 
@@ -24,7 +25,7 @@ function safeUser(user: {
     id: user.id,
     kuaishouId: user.kuaishouId,
     nickname: user.nickname,
-    avatarUrl: user.avatarUrl,
+    avatarUrl: publicAvatarUrl(user),
     role: user.role,
     guildStatus: user.guildStatus,
     invited: user.invited,

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
+import { withPublicGiftImage } from "@/lib/public-images";
 
 export async function GET() {
   const user = await currentUser();
@@ -14,6 +15,7 @@ export async function GET() {
   return NextResponse.json({
     awards: awards.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...award }) => ({
       ...award,
+      gift: award.gift ? withPublicGiftImage(award.gift) : null,
       hasRecipientPhone: Boolean(recipientPhoneEnc),
       hasRecipientAddress: Boolean(recipientAddressEnc),
       hasCashQrCode: Boolean(cashQrCodeUrl),

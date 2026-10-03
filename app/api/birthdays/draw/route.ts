@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { drawBirthdayPrize } from "@/lib/birthdays";
+import { withPublicGiftImage } from "@/lib/public-images";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
       status: prize.status,
       fallback: prize.fallback,
       claimExpiresAt: prize.claimExpiresAt,
-      gift: prize.gift ? { id: prize.gift.id, name: prize.gift.name, kind: prize.gift.kind, imageUrl: prize.gift.imageUrl } : null,
+      gift: prize.gift ? withPublicGiftImage({ id: prize.gift.id, name: prize.gift.name, kind: prize.gift.kind, imageUrl: prize.gift.imageUrl }) : null,
     } });
   } catch (error) {
     const limited = rateLimitResponse(error);

@@ -3882,3 +3882,12 @@
   .achievement-review-card { display: block; }
   .achievement-review-card aside { margin-top: 13px; }
 }
+
+/* Paged gift catalogue: keep filters and retry/paging controls touch friendly. */
+.mall-catalog .gift-sort-toolbar button,
+.mall-catalog .category-tabs button,
+.mall-catalog .journal-outline-button { min-height: 44px; }
+.mall-catalog .gift-pagination { display: grid; justify-items: center; gap: 12px; padding: 24px 0 36px; }
+.mall-catalog .gift-pagination p { margin: 0; color: var(--ink-soft); }
+.mall-catalog .member-inline-error { padding: 16px 0; overflow-wrap: anywhere; }
+.mall-catalog .mall-journal-hero .journal-record-link { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: #fffaf1; color: var(--ink); }

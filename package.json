@@ -60,7 +60,8 @@
     "prisma": "^6.8.2",
     "tsx": "^4.19.4",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.4"
+    "vitest": "4.1.11",
+    "vite": "7.3.6"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.0",

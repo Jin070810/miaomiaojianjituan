@@ -6,9 +6,10 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, ".") },
   },
   test: {
+    dir: "tests",
     environment: "node",
     clearMocks: true,
     fileParallelism: false,
-    exclude: ["tests/e2e/**", "node_modules/**"],
+    exclude: ["**/e2e/**", "**/node_modules/**"],
   },
 });

@@ -4,7 +4,7 @@
 
 ## 本地运行
 
-1. 安装依赖：`npm install`
+1. 使用 Node.js 22 安装锁定依赖：`npm ci`。测试工具链版本与安全检查见 [`docs/TEST-DEPENDENCY-SECURITY.md`](docs/TEST-DEPENDENCY-SECURITY.md)。
 2. 复制 `.env.example` 为 `.env`，设置 `DATABASE_URL`、`SESSION_SECRET` 和 32 字节的 `PHONE_ENCRYPTION_KEY`。
 3. 启动 PostgreSQL 与 Redis：`docker compose up -d postgres redis`
 4. 初始化数据库：`npm run db:deploy`

@@ -55,6 +55,8 @@ jobs:
           RUN_DB_TESTS: "1"
       - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
+      - name: Audit test and development dependencies
+        run: npm audit --audit-level=moderate
       - run: docker compose config --quiet
       - run: node --test scripts/test-release-manifest.mjs
       - run: bash scripts/test-pull-release-images.sh

@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import { currentRequestId, requestContext } from "./request-context";
 import { Prisma } from "@prisma/client";
 import { db } from "./db";
 import { fetchKuaishouVideo } from "./kuaishou-fetch";
@@ -69,6 +70,7 @@ async function autoRejectVideoWithTx(
   await tx.auditLog.create({
     data: {
       action: "VIDEO_AUTO_REJECTED",
+      requestId: requestContext.getStore()?.id,
       entity: "VideoSubmission",
       entityId: videoId,
       beforeValue: {
@@ -316,7 +318,7 @@ export async function enqueueVideo(videoId: string, options: { retryFailed?: boo
     if (state !== "failed" && state !== "completed") return false;
     await existing.remove();
   }
-  await videoQueue.add("fetch", { videoId }, {
+  await videoQueue.add("fetch", { videoId, requestId: currentRequestId() }, {
     jobId,
     attempts: Math.max(1, VIDEO_MAX_ATTEMPTS - (video.processingState?.attempts ?? 0)),
     delay: Math.max(0, (video.processingState?.nextAttemptAt.getTime() ?? 0) - Date.now()),

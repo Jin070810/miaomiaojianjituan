@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
@@ -25,7 +26,7 @@ const schema = z.object({
   }).optional(),
 });
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await currentUser();
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const { page, take, skip } = parsePagination(new URL(request.url), 50, 100);
@@ -58,3 +59,7 @@ export async function GET(request: Request) {
     pagination: paginationResult(page, take, total),
   });
 }
+
+export const GET = observeApi("redemptions_get", handleGET);
+
+export const POST = observeApi("redemptions_post", handlePOST);

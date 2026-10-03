@@ -177,6 +177,8 @@ Worker 的累计重试预算保存在数据库中，恢复扫描不会无限补�
 
 ## 验证命令
 
+管理员可从后台菜单打开“性能观测”，查看主要 API、抽样页面体验、查询耗时、锁等待、队列和进程资源。采样比例、数据隐私、统计区间和诊断步骤见 [性能观测说明](docs/PERFORMANCE-OBSERVABILITY.md)；缺失样本不代表系统健康。
+
 ```powershell
 npm run lint
 npm test

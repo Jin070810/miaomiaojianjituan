@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { PerformanceReporter } from "./performance-reporter";
 import "./globals.css";
 import "./member/member-theme.css";
 
@@ -21,7 +22,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>{children}<PerformanceReporter /></body>
     </html>
   );
 }

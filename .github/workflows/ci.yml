@@ -153,6 +153,25 @@ jobs:
         run: |
           docker run --rm --entrypoint sh miaomiao-points-worker:production -c 'test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts'
           docker run --rm --entrypoint sh miaomiao-points-app:production -c 'test "$(id -u)" != 0 && touch .next/cache/ci-write-check && rm .next/cache/ci-write-check'
+      - name: Verify pruned Worker runtime and migration tools
+        run: |
+          mkdir -p output/worker-runtime
+          docker image inspect miaomiao-points-worker:production --format '{{.Size}}' > output/worker-runtime/image-bytes.txt
+          docker run --rm -e DATABASE_URL='postgresql://smoke:smoke@127.0.0.1:1/isolated?schema=public' --entrypoint sh miaomiao-points-worker:production -ec '
+            node --import tsx scripts/verify-worker-runtime.mjs
+            ./node_modules/.bin/prisma --version
+            ./node_modules/.bin/prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > /tmp/schema.sql
+            test -s /tmp/schema.sql
+            curl --version
+          ' | tee output/worker-runtime/smoke.txt
+          docker run --rm --entrypoint npm miaomiao-points-worker:production audit --omit=dev --audit-level=high
+      - name: Upload Worker runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-runtime-evidence
+          path: output/worker-runtime/
+      - run: bash scripts/test-pull-release-images.sh
       - name: Start dependencies and migrate the isolated database
         run: |
           docker compose up -d --wait --wait-timeout 90 postgres redis
@@ -172,7 +191,8 @@ jobs:
         run: npx playwright install --with-deps chromium webkit
       - name: Full E2E against candidate containers
         env:
-          PLAYWRIGHT_EVIDENCE_DIR: ${{ runner.temp }}
+          PLAYWRIGHT_EVIDENCE_DIR: ${{ runner.temp }}/miaomiao-acceptance
+          PERFORMANCE_EVIDENCE_DIR: ${{ runner.temp }}/miaomiao-performance
         run: npm run test:e2e
       - name: Reconcile staging and recheck candidate health
         run: |
@@ -234,8 +254,9 @@ jobs:
           name: staging-acceptance-${{ github.run_attempt }}
           path: |
             output/playwright/
-            ${{ runner.temp }}/miaomiao-platform-bindings/
+            ${{ runner.temp }}/miaomiao-acceptance/
             ${{ runner.temp }}/miaomiao-gift-catalog/
+            ${{ runner.temp }}/miaomiao-performance/
           if-no-files-found: error
           retention-days: 14
       - name: Tear down isolated staging

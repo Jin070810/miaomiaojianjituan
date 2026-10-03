@@ -1,6 +1,8 @@
 import { DelayedError, Worker } from "bullmq";
 import "dotenv/config";
 import { closeDouyinBrowser, closeVideoQueue, connection, processVideoSubmission } from "./lib/video-jobs";
+import { currentRequestId, requestContext, safeRequestId } from "./lib/request-context";
+import { recordPerformance, recordProcessResources, closePerformanceStore } from "./lib/performance-store";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
 import { sendOperationalAlert } from "./lib/alerts";
@@ -25,10 +27,11 @@ const watchdogTimer = process.env.MIAOMIAO_WORKER_SUPERVISED === "1" && process.
 watchdogTimer?.unref();
 
 const worker = new Worker("kuaishou-video", async (job, token) => {
+  void recordPerformance("video_queue_age", Math.max(0, Date.now() - job.timestamp));
   try {
-    await processVideoSubmission(job.data.videoId, {
+    await requestContext.run({ id: safeRequestId(job.data.requestId) ?? currentRequestId() }, () => processVideoSubmission(job.data.videoId, {
       finalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
-    });
+    }));
   } catch (error) {
     if (error instanceof VideoProcessingDeferredError) {
       await job.moveToDelayed(Math.max(Date.now() + 100, error.retryAt.getTime()), token);
@@ -42,6 +45,7 @@ const worker = new Worker("kuaishou-video", async (job, token) => {
 });
 
 const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
+  void recordPerformance("weekly_queue_age", Math.max(0, Date.now() - job.timestamp));
   if (job.name === "scheduled-generate") {
     const maintenance = await runWeeklyChallengeMaintenance();
     if (!maintenance.generationDue || !maintenance.periodStart) return;
@@ -63,10 +67,10 @@ const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
   concurrency: 1,
 });
 
-worker.on("completed", (job) => console.log(`[video-worker] completed ${job.id}`));
+worker.on("completed", (job) => console.log(JSON.stringify({ event: "video_completed", jobId: job.id, requestId: safeRequestId(job.data.requestId) })));
 worker.on("failed", (job, error) => {
   console.error(`[video-worker] failed ${job?.id}`, error);
-  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, error: error.message } });
+  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, requestId: safeRequestId(job?.data.requestId), error: error.message } });
 });
 worker.on("error", (error) => {
   console.error("[video-worker] redis error", error);
@@ -179,6 +183,7 @@ async function maintenance() {
 async function heartbeat() {
   if (heartbeatRunning) return;
   heartbeatRunning = true;
+  void recordProcessResources("worker");
   try {
     await writeWorkerHeartbeat(closing ? "draining" : "running");
   } catch (error) {
@@ -225,6 +230,7 @@ async function shutdown(signal: string, exitCode = 0) {
     closeDouyinBrowser(),
     db.$disconnect(),
   ]);
+  closePerformanceStore();
   if (watchdogTimer) clearInterval(watchdogTimer);
   process.exit(exitCode);
 }

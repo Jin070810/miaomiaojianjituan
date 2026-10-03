@@ -1,8 +1,9 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { getCurrentWeeklyChallenge } from "@/lib/weekly-challenges";
 
-export async function GET() {
+async function handleGET() {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const challenge = await getCurrentWeeklyChallenge(user.id);
@@ -40,3 +41,5 @@ export async function GET() {
     },
   });
 }
+
+export const GET = observeApi("weekly_get", handleGET);

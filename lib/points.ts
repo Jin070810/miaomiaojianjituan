@@ -1,6 +1,7 @@
 import { lockRankingPeriod } from "./ranking-period";
 import { protectRankingsAfterVideoRevocation } from "./ranking-adjustments";
 import { db } from "./db";
+import { requestContext } from "./request-context";
 import { LedgerType, Prisma, PrismaClient, Role } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
 import { calculateSnapshotVideoPoints, captureVideoPointRule, snapshotRule, videoRuleEvidence } from "./video-point-rule-snapshots";
@@ -690,6 +691,7 @@ export async function creditVideoReward(input: {
       data: {
         actorId: input.actorId,
         action: "VIDEO_APPROVED",
+        requestId: requestContext.getStore()?.id,
         entity: "VideoSubmission",
         entityId: video.id,
         beforeValue: { status: video.status, points: video.points },

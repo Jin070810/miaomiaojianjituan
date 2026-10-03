@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser, memberProfileSelect } from "@/lib/auth";
@@ -33,7 +34,7 @@ function safeUser(user: {
   };
 }
 
-export async function GET() {
+async function handleGET() {
   const user = await currentUser({ profile: true });
   if (!user) return NextResponse.json({ user: null }, { status: 401 });
   return NextResponse.json({ user: safeUser(user) });
@@ -83,3 +84,5 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: error instanceof z.ZodError ? "成员资料格式不正确" : error instanceof Error ? error.message : "更新失败" }, { status: 400 });
   }
 }
+
+export const GET = observeApi("me_get", handleGET);

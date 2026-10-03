@@ -1,8 +1,9 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { getMemberGrowth } from "@/lib/member-growth";
 
-export async function GET() {
+async function handleGET() {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
@@ -15,3 +16,5 @@ export async function GET() {
     );
   }
 }
+
+export const GET = observeApi("growth_get", handleGET);

@@ -1,4 +1,5 @@
-import { ArrowLeft, ChevronRight, Medal, Sparkles, Target, Trophy } from "lucide-react";
+import Image from "next/image";
+import { ArrowLeft, Medal, Sparkles, Target, Trophy } from "lucide-react";
 
 export type AchievementData = {
   profile: {
@@ -75,31 +76,6 @@ function badgeAsset(code: string) {
   return BADGE_ASSETS[code] ?? "/brand/miaomiao/growth/achievement-badge.png";
 }
 
-export function AchievementSummaryCard({ data, loading, error, onOpen, onRetry }: {
-  data: AchievementData | null;
-  loading: boolean;
-  error: string;
-  onOpen: () => void;
-  onRetry: () => void;
-}) {
-  if (loading) return <section className="achievement-summary is-loading" aria-label="成长与成就正在加载"><span className="growth-loading-bar" /><small>正在整理你的成长档案…</small></section>;
-  if (error) return <section className="achievement-summary is-error" role="alert"><span>{error}</span><button onClick={onRetry}>重新加载</button></section>;
-  if (!data) return null;
-  const earned = data.achievements.filter((item) => item.earnedAt).length;
-  const goalProgress = Math.min(ratio(data.goal.progress.videos, data.goal.targetVideos), ratio(data.goal.progress.engagement, data.goal.targetEngagement));
-  return (
-    <section className="achievement-summary" aria-labelledby="achievement-summary-title">
-      <img src="/brand/miaomiao/growth/growth-hero.png" alt="" className="achievement-summary-figure" />
-      <div>
-        <span className="journal-kicker">成长与成就</span>
-        <h2 id="achievement-summary-title">Lv.{data.profile.level} · {data.profile.name}</h2>
-        <p>{data.profile.experience.toLocaleString()} 经验 · 已点亮 {earned} 枚勋章 · 本月目标 {goalProgress}%</p>
-      </div>
-      <button onClick={onOpen} aria-label="查看成长与成就"><span>查看档案</span><ChevronRight size={19} /></button>
-    </section>
-  );
-}
-
 export function AchievementView({ data, loading, error, onBack, onRetry }: {
   data: AchievementData | null;
   loading: boolean;
@@ -117,7 +93,7 @@ export function AchievementView({ data, loading, error, onBack, onRetry }: {
       <button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button>
       <section className="achievement-hero">
         <div><span className="journal-kicker">我的成长档案</span><h1>Lv.{data.profile.level} {data.profile.name}</h1><p>成长经验独立累计，不参与积分兑换或结算。</p></div>
-        <img src="/brand/miaomiao/growth/growth-hero.png" alt="剪辑团成长档案插画" />
+        <Image src="/brand/miaomiao/growth/growth-hero.png" width={240} height={280} sizes="(max-width: 760px) 160px, 240px" alt="剪辑团成长档案插画" />
       </section>
       <section className="achievement-level-card">
         <div><span>累计成长经验</span><strong>{data.profile.experience.toLocaleString()}</strong></div>

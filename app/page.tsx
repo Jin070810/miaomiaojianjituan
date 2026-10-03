@@ -46,19 +46,27 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import NotificationCenter, { clearNotificationPromptSession } from "./components/NotificationCenter";
 import { BrandMark, PageScene, StateMessage } from "./member/brand";
-import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
 import { miaoAssets } from "./member/visual-assets";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
 import { ledgerLabel } from "@/lib/labels";
 import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
 import { fetchMemberJson, MemberFetchError } from "@/lib/member-fetch";
-import { AchievementSummaryCard, AchievementView, type AchievementData } from "./member/achievement-view";
-import BirthdayView, { BirthdayEntry } from "./member/birthday-view";
+import type { AchievementData } from "./member/achievement-view";
+import { AchievementSummaryCard } from "./member/achievement-summary";
+import { BirthdayEntry } from "./member/birthday-entry";
+import { MemberViewBoundary, MemberViewLoading } from "./member/lazy-view";
+
+const BirthdayView = dynamic(() => import("./member/birthday-view"), { loading: MemberViewLoading });
+const AchievementView = dynamic(() => import("./member/achievement-view").then((module) => module.AchievementView), { loading: MemberViewLoading });
+const LedgerView = dynamic(() => import("./member/record-views").then((module) => module.LedgerView), { loading: MemberViewLoading });
+const TransferRecordsView = dynamic(() => import("./member/record-views").then((module) => module.TransferRecordsView), { loading: MemberViewLoading });
+const RedemptionRecordsView = dynamic(() => import("./member/record-views").then((module) => module.RedemptionRecordsView), { loading: MemberViewLoading });
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "achievements" | "birthday" | "ledger" | "transfers" | "orders";
 
@@ -590,6 +598,7 @@ function HomeView({
   achievementsLoading,
   achievementsError,
   onRetryAchievements,
+  onNeedAchievements,
 }: {
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
@@ -606,6 +615,7 @@ function HomeView({
   achievementsLoading: boolean;
   achievementsError: string;
   onRetryAchievements: () => void;
+  onNeedAchievements: () => void;
 }) {
   const recentLedger = data.ledger.slice(0, 3);
   const progressPercent = challenge ? challengeProgressPercent(challenge) : 0;
@@ -647,6 +657,7 @@ function HomeView({
         error={achievementsError}
         onOpen={() => onNavigate("achievements")}
         onRetry={onRetryAchievements}
+        onNeeded={onNeedAchievements}
       />
 
       <BirthdayEntry onOpen={() => onNavigate("birthday")} />
@@ -1959,6 +1970,8 @@ export default function MemberApp() {
   const [growthLoading, setGrowthLoading] = useState(true);
   const [growthError, setGrowthError] = useState("");
   const [growthRevision, setGrowthRevision] = useState(0);
+  const [achievementsRequested, setAchievementsRequested] = useState(false);
+  const needAchievements = useCallback(() => setAchievementsRequested(true), []);
   const [achievements, setAchievements] = useState<AchievementData | null>(null);
   const [achievementsLoading, setAchievementsLoading] = useState(true);
   const [achievementsError, setAchievementsError] = useState("");
@@ -2049,6 +2062,7 @@ export default function MemberApp() {
   }, [growthRevision, homeRevision, router]);
 
   useEffect(() => {
+    if (!achievementsRequested) return;
     let active = true;
     setAchievementsLoading(true);
     fetchMemberJson<AchievementData>("/api/member/achievements", "成长与成就加载失败")
@@ -2065,7 +2079,7 @@ export default function MemberApp() {
       })
       .finally(() => { if (active) setAchievementsLoading(false); });
     return () => { active = false; };
-  }, [achievementsRevision, homeRevision, router]);
+  }, [achievementsRequested, achievementsRevision, homeRevision, router]);
 
   async function loadSection(section: DeferredSection, force = false) {
     if (!force && ["loading", "ready"].includes(sectionStates[section])) return;
@@ -2147,6 +2161,7 @@ export default function MemberApp() {
   };
 
   const handleNavigate = (nextView: MemberView) => {
+    if (nextView === "achievements") needAchievements();
     setView(nextView);
     window.scrollTo({ top: 0, behavior: "auto" });
   };
@@ -2196,8 +2211,8 @@ export default function MemberApp() {
     if (view === "ledger") return <DeferredPage state={sectionStates.ledger} error={sectionErrors.ledger} onRetry={() => void loadSection("ledger", true)}><LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} /></DeferredPage>;
     if (view === "transfers") return <DeferredPage state={sectionStates.transfers} error={sectionErrors.transfers} onRetry={() => void loadSection("transfers", true)}><TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} /></DeferredPage>;
     if (view === "orders") return <DeferredPage state={sectionStates.orders} error={sectionErrors.orders} onRetry={() => void loadSection("orders", true)}><RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} /></DeferredPage>;
-    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} achievements={achievements} achievementsLoading={achievementsLoading} achievementsError={achievementsError} onRetryAchievements={() => setAchievementsRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
-  }, [achievements, achievementsError, achievementsLoading, challengeError, challengeLoading, dashboard, giftRows, growth, growthError, growthLoading, historyLoading, historyMore, router, sectionErrors, sectionStates, view, weeklyChallenge]);
+    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} achievements={achievements} achievementsLoading={achievementsLoading} achievementsError={achievementsError} onRetryAchievements={() => setAchievementsRevision((value) => value + 1)} onNeedAchievements={needAchievements} onNavigate={handleNavigate} onOpen={openDialog} />;
+  }, [achievements, achievementsError, achievementsLoading, challengeError, challengeLoading, dashboard, giftRows, growth, growthError, growthLoading, historyLoading, historyMore, needAchievements, router, sectionErrors, sectionStates, view, weeklyChallenge]);
 
   if (!dashboard) {
     return (
@@ -2254,7 +2269,7 @@ export default function MemberApp() {
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>
         </header>
-        {page}
+        <MemberViewBoundary key={view} onBack={() => handleNavigate("home")}>{page}</MemberViewBoundary>
         <BottomNav active={navigationView} onChange={handleNavigate} />
       </div>
       {dialog === "submit" && <SubmitDialog onClose={closeDialog} onComplete={() => { invalidateSections(["videos", "ledger"]); closeDialog(); handleNavigate("videos"); }} />}

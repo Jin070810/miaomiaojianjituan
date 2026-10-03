@@ -1347,7 +1347,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
         <div className="journal-menu">
           <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
           <button className="danger-menu-item" aria-label="主动退团" onClick={() => onOpen("leave")}><span><WarningCircle size={19} />主动退团</span><ChevronRight size={18} /></button>
-          {data.user.role === "REVIEWER" && <Link href="/reviewer" aria-label="视频二次审核台"><span><ClipboardCheck size={19} />视频二次审核台</span><ChevronRight size={18} /></Link>}
+          {data.user.role === "REVIEWER" && <Link href="/reviewer" aria-label="历史二审记录"><span><ClipboardCheck size={19} />历史二审记录</span><ChevronRight size={18} /></Link>}
           {data.user.role === "REVIEWER" && <Link href="/password-support" aria-label="密码协助中心"><span><ShieldCheck size={19} />密码协助中心</span><ChevronRight size={18} /></Link>}
         </div>
       </section>

@@ -223,6 +223,7 @@ jobs:
         run: >-
           npx playwright test
           tests/e2e/admin-responsive.spec.ts
+          tests/e2e/video-review-policy.spec.ts
           tests/e2e/birthday-system.spec.ts
           --project=admin-desktop
           --project=admin-mobile

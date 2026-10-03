@@ -6,7 +6,7 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "github" : "list",
-  outputDir: "output/playwright/results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "output/playwright/results",
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3213",
     browserName: "chromium",
@@ -67,12 +67,12 @@ export default defineConfig({
     {
       name: "admin-desktop",
       use: { viewport: { width: 1440, height: 900 } },
-      testMatch: [/admin-weekly-challenge\.spec\.ts/, /admin-responsive\.spec\.ts/],
+      testMatch: [/admin-weekly-challenge\.spec\.ts/, /admin-responsive\.spec\.ts/, /video-review-policy\.spec\.ts/],
     },
     {
       name: "admin-mobile",
       use: { viewport: { width: 390, height: 844 } },
-      testMatch: [/admin-mobile\.spec\.ts/, /admin-responsive\.spec\.ts/],
+      testMatch: [/admin-mobile\.spec\.ts/, /admin-responsive\.spec\.ts/, /video-review-policy\.spec\.ts/],
     },
     {
       name: "birthday-mobile",

@@ -68,8 +68,8 @@ async function debit(
 }
 
 // 补偿性扣减（撤销视频奖励/冲正）允许把余额扣成负数：奖励可能已被成员花掉，
-// 但撤销必须完整执行。负余额是有意语义，由每日 data:reconcile 的 negativeBalances
-// 检查兜底发现；不要在这里加余额下限条件，否则撤销会静默失败。
+// 但撤销必须完整执行。对账区分有原始奖励/审计证据的业务欠额与未知负余额，
+// 流水合计不一致始终是错误；不要加余额下限，否则撤销会静默失败。
 async function debitCompensating(
   tx: Prisma.TransactionClient,
   userId: string,

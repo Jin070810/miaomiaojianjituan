@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { db } from "../lib/db";
 import { fetchKuaishouVideo } from "../lib/kuaishou-fetch";
-import { calculateVideoPoints, videoEligibilityError } from "../lib/kuaishou";
+import { fetchDouyinVideo, closeDouyinBrowser } from "../lib/douyin-fetch";
+import { isDouyinSourceKind } from "../lib/douyin";
+import { videoEligibilityError } from "../lib/kuaishou";
 import { getVideoPointRule } from "../lib/point-rules";
+import { calculateSnapshotVideoPoints, snapshotRule, videoRuleEvidence } from "../lib/video-point-rule-snapshots";
 
 const concurrencyArgument = process.argv.find((argument) => argument.startsWith("--concurrency="));
 const limitArgument = process.argv.find((argument) => argument.startsWith("--limit="));
@@ -18,6 +21,7 @@ type AuditResult = {
   stored: { likes: number | null; points: number; photoId: string | null; submittedNickname: string };
   fetched?: { likes: number; points: number; photoId: string; owner: string; ownerMatches: boolean; ownerMatchMethod: string };
   error?: string;
+  calculation?: ReturnType<typeof videoRuleEvidence>;
 };
 
 async function main() {
@@ -36,6 +40,7 @@ async function main() {
         photoId: true,
         submittedNickname: true,
         submittedAt: true,
+        pointRuleSnapshot: true,
       },
     }),
   ]);
@@ -49,18 +54,23 @@ async function main() {
       if (index >= rows.length) return;
       const row = rows[index];
       try {
-        const fetched = await fetchKuaishouVideo(row.sourceUrl, row.submittedNickname, rule);
+        const lockedRule = row.pointRuleSnapshot ? snapshotRule(row.pointRuleSnapshot) : null;
+        const fetched = isDouyinSourceKind(row.sourceKind)
+          ? await fetchDouyinVideo(row.sourceUrl, row.submittedNickname, lockedRule ?? rule)
+          : await fetchKuaishouVideo(row.sourceUrl, row.submittedNickname, lockedRule ?? rule);
         const issues: string[] = [];
         if (!fetched.ownerMatches) issues.push("owner-mismatch");
         if (row.photoId && row.photoId !== fetched.photoId) issues.push("photo-id-mismatch");
-        if (row.likes !== null && row.points !== calculateVideoPoints(row.likes, rule)) issues.push("stored-points-rule-mismatch");
-        const eligibility = videoEligibilityError(fetched.likes, fetched.publishedAt, row.submittedAt, rule);
-        if (eligibility) issues.push(`submission-ineligible:${eligibility}`);
+        if (!lockedRule) issues.push("historical-rule-unavailable");
+        if (row.pointRuleSnapshot && row.likes !== null && row.points !== calculateSnapshotVideoPoints(row.likes, row.pointRuleSnapshot)) issues.push("stored-points-differ-from-locked-formula:check-appeal-or-adjustment-audit");
+        const eligibility = videoEligibilityError(fetched.likes, fetched.publishedAt, row.submittedAt, lockedRule ?? rule);
+        if (eligibility) issues.push(`${lockedRule ? "locked-rule-probe" : "current-rule-probe-only"}:${eligibility}`);
         results[index] = {
           id: row.id,
           sourceKind: row.sourceKind,
           outcome: issues.length ? "warning" : "ok",
           issues,
+          calculation: videoRuleEvidence(row.pointRuleSnapshot, row.likes, row.points),
           stored: { likes: row.likes, points: row.points, photoId: row.photoId, submittedNickname: row.submittedNickname },
           fetched: {
             likes: fetched.likes,
@@ -108,7 +118,7 @@ async function main() {
     generatedAt: new Date().toISOString(),
     readOnly: true,
     concurrency,
-    rule,
+    currentRuleForUnknownHistoryProbeOnly: rule,
     count: rows.length,
     summary,
     errorReasons,
@@ -126,4 +136,4 @@ main()
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => db.$disconnect());
+  .finally(async () => { await closeDouyinBrowser(); await db.$disconnect(); });

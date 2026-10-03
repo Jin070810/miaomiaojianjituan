@@ -6,7 +6,7 @@ import { fetchDouyinVideo, closeDouyinBrowser } from "./douyin-fetch";
 import { isDouyinSourceKind } from "./douyin";
 import { videoEligibilityError } from "./kuaishou";
 import { creditVideoReward } from "./points";
-import { getVideoPointRule } from "./point-rules";
+import { calculateSnapshotVideoPoints, captureVideoPointRule, snapshotRule, videoRuleEvidence } from "./video-point-rule-snapshots";
 import { createNotification } from "./notifications";
 import { isPermanentFetchError } from "./fetch-errors";
 
@@ -53,6 +53,7 @@ async function autoRejectVideoWithTx(
   });
   if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
   const updated = await tx.videoSubmission.findUniqueOrThrow({ where: { id: videoId } });
+  const pointRuleSnapshot = await tx.videoPointRuleSnapshot.findUnique({ where: { videoId } });
   await tx.auditLog.create({
     data: {
       action: "VIDEO_AUTO_REJECTED",
@@ -69,6 +70,7 @@ async function autoRejectVideoWithTx(
         likes: updated.likes,
         photoId: updated.photoId,
         matchedOwner: updated.matchedOwner,
+        calculation: videoRuleEvidence(pointRuleSnapshot, updated.likes, 0),
       },
       reason,
     },
@@ -102,7 +104,8 @@ export async function processVideoSubmission(
 ) {
   const video = await db.videoSubmission.findUnique({ where: { id: videoId }, include: { user: true } });
   if (!video || !["PROCESSING", "FAILED", "PENDING_REVIEW"].includes(video.status)) return video;
-  const pointRule = await getVideoPointRule();
+  const pointRuleSnapshot = await captureVideoPointRule(video.id, "FIRST_AUTOMATIC_REVIEW");
+  const pointRule = snapshotRule(pointRuleSnapshot);
     let fetched;
     try {
       fetched = isDouyinSourceKind(video.sourceKind)
@@ -122,6 +125,7 @@ export async function processVideoSubmission(
       }
       throw error;
     }
+    const points = calculateSnapshotVideoPoints(fetched.likes, pointRuleSnapshot);
     const fetchedFields: Prisma.VideoSubmissionUpdateInput = {
       requestUrl: fetched.source.requestUrl,
       sourceKind: fetched.source.sourceKind,
@@ -173,7 +177,7 @@ export async function processVideoSubmission(
           where: { id: video.id },
           data: {
             ...fetchedFields,
-            points: fetched.points,
+            points,
             status: "PROCESSING",
             processedAt: new Date(),
             reviewedAt: null,
@@ -192,7 +196,7 @@ export async function processVideoSubmission(
       }
     });
     if (outcome.kind === "rejected") return outcome.result;
-    return creditVideoReward({ videoId: video.id, userId: video.userId, points: fetched.points });
+    return creditVideoReward({ videoId: video.id, userId: video.userId, points });
 }
 
 export async function prepareVideoReprocess(input: { videoId: string; actorId: string; ip?: string }) {

@@ -40,9 +40,11 @@ run 元数据通过 GitHub API 单独读取，与下载的 artifact 分目录存
 ## 缓存与运行时
 
 - App 和 Worker 使用独立 GHA cache scope：release-app、release-worker，防止互相覆盖。缓存导出最多 3 分钟；缓存服务故障不掩盖实际构建失败，也不使已成功构建变成业务发布失败。
+- 测试、文档和 workflow 不进入 Docker context；它们仍由 core 检查，单独修改这些文件不会让 App 的 COPY 层和 Next 编译缓存失效。
 - APP_COMMIT_SHA/APP_BUILD_TIME 在最终运行镜像末尾注入，metadata 变化不使依赖安装、Next 编译和 Worker 文件层失效；健康接口仍返回精确版本。
 - App 以 node 用户运行，明确授予 .next/cache 写权限，其他代码目录保持只读权限语义。CI 用同一非 root 用户验证图片缓存写入。
 - HTTP staging 显式 SESSION_COOKIE_SECURE=false；Compose 默认 true，production-preflight 拒绝 false，生产 HTTPS 继续使用 Secure Cookie。
+- 测试夹具在清理时恢复周挑战和生日开关的原始记录，避免 fixture 残留改变验收后的运行状态。随机 staging 密钥通过 Actions masking 隐藏，失败健康检查保留状态和 issues 诊断。
 - 完整浏览器测试已并入 staging job，旧独立 e2e job 移除。仓库如配置必需状态检查，应使用 core、staging；main 的发布候选还须 publish 成功。不能把 skipped publish（PR 正常跳过）当作可部署产物。
 
 ## 留存、回滚与首次切换

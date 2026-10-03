@@ -244,6 +244,7 @@ describe("sendOperationalAlert cooldown", () => {
   afterEach(() => {
     delete process.env.ALERT_COOLDOWN_MS;
     resetOperationalAlertCooldownForTests();
+    vi.restoreAllMocks();
   });
 
   it("suppresses duplicate alerts within the cooldown window", async () => {
@@ -260,15 +261,16 @@ describe("sendOperationalAlert cooldown", () => {
   });
 
   it("reports the suppressed count when the same alert fires after the window", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("fetch", fetchMock);
     process.env.ALERT_WEBHOOK_URL = "https://alerts.example.com/hook";
-    process.env.ALERT_COOLDOWN_MS = "1";
+    process.env.ALERT_COOLDOWN_MS = "1000";
     const payload = { source: "test", severity: "warning" as const, message: "持续故障" };
     await sendOperationalAlert(payload);
     await sendOperationalAlert(payload);
     await sendOperationalAlert(payload);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    now.mockReturnValue(2_000);
     const result = await sendOperationalAlert(payload);
     expect(result).toMatchObject({ sent: true });
     expect((result as { channels?: string[] }).channels).toEqual(["webhook"]);

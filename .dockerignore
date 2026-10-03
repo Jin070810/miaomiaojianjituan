@@ -10,3 +10,4 @@ output
 *.sha256
 *.log
 .git
+releases

@@ -7,6 +7,10 @@ on:
         description: "已审查并合并到 main 的完整 commit SHA"
         required: true
         type: string
+      candidate_run_id:
+        description: "该 release SHA 在 main push 后成功生成候选镜像的 CI run ID"
+        required: true
+        type: string
       bootstrap_admin:
         description: "首次上线或明确重置管理员密码时勾选"
         required: true
@@ -35,7 +39,8 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  packages: read
+  actions: read
 
 concurrency:
   group: production
@@ -46,6 +51,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 35
     steps:
       - name: Require explicit production confirmation
         env:
@@ -82,68 +88,48 @@ jobs:
             echo "release_commit 不是 origin/main 的祖先，拒绝部署未合并版本"
             exit 1
           fi
-          git checkout --detach "$RELEASE_COMMIT"
 
-      - name: Prepare immutable image metadata
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Verify the exact successful main CI run
+        id: candidate_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          mkdir -p output/release
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" > output/release/run.json
+          node scripts/release-manifest.mjs verify-run output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID"
+
+      - name: Download only that validated attempt's release manifest
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_run_id }}
+          name: release-candidate-${{ inputs.candidate_run_id }}-${{ steps.candidate_run.outputs.attempt }}
+          path: output/release/candidate
+
+      - name: Read the merged release schema and migrations
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_commit }}
+          path: release-source
+          persist-credentials: false
+
+      - name: Validate manifest, image digests, and migration checksums
         id: release
         env:
           RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
         run: |
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          repository_name="${GITHUB_REPOSITORY#*/}"
-          repository_name="${repository_name,,}"
-          {
-            echo "app_image=ghcr.io/$owner/$repository_name-app"
-            echo "worker_image=ghcr.io/$owner/$repository_name-worker"
-            echo "build_time=$(date -u --iso-8601=seconds)"
-            echo "release_commit=$RELEASE_COMMIT"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Authenticate to GHCR for publishing
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Build and publish App image
-        id: build_app
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: runner
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.release.outputs.app_image }}:${{ steps.release.outputs.release_commit }}
-          build-args: |
-            APP_COMMIT_SHA=${{ steps.release.outputs.release_commit }}
-            APP_BUILD_TIME=${{ steps.release.outputs.build_time }}
-          labels: |
-            org.opencontainers.image.revision=${{ steps.release.outputs.release_commit }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: type=gha,scope=production-app
-          cache-to: type=gha,mode=max,scope=production-app
-
-      - name: Build and publish Worker image
-        id: build_worker
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: worker
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.release.outputs.worker_image }}:${{ steps.release.outputs.release_commit }}
-          build-args: |
-            APP_COMMIT_SHA=${{ steps.release.outputs.release_commit }}
-            APP_BUILD_TIME=${{ steps.release.outputs.build_time }}
-          labels: |
-            org.opencontainers.image.revision=${{ steps.release.outputs.release_commit }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: type=gha,scope=production-worker
-          cache-to: type=gha,mode=max,scope=production-worker
+          node scripts/release-manifest.mjs verify output/release/candidate/release-candidate.json \
+            output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" release-source
+          cp output/release/candidate/release-candidate.json output/release/deploy-candidate.json
 
       - name: Verify current production health before switching
         env:
@@ -308,9 +294,11 @@ jobs:
           GHCR_TOKEN: ${{ github.token }}
           GHCR_ACTOR: ${{ github.actor }}
           APP_IMAGE: ${{ steps.release.outputs.app_image }}
-          APP_DIGEST: ${{ steps.build_app.outputs.digest }}
+          APP_DIGEST: ${{ steps.release.outputs.app_digest }}
+          APP_CONFIG_ID: ${{ steps.release.outputs.app_config_id }}
           WORKER_IMAGE: ${{ steps.release.outputs.worker_image }}
-          WORKER_DIGEST: ${{ steps.build_worker.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.release.outputs.worker_digest }}
+          WORKER_CONFIG_ID: ${{ steps.release.outputs.worker_config_id }}
           RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
         run: |
           test -n "$GHCR_TOKEN"
@@ -318,10 +306,10 @@ jobs:
           test -n "$PRODUCTION_PATH"
           [[ "$APP_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$WORKER_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          remote_script="$(printf 'set -euo pipefail\nexport GIT_TERMINAL_PROMPT=0\ncd %q\ngit fetch --no-tags origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\nexec bash scripts/pull-release-images.sh %q %q %q %q %q %q\n' \
+          remote_script="$(printf 'set -euo pipefail\nexport GIT_TERMINAL_PROMPT=0\ncd %q\ngit fetch --no-tags origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\nexec bash scripts/pull-release-images.sh %q %q %q %q %q %q %q %q\n' \
             "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RELEASE_COMMIT" \
             "$GHCR_ACTOR" "$APP_IMAGE" "$APP_DIGEST" "$WORKER_IMAGE" \
-            "$WORKER_DIGEST" "$RELEASE_COMMIT")"
+            "$WORKER_DIGEST" "$RELEASE_COMMIT" "$APP_CONFIG_ID" "$WORKER_CONFIG_ID")"
           # shellcheck disable=SC2029
           printf '%s' "$GHCR_TOKEN" | \
             ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote_script"
@@ -372,7 +360,7 @@ jobs:
           ALERTS_DEFERRED: ${{ inputs.confirm_alert_deferred }}
         run: |
           for _ in {1..12}; do
-            if health_json="$(curl --fail --silent --show-error "https://$PRODUCTION_DOMAIN/api/health")"; then
+            if health_json="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 "https://$PRODUCTION_DOMAIN/api/health")"; then
               printf '%s\n' "$health_json"
               if jq -e --arg sha "$RELEASE_COMMIT" --arg deferred "$ALERTS_DEFERRED" \
                 '.ok == true
@@ -387,3 +375,26 @@ jobs:
             sleep 10
           done
           exit 1
+
+      - name: Retain the successfully deployed manifest and previous rollback manifest
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: |
+          # Metadata only: no secrets or production rows. Keep historical manifests indefinitely.
+          record_path="releases/$RELEASE_COMMIT/deploy-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json"
+          remote_script="$(printf 'set -euo pipefail\ncd %q\numask 077\nmkdir -p %q\ncat > %q\nif test -f releases/current.json; then cp releases/current.json %q; fi\ncp %q releases/current.json\n' \
+            "$PRODUCTION_PATH" "releases/$RELEASE_COMMIT" "$record_path" \
+            "releases/$RELEASE_COMMIT/previous-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json" "$record_path")"
+          ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote_script" < output/release/deploy-candidate.json
+
+      - name: Preserve deployment candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deployment-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release/deploy-candidate.json
+          if-no-files-found: ignore
+          retention-days: 90

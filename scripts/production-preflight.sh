@@ -26,6 +26,7 @@ env_value() {
 }
 
 session_secret="$(env_value SESSION_SECRET)"
+session_cookie_secure="$(env_value SESSION_COOKIE_SECURE)"
 phone_key="$(env_value PHONE_ENCRYPTION_KEY)"
 database_url="$(env_value DOCKER_DATABASE_URL)"
 deepseek_base_url="$(env_value DEEPSEEK_BASE_URL)"
@@ -50,6 +51,7 @@ if [[ -z "$database_url" ]]; then
 fi
 
 [[ "${#session_secret}" -ge 32 ]] || fail "SESSION_SECRET 少于 32 个字符"
+[[ -z "$session_cookie_secure" || "$session_cookie_secure" == "true" ]] || fail "正式环境 SESSION_COOKIE_SECURE 必须为 true"
 [[ "$phone_key" =~ ^[0-9a-fA-F]{64}$ ]] || fail "PHONE_ENCRYPTION_KEY 必须是 64 位十六进制字符串"
 [[ -n "$database_url" ]] || fail "缺少 DATABASE_URL 或 DOCKER_DATABASE_URL"
 [[ "$database_url" != *"postgres:postgres@"* ]] || fail "数据库仍在使用默认密码"

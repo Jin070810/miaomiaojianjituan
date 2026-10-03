@@ -2,6 +2,9 @@ import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { encryptSensitive } from "@/lib/security";
 import { birthdayOccurrence, shanghaiDateParts } from "@/lib/birthdays";
+import { preserveTestSettings } from "./setting-fixture";
+
+let restoreSettings: (() => Promise<void>) | null = null;
 
 export const birthdayE2EPassword = "BirthdayE2E-2026";
 export const birthdayE2EIds = {
@@ -14,6 +17,7 @@ export const birthdayE2EIds = {
 export async function seedBirthdayE2E(reference = new Date()) {
   if (!process.env.DATABASE_URL?.includes("schema=")) throw new Error("生日 E2E 必须使用显式指定 schema 的测试数据库");
   await cleanupBirthdayE2E();
+  restoreSettings = await preserveTestSettings(["BIRTHDAY_PROGRAM", "BIRTHDAY_REWARDS"]);
   const passwordHash = await argon2.hash(birthdayE2EPassword);
   const [member, birthdayFriend, privateFriend, admin] = await Promise.all([
     db.user.create({ data: { kuaishouId: birthdayE2EIds.member, nickname: "生日墙测试成员", passwordHash, role: "MEMBER", active: true, account: { create: { balance: 1_000 } } } }),
@@ -35,6 +39,10 @@ export async function seedBirthdayE2E(reference = new Date()) {
 }
 
 export async function cleanupBirthdayE2E() {
+  if (restoreSettings) {
+    await restoreSettings();
+    restoreSettings = null;
+  }
   const users = await db.user.findMany({ where: { kuaishouId: { in: Object.values(birthdayE2EIds) } }, select: { id: true } });
   const userIds = users.map((user) => user.id);
   if (!userIds.length) return;

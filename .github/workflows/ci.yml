@@ -93,13 +93,18 @@ jobs:
         run: |
           database_password="$(openssl rand -hex 24)"
           admin_password="Staging-$(openssl rand -hex 16)"
+          session_secret="$(openssl rand -hex 32)"
+          phone_key="$(openssl rand -hex 32)"
+          for secret in "$database_password" "$admin_password" "$session_secret" "$phone_key"; do
+            echo "::add-mask::$secret"
+          done
           {
             echo "APP_BUILD_TIME=$(date -u --iso-8601=seconds)"
             echo "POSTGRES_PASSWORD=$database_password"
             echo "DOCKER_DATABASE_URL=postgresql://staging_admin:$database_password@postgres:5432/miaomiao_staging?schema=public"
             echo "DATABASE_URL=postgresql://staging_admin:$database_password@127.0.0.1:5433/miaomiao_staging?schema=public"
-            echo "SESSION_SECRET=$(openssl rand -hex 32)"
-            echo "PHONE_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "SESSION_SECRET=$session_secret"
+            echo "PHONE_ENCRYPTION_KEY=$phone_key"
             echo "ADMIN_PASSWORD=$admin_password"
           } >> "$GITHUB_ENV"
       - run: npm ci
@@ -194,6 +199,7 @@ jobs:
           mkdir -p output/playwright
           docker compose ps > output/playwright/staging-containers.txt
           docker compose logs --no-color app worker migrate > output/playwright/staging-containers.log 2>&1
+          curl --silent --show-error --connect-timeout 3 --max-time 8 http://127.0.0.1:3000/api/health > output/playwright/staging-health.json || true
           if test -f output/release/staging-proof.json; then cp output/release/staging-proof.json output/playwright/; fi
       - name: Upload full browser and container evidence
         if: always()

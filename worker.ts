@@ -16,6 +16,7 @@ import {
 } from "./lib/weekly-challenge-jobs";
 import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "./lib/member-clearance-operations";
 import { VideoProcessingDeferredError } from "./lib/video-processing";
+import { startMemberAchievementRefreshWorker } from "./lib/member-achievement-worker";
 
 // Independent of Redis/DB health; the parent can detect an event-loop stall.
 const watchdogTimer = process.env.MIAOMIAO_WORKER_SUPERVISED === "1" && process.send
@@ -91,6 +92,7 @@ let closing = false;
 let maintenanceRunning = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+<<<<<<< HEAD
 let heartbeatRunning = false;
 let activeMaintenance: Promise<void> | null = null;
 let activeHeartbeat: Promise<void> | null = null;
@@ -101,6 +103,9 @@ function startMaintenance() {
   activeMaintenance = task;
   void task.finally(() => { if (activeMaintenance === task) activeMaintenance = null; });
 }
+=======
+let stopAchievementRefresh: (() => Promise<void>) | null = null;
+>>>>>>> chore/achievement-read-model-20261004
 
 async function maintenance() {
   if (closing || maintenanceRunning) return;
@@ -198,6 +203,7 @@ async function start() {
   await ensureWeeklyChallengeScheduler();
   await Promise.all([worker.waitUntilReady(), weeklyChallengeWorker.waitUntilReady()]);
   console.log("[video-worker] listening");
+  stopAchievementRefresh = startMemberAchievementRefreshWorker();
   await startHeartbeat();
   heartbeatTimer = setInterval(() => void startHeartbeat(), 15_000);
   maintenanceTimer = setInterval(startMaintenance, 60_000);
@@ -211,7 +217,7 @@ async function shutdown(signal: string, exitCode = 0) {
   if (maintenanceTimer) clearInterval(maintenanceTimer);
   // 先等队列任务排空，再清除心跳：滚动发布期间健康检查不应在活跃任务尚未
   // 完成时就把 Worker 判死。
-  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), activeMaintenance]);
+  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), activeMaintenance, stopAchievementRefresh?.()]);
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   // Finish the last write before deleting this instance's keys.
   await activeHeartbeat;

@@ -188,6 +188,8 @@ docker build --target worker -t miaomiao-points-worker:verify .
 
 ## 工程协作
 
+成长档案的后台重建、只读查询和运维核对见 [`docs/ACHIEVEMENT-PROJECTION.md`](docs/ACHIEVEMENT-PROJECTION.md)。
+
 订单确认、履约、取消和生日零价订单的规则见 [`docs/REDEMPTION-STATE-MACHINE.md`](docs/REDEMPTION-STATE-MACHINE.md)。
 
 开发约束见 [`AGENTS.md`](AGENTS.md)，完整分支、PR、测试、发布和回滚流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)，生日功能的开关、Worker、验收和回滚见 [`docs/BIRTHDAY-SYSTEM.md`](docs/BIRTHDAY-SYSTEM.md)，合法零价订单与补偿性欠额的对账规则见 [`docs/RECONCILIATION-RULES.md`](docs/RECONCILIATION-RULES.md)。单人维护仓库使用维护者自审清单，多人协作时使用非作者审查；任何正式部署仍必须通过 CI、staging 验收和 GitHub `production` 环境批准。

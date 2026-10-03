@@ -13,7 +13,6 @@ import {
 } from "./weekly-challenges";
 import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
-import { reconcileMemberAchievements } from "./member-achievements";
 import { applyBirthdayVideoBonus, revokeBirthdayVideoBonus } from "./birthdays";
 import { assertAuditRequestReplay, assertTransferReplay, IdempotencyConflictError, requestFingerprint } from "./request-idempotency";
 import { SecondaryReviewRetiredError } from "./video-review-policy";
@@ -597,7 +596,7 @@ async function revokeApprovedVideoInTransaction(
     videoId: video.id,
     reason: input.reason,
   });
-  await reconcileMemberAchievements(tx, video.userId);
+  // Source triggers persist achievement refresh intent in this same transaction.
   return updated;
 }
 
@@ -713,7 +712,7 @@ export async function creditVideoReward(input: {
       submittedAt: video.submittedAt,
       completedAt: updated.reviewedAt ?? new Date(),
     });
-    await reconcileMemberAchievements(tx, input.userId);
+    // Growth display is rebuilt from the transactional refresh outbox.
     return updated;
   };
   return transaction ? apply(transaction) : db.$transaction(apply);
@@ -899,7 +898,7 @@ export async function resolveVideoAppeal(input: {
       submittedAt: video.submittedAt,
       completedAt: video.reviewedAt ?? new Date(),
     });
-    await reconcileMemberAchievements(tx, appeal.video.userId);
+    // Growth display is rebuilt from the transactional refresh outbox.
     return updated;
   });
 }

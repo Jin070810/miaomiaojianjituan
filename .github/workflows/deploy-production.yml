@@ -255,6 +255,7 @@ jobs:
           # private stdin stream. No secret is interpolated into the SSH command.
           tar -czf - -C "$payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
             production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh \
+            release-lifecycle.sh nginx-release.conf verify-web-candidate.mjs \
             | timeout --signal=TERM --kill-after=30s 32m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote"
 
       - name: Collect the atomic release journal even after failure

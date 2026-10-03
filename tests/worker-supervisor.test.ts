@@ -38,4 +38,18 @@ describe("Worker supervisor", () => {
     expect(exit).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledWith(1);
   });
+  it("does not report a timed-out deployment drain as a successful shutdown", async () => {
+    const { child, exit, supervisor } = setup();
+    supervisor.stop();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    child.emit("exit", null, "SIGKILL");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+  it("requires the child to exit normally even when shutdown was requested", () => {
+    const { child, exit, supervisor } = setup();
+    supervisor.stop();
+    child.emit("exit", null, "SIGTERM");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
 });

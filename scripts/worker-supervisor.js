@@ -26,6 +26,7 @@ function superviseWorker({
     stopping = true;
     child.kill(signal);
     killTimer = setTimeout(() => {
+      timedOut = true;
       console.error("[worker-supervisor] graceful stop timed out");
       child.kill("SIGKILL");
     }, stopTimeoutMs);
@@ -58,7 +59,9 @@ function superviseWorker({
     }
   });
   child.on("error", (error) => { console.error("[worker-supervisor]", error); finish(1); });
-  child.on("exit", (code) => finish(timedOut ? 1 : code ?? (stopping ? 0 : 1)));
+  // A signal-only exit is not proof that transactions and maintenance drained.
+  // Deployment accepts only an explicit, normal child exit with code 0.
+  child.on("exit", (code) => finish(timedOut ? 1 : code ?? 1));
   if (attachSignals) {
     process.once("SIGTERM", onTerm);
     process.once("SIGINT", onInt);

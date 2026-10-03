@@ -15,6 +15,7 @@ trap 'exit 143' TERM HUP
 # database data or secrets are copied into the public release evidence directory.
 timeout --signal=TERM --kill-after=10s 60s tar -xzf - --no-same-owner --no-same-permissions \
   -C "$payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
-  production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh
+  production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh \
+  release-lifecycle.sh nginx-release.conf verify-web-candidate.mjs
 for file in "$payload"/*; do [[ -f "$file" && ! -L "$file" ]]; done
 timeout --signal=TERM --kill-after=30s 30m bash "$payload/production-release.sh" "$project_dir" "$payload"

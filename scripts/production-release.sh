@@ -5,6 +5,8 @@ project_dir="$(realpath "${1:?missing project directory}")"
 payload="$(realpath "${2:?missing private payload directory}")"
 # shellcheck source=scripts/production-lock.sh
 source "$payload/production-lock.sh"
+# shellcheck source=scripts/release-lifecycle.sh
+source "$payload/release-lifecycle.sh"
 production_lock "$project_dir"
 cd "$project_dir"
 umask 077
@@ -57,6 +59,10 @@ phase=accepted
 config_committed=false
 migrations_started=false
 completed=false
+gate_engaged=false
+writers_touched=false
+previous_healthy_sha=""
+runtime="$project_dir/.release-runtime"
 previous_commit="$(timeout 15 git rev-parse HEAD)"
 cp "$manifest" "$record/manifest.json"
 cp "$attestation" "$record/attestation.json"
@@ -71,8 +77,10 @@ persist() {
   temp="$(mktemp "$record/journal.XXXXXX")"
   jq --arg status "$status" --arg phase "$phase" --arg at "$(date -u +%FT%TZ)" \
     --argjson code "$code" --argjson config "$config_committed" --argjson migrated "$migrations_started" \
+    --argjson gate "$gate_engaged" --argjson writers "$writers_touched" \
     '.status=$status | .phase=$phase | .updatedAt=$at | .exitCode=$code |
-      .configCommitted=$config | .migrationsStarted=$migrated' "$journal" > "$temp"
+      .configCommitted=$config | .migrationsStarted=$migrated |
+      .maintenanceEngaged=$gate | .writersTouched=$writers' "$journal" > "$temp"
   mv "$temp" "$journal"
   cp "$journal" "$private/active.json"
   mv "$private/active.json" releases/active.json
@@ -84,23 +92,58 @@ checkpoint() {
   printf 'release=%s phase=%s\n' "$release_id" "$phase"
 }
 finish() {
-  local code=$?
+  local code=$? service id recovered=true
   trap - EXIT INT TERM HUP
+  set +e
   if [[ "$completed" != true ]]; then
     (( code != 0 )) || code=1
     # Kill only named one-off containers owned by this attempt. Never leave a
     # detached migration or password reset running after its CLI was timed out.
     timeout --kill-after=5s 15s docker rm -f "miaomiao-release-$release_id-migrate" \
-      "miaomiao-release-$release_id-admin" "miaomiao-release-$release_id-backup" >/dev/null 2>&1 || true
+      "miaomiao-release-$release_id-admin" "miaomiao-release-$release_id-backup" \
+      "miaomiao-release-$release_id-preflight" >/dev/null 2>&1 || true
+    if [[ "$gate_engaged" == true ]]; then
+      release_set_gate "$runtime" closed "$release_id" || recovered=false
+    fi
     if [[ "$migrations_started" == false ]]; then
       if [[ "$config_committed" == true && -f "$private/env-before" ]]; then
-        cp "$private/env-before" "$private/env-restore"
-        mv "$private/env-restore" .env.production
-        config_committed=false
+        if cp "$private/env-before" "$private/env-restore" && mv "$private/env-restore" .env.production; then
+          config_committed=false
+        else
+          recovered=false
+        fi
       fi
       if ! timeout --kill-after=5s 30s git checkout --detach "$previous_commit" >/dev/null 2>&1; then
         echo '发布前源码恢复失败；以 journal 和运行中的容器为准。' >&2
+        recovered=false
       fi
+      if [[ "$writers_touched" == true ]]; then
+        for service in app worker; do
+          id="$(jq -r .Id "$record/previous-$service.json")" || recovered=false
+          release_container_snapshot "$id" "$service" "$record/recovery-$service.json" &&
+            timeout --kill-after=5s 30s docker start "$id" >/dev/null || recovered=false
+        done
+      fi
+      # Recover only a version that was healthy at entry. In an acknowledged
+      # already-failed release there may be no safe prior version to reopen.
+      if [[ "$gate_engaged" == true && "$recovered" == true && -n "$previous_healthy_sha" ]]; then
+        if timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" \
+          http://127.0.0.1:3000 "$previous_healthy_sha" > "$record/recovery-health.json" &&
+          timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -c /etc/nginx/release/nginx.conf -s reload &&
+          timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" \
+            "https://$domain" "$previous_healthy_sha" > "$record/recovery-public-health.json"; then
+          release_set_gate "$runtime" open "$release_id" && gate_engaged=false
+        fi
+      fi
+    elif [[ "$gate_engaged" == true ]]; then
+      # Migration may have changed compatibility. Retain maintenance and stop
+      # only this stack's current writers; never auto-downgrade DB or images.
+      for service in app worker; do
+        id="$(timeout 15 docker ps -a --no-trunc --filter label=com.docker.compose.project=miaomiao-points \
+          --filter "label=com.docker.compose.service=$service" --filter label=com.docker.compose.oneoff=False --format '{{.ID}}')" || continue
+        [[ "$id" =~ ^[a-f0-9]{64}$ ]] || continue
+        release_drain_container "$id" "$service" "$record/failure-drain-$service.json" || true
+      done
     fi
     persist failed "$code" || true
     echo "发布失败，阶段=$phase；证据=$journal。迁移开始后不会自动回退数据库或应用。" >&2
@@ -119,8 +162,8 @@ chmod 600 "$private/env-before"
 # Capture actual running image IDs, even on the legacy host without a manifest.
 # This is recovery evidence, not a substitute for CI provenance verification.
 for service in app worker nginx; do
-  ids="$(timeout 15 docker ps --filter label=com.docker.compose.project=miaomiao-points \
-    --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')"
+  ids="$(timeout 15 docker ps -a --no-trunc --filter label=com.docker.compose.project=miaomiao-points \
+    --filter "label=com.docker.compose.service=$service" --filter label=com.docker.compose.oneoff=False --format '{{.ID}}')"
   if [[ -n "$ids" ]]; then
     [[ "$ids" != *$'\n'* ]]
     timeout 15 docker inspect --format '{{json .}}' "$ids" |
@@ -128,6 +171,16 @@ for service in app worker nginx; do
       > "$record/previous-$service.json"
   fi
 done
+# This controller updates an existing installation. Initial empty-host setup
+# must be qualified separately, not treated as a successful drain of no writers.
+for service in app worker; do
+  jq -e '.Id | test("^[a-f0-9]{64}$")' "$record/previous-$service.json" >/dev/null
+done
+if health="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 http://127.0.0.1:3000/api/health)" &&
+  jq -e '.ok == true and .database == "ok" and .redis == "ok" and .worker == "ok"
+    and (.app.commit | test("^[a-f0-9]{40}$")) and .app.commit == .workerVersion.commit' <<<"$health" >/dev/null; then
+  previous_healthy_sha="$(jq -r .app.commit <<<"$health")"
+fi
 if ! jq -e '.recover == true' "$request" >/dev/null; then
   health="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "https://$domain/api/health")"
   jq -e '.ok == true and .database == "ok" and .redis == "ok" and .worker == "ok"
@@ -162,24 +215,14 @@ jq -r .token "$request" | PULL_RELEASE_NO_TAG=1 timeout --kill-after=15s 720s ba
   "$actor" "$(jq -r .images.app.name "$manifest")" "$(jq -r .images.app.digest "$manifest")" \
   "$(jq -r .images.worker.name "$manifest")" "$(jq -r .images.worker.digest "$manifest")" \
   "$commit" "$(jq -r .images.app.configId "$manifest")" "$(jq -r .images.worker.configId "$manifest")"
-jq '{services:{app:{image:(.images.app.name+"@"+.images.app.digest)},
+jq --arg runtime "$runtime" '{services:{app:{image:(.images.app.name+"@"+.images.app.digest)},
   worker:{image:(.images.worker.name+"@"+.images.worker.digest)},
-  migrate:{image:(.images.worker.name+"@"+.images.worker.digest)}}}' "$manifest" > "$private/images.json"
+  migrate:{image:(.images.worker.name+"@"+.images.worker.digest)},
+  nginx:{command:["nginx","-c","/etc/nginx/release/nginx.conf","-g","daemon off;"],
+    volumes:[{type:"bind",source:$runtime,target:"/etc/nginx/release",read_only:true}]}}}' "$manifest" > "$private/images.json"
 compose=(docker compose --env-file "$candidate_env" -f "$project_dir/docker-compose.yml" -f "$private/images.json")
 checkpoint dependencies
 timeout --kill-after=10s 120s "${compose[@]}" up -d --wait --wait-timeout 90 postgres redis
-
-checkpoint backup
-BACKUP_RESULT_FILE="$project_dir/$record/backup.json" timeout --kill-after=15s 600s \
-  bash "$payload/backup-db.sh" "$project_dir/backups" "$candidate_env"
-[[ -s "$record/backup.json" ]]
-if jq -e '.config.BACKUP_STORAGE_MODE == "oss"' "$request" >/dev/null; then
-  checkpoint offsite_backup
-  backup_name="$(basename "$(jq -r .file "$record/backup.json")")"
-  timeout --kill-after=15s 300s "${compose[@]}" run --rm --no-deps --pull never -T \
-    --name "miaomiao-release-$release_id-backup" worker npm run ops:upload-backup \
-    -- --file "/app/backups/$backup_name" > "$record/offsite-backup.log"
-fi
 
 checkpoint migration_check
 # Values expand inside the postgres container, not on the host.
@@ -215,6 +258,56 @@ if ! jq -e --slurpfile target "$manifest" 'all(.[]; . as $row |
   jq '{migrationCompatibilityNote}' "$request" > "$record/migration-review.json"
 fi
 
+checkpoint candidate_preflight
+timeout --kill-after=5s 45s "${compose[@]}" run -d --no-deps --pull never \
+  --name "miaomiao-release-$release_id-preflight" app >/dev/null
+timeout --kill-after=5s 210s docker exec -i "miaomiao-release-$release_id-preflight" \
+  node --input-type=module - "$commit" < "$payload/verify-web-candidate.mjs" > "$record/candidate-preflight.json"
+timeout --kill-after=5s 20s docker rm -f "miaomiao-release-$release_id-preflight" >/dev/null
+
+checkpoint maintenance
+gate_engaged=true
+release_prepare_ingress "$runtime" "$payload/nginx-release.conf" "$release_id"
+timeout --kill-after=10s 120s "${compose[@]}" --profile production up -d --no-deps --no-build nginx
+timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -c /etc/nginx/release/nginx.conf -t
+timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -c /etc/nginx/release/nginx.conf -s reload
+release_verify_gate "$domain" "$record/maintenance-headers.txt"
+checkpoint drain
+writers_touched=true
+persist running
+for service in app worker; do
+  release_drain_container "$(jq -r .Id "$record/previous-$service.json")" "$service" "$record/drain-$service.json"
+done
+checkpoint database_quiescence
+# Fail on any other client, including an idle connection that might start work.
+# This does not terminate unrelated sessions or assume a lock blocks all SQL.
+for _ in {1..5}; do
+  # Let already-closing sockets (or a short postgres health probe) disappear;
+  # persistent idle clients still block the release after this bounded wait.
+  # shellcheck disable=SC2016
+  timeout --kill-after=5s 15s "${compose[@]}" exec -T postgres sh -c \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" "$POSTGRES_DB" -At' > "$record/database-quiescence.json" <<'SQL'
+SELECT json_build_object('otherClients', count(*)) FROM pg_stat_activity
+WHERE datname=current_database() AND pid<>pg_backend_pid()
+  AND (backend_type='client backend' OR backend_type IS NULL);
+SQL
+  if jq -e '.otherClients==0' "$record/database-quiescence.json" >/dev/null; then break; fi
+  sleep 1
+done
+jq -e '.otherClients==0' "$record/database-quiescence.json" >/dev/null
+
+checkpoint backup
+BACKUP_RESULT_FILE="$project_dir/$record/backup.json" timeout --kill-after=15s 600s \
+  bash "$payload/backup-db.sh" "$project_dir/backups" "$candidate_env"
+[[ -s "$record/backup.json" ]]
+if jq -e '.config.BACKUP_STORAGE_MODE == "oss"' "$request" >/dev/null; then
+  checkpoint offsite_backup
+  backup_name="$(basename "$(jq -r .file "$record/backup.json")")"
+  timeout --kill-after=15s 300s "${compose[@]}" run --rm --no-deps --pull never -T \
+    --name "miaomiao-release-$release_id-backup" worker npm run ops:upload-backup \
+    -- --file "/app/backups/$backup_name" > "$record/offsite-backup.log"
+fi
+
 checkpoint config_commit
 cp "$candidate_env" "$private/env-commit"
 config_committed=true
@@ -241,13 +334,21 @@ checkpoint local_health
 timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" http://127.0.0.1:3000 "$commit" > "$record/local-health.json"
 checkpoint ingress
 timeout --kill-after=10s 120s "${compose[@]}" --profile production up -d --no-deps --no-build nginx
-timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -t
-timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -s reload
+timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -c /etc/nginx/release/nginx.conf -t
+timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -c /etc/nginx/release/nginx.conf -s reload
 checkpoint public_health
 timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" "https://$domain" "$commit" > "$record/public-health.json"
 if jq -e '.config.ALERTS_DEFERRED == "true"' "$request" >/dev/null; then
   jq -e '.weeklyChallenges.enabled == false' "$record/public-health.json" >/dev/null
 fi
+
+checkpoint reopen
+release_verify_gate "$domain" "$record/maintenance-final-headers.txt"
+release_set_gate "$runtime" open "$release_id"
+# Keep the flag true until the complete release record commits, so any later
+# error re-closes ingress and leaves the failed candidate quarantined.
+[[ "$(curl --silent --show-error --connect-timeout 3 --max-time 8 --output /dev/null \
+  --write-out '%{http_code}' "https://$domain/login")" == 200 ]]
 
 checkpoint record
 for kind in app worker; do
@@ -266,6 +367,7 @@ if [[ -f "$record/previous.json" ]]; then cp "$record/previous.json" "releases/$
 cp "$manifest" "$private/current.json"
 mv "$private/current.json" releases/current.json
 checkpoint completed
+gate_engaged=false
 persist succeeded
 completed=true
 printf '发布完成：%s；发布记录：%s\n' "$commit" "$journal"

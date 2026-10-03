@@ -12,6 +12,7 @@ output
 .git
 releases
 .release-private
+.release-runtime
 .production.lock
 # Type checks and tests still run in core; these files are not runtime inputs.
 tests

@@ -64,6 +64,7 @@ jobs:
       - run: bash scripts/test-pull-release-images.sh
       - run: bash scripts/test-publish-release-candidate.sh
       - run: bash scripts/test-release-health.sh
+      - run: bash scripts/test-release-lifecycle.sh
       - run: bash scripts/test-production-release.sh
       - run: bash scripts/test-signed-release.sh
 

@@ -4,6 +4,8 @@ import { db } from "../lib/db";
 import { fetchKuaishouVideo } from "../lib/kuaishou-fetch";
 import { fetchDouyinVideo, closeDouyinBrowser } from "../lib/douyin-fetch";
 import { isDouyinSourceKind } from "../lib/douyin";
+import { videoPlatform } from "../lib/platform-bindings";
+import { historicalAuthorIssues } from "../lib/video-author-audit";
 import { videoEligibilityError } from "../lib/kuaishou";
 import { getVideoPointRule } from "../lib/point-rules";
 import { calculateSnapshotVideoPoints, snapshotRule, videoRuleEvidence } from "../lib/video-point-rule-snapshots";
@@ -19,7 +21,7 @@ type AuditResult = {
   outcome: "ok" | "warning" | "error";
   issues: string[];
   stored: { likes: number | null; points: number; photoId: string | null; submittedNickname: string };
-  fetched?: { likes: number; points: number; photoId: string; owner: string; ownerMatches: boolean; ownerMatchMethod: string };
+  fetched?: { likes: number; points: number; photoId: string; owner: string; authorUid: string | null; nicknameMatches: boolean; nicknameMatchMethod: string };
   error?: string;
   calculation?: ReturnType<typeof videoRuleEvidence>;
 };
@@ -33,6 +35,10 @@ async function main() {
       take: limit,
       select: {
         id: true,
+        userId: true,
+        fetchedAuthorUid: true,
+        authorEvidenceVersion: true,
+        verifiedBindingId: true,
         sourceUrl: true,
         sourceKind: true,
         likes: true,
@@ -58,8 +64,9 @@ async function main() {
         const fetched = isDouyinSourceKind(row.sourceKind)
           ? await fetchDouyinVideo(row.sourceUrl, row.submittedNickname, lockedRule ?? rule)
           : await fetchKuaishouVideo(row.sourceUrl, row.submittedNickname, lockedRule ?? rule);
-        const issues: string[] = [];
-        if (!fetched.ownerMatches) issues.push("owner-mismatch");
+        const platform = videoPlatform(row.sourceKind);
+        const binding = row.verifiedBindingId ? await db.platformAccountBinding.findUnique({ where: { id: row.verifiedBindingId }, select: { id: true, userId: true, platform: true, authorUid: true } }) : null;
+        const issues = historicalAuthorIssues(row, platform, fetched.authorUid, binding);
         if (row.photoId && row.photoId !== fetched.photoId) issues.push("photo-id-mismatch");
         if (!lockedRule) issues.push("historical-rule-unavailable");
         if (row.pointRuleSnapshot && row.likes !== null && row.points !== calculateSnapshotVideoPoints(row.likes, row.pointRuleSnapshot)) issues.push("stored-points-differ-from-locked-formula:check-appeal-or-adjustment-audit");
@@ -77,8 +84,9 @@ async function main() {
             points: fetched.points,
             photoId: fetched.photoId,
             owner: fetched.owner,
-            ownerMatches: fetched.ownerMatches,
-            ownerMatchMethod: fetched.ownerMatchMethod,
+            authorUid: fetched.authorUid,
+            nicknameMatches: fetched.ownerMatches,
+            nicknameMatchMethod: fetched.ownerMatchMethod,
           },
         };
       } catch (error) {

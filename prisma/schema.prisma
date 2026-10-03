@@ -245,6 +245,8 @@ model User {
   birthdayBenefits                 BirthdayAnnualBenefit[]
   birthdayWishesSent               BirthdayWish[]                     @relation("BirthdayWishSender")
   birthdayWishesReceived           BirthdayWish[]                     @relation("BirthdayWishRecipient")
+  platformBindings                 PlatformAccountBinding[]            @relation("PlatformBindingOwner")
+  platformBindingRequests          PlatformBindingRequest[]            @relation("PlatformBindingRequester")
 }
 
 model MemberClearanceProgram {
@@ -442,6 +444,9 @@ model VideoSubmission {
   metadataFetchedAt      DateTime?
   publishedAt            DateTime?
   fetchedOwner           String?
+  fetchedAuthorUid       String?
+  authorEvidenceVersion  Int?
+  verifiedBindingId      String?
   matchedOwner           Boolean?
   points                 Int                   @default(0)
   birthdayBenefitYear    Int?
@@ -495,6 +500,46 @@ model VideoPointRuleSnapshot {
   sourceUpdatedAt      DateTime?
   capturedAt           DateTime @default(now())
   video                VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+// Internal platform UID is separate from the immutable, case-insensitive login ID.
+model PlatformAccountBinding {
+  id            String   @id @default(cuid())
+  userId        String
+  platform      String
+  authorUid     String
+  requestId     String   @unique
+  verifiedAt    DateTime @default(now())
+  verifiedById  String
+  revokedAt     DateTime?
+  user          User     @relation("PlatformBindingOwner", fields: [userId], references: [id], onDelete: Cascade)
+  request       PlatformBindingRequest @relation(fields: [requestId], references: [id], onDelete: NoAction)
+
+  @@unique([platform, authorUid])
+  @@index([userId, platform])
+}
+
+model PlatformBindingRequest {
+  id             String   @id @default(cuid())
+  userId         String
+  platform       String
+  authorUid      String
+  videoId        String
+  photoId        String
+  challenge      String   @unique
+  status         String   @default("PENDING")
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  reviewedAt     DateTime?
+  reviewedById   String?
+  proofMethod    String?
+  proofNote      String?
+  rejectionReason String?
+  user           User     @relation("PlatformBindingRequester", fields: [userId], references: [id], onDelete: Cascade)
+  binding        PlatformAccountBinding?
+
+  @@index([status, createdAt])
+  @@index([userId, platform, createdAt])
 }
 
 model VideoSecondaryReview {

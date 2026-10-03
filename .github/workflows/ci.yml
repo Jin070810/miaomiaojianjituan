@@ -167,6 +167,8 @@ jobs:
       - name: Install browsers for the complete acceptance matrix
         run: npx playwright install --with-deps chromium webkit
       - name: Full E2E against candidate containers
+        env:
+          PLAYWRIGHT_EVIDENCE_DIR: ${{ runner.temp }}
         run: npm run test:e2e
       - name: Reconcile staging and recheck candidate health
         run: |
@@ -226,7 +228,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: staging-acceptance-${{ github.run_attempt }}
-          path: output/playwright/
+          path: |
+            output/playwright/
+            ${{ runner.temp }}/miaomiao-platform-bindings/
           if-no-files-found: error
           retention-days: 14
       - name: Tear down isolated staging

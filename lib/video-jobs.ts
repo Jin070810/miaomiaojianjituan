@@ -9,6 +9,7 @@ import { creditVideoReward } from "./points";
 import { calculateSnapshotVideoPoints, captureVideoPointRule, snapshotRule, videoRuleEvidence } from "./video-point-rule-snapshots";
 import { createNotification } from "./notifications";
 import { isPermanentFetchError } from "./fetch-errors";
+import { PlatformBindingError, requireVerifiedVideoAuthor } from "./platform-bindings";
 import {
   assertVideoProcessingLease, claimVideoProcessingAttempt, lockVideoProcessing,
   releaseVideoProcessingAttempt, resetVideoProcessingBudget, VIDEO_MAX_ATTEMPTS,
@@ -75,6 +76,8 @@ async function autoRejectVideoWithTx(
         likes: current.likes,
         photoId: current.photoId,
         matchedOwner: current.matchedOwner,
+        authorUid: current.fetchedAuthorUid,
+        authorEvidenceVersion: current.authorEvidenceVersion,
       },
       afterValue: {
         status: updated.status,
@@ -82,6 +85,8 @@ async function autoRejectVideoWithTx(
         photoId: updated.photoId,
         matchedOwner: updated.matchedOwner,
         calculation: videoRuleEvidence(pointRuleSnapshot, updated.likes, 0),
+        authorUid: updated.fetchedAuthorUid,
+        authorEvidenceVersion: updated.authorEvidenceVersion,
       },
       reason,
     },
@@ -156,10 +161,13 @@ export async function processVideoSubmission(
       metadataFetchedAt: new Date(),
       publishedAt: fetched.publishedAt,
       fetchedOwner: fetched.owner,
-      matchedOwner: fetched.ownerMatches,
+      fetchedAuthorUid: fetched.authorUid,
+      authorEvidenceVersion: fetched.authorUid ? 1 : null,
+      matchedOwner: false,
       rawPayload: {
         sourceUrl: fetched.source.sourceUrl,
-        ownerMatchMethod: fetched.ownerMatchMethod,
+        nicknameMatchMethod: fetched.ownerMatchMethod,
+        authorEvidenceVersion: fetched.authorUid ? 1 : null,
         ...("rawPayload" in fetched ? fetched.rawPayload : {}),
       },
     };
@@ -169,9 +177,10 @@ export async function processVideoSubmission(
     return await db.$transaction(async (tx) => {
       await lockVideoProcessing(tx, video.id);
       await assertVideoProcessingLease(tx, video.id, token);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${fetched.photoId}`})::bigint)`;
+      await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${video.id} FOR UPDATE`;
       const current = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
       if (!["PROCESSING", "FAILED", "PENDING_REVIEW"].includes(current.status)) return current;
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${fetched.photoId}`})::bigint)`;
       const duplicate = await tx.videoSubmission.findFirst({
         where: { photoId: fetched.photoId, id: { not: video.id }, status: { in: ["APPROVED", "PENDING_REVIEW", "PROCESSING"] } },
       });
@@ -183,9 +192,13 @@ export async function processVideoSubmission(
       }
       const eligibilityError = videoEligibilityError(fetched.likes, fetched.publishedAt, video.submittedAt, pointRule);
       if (eligibilityError) return autoRejectVideoWithTx(tx, video.id, eligibilityError, fetchedFields);
-      if (!fetched.ownerMatches) {
-        return autoRejectVideoWithTx(tx, video.id,
-          `作者不一致：抓取到“${fetched.owner}”，提交昵称为“${video.submittedNickname}”`, fetchedFields);
+      try {
+        await requireVerifiedVideoAuthor(tx, { userId: video.userId, sourceKind: fetched.source.sourceKind, fetchedAuthorUid: fetched.authorUid, authorEvidenceVersion: fetched.authorUid ? 1 : null });
+        fetchedFields.matchedOwner = true;
+        fetchedFields.rawPayload = { ...fetchedFields.rawPayload as object, ownerMatchMethod: "verified-platform-uid" };
+      } catch (error) {
+        if (!(error instanceof PlatformBindingError)) throw error;
+        return autoRejectVideoWithTx(tx, video.id, error.message, fetchedFields);
       }
       await tx.videoSubmission.update({
         where: { id: video.id },
@@ -239,6 +252,10 @@ export async function prepareVideoReprocess(input: { videoId: string; actorId: s
         processedAt: null,
         reviewedAt: null,
         reviewReason: null,
+        fetchedAuthorUid: null,
+        authorEvidenceVersion: null,
+        verifiedBindingId: null,
+        matchedOwner: null,
       },
     });
     if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });

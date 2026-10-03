@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import argon2 from "argon2";
-import { NextResponse } from "next/server";
 import { RateLimitError } from "./rate-limit";
 
 export async function hashPassword(password: string) {
@@ -71,7 +70,7 @@ export const decryptPhone = decryptSensitive;
 
 export function rateLimitResponse(error: unknown) {
   if (!(error instanceof RateLimitError)) return null;
-  return NextResponse.json(
+  return Response.json(
     { error: error.message },
     { status: 429, headers: { "retry-after": String(error.retryAfter) } },
   );

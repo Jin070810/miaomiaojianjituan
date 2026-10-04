@@ -193,6 +193,8 @@ if ! jq -e '.recover == true' "$request" >/dev/null; then
     and .app.commit == .workerVersion.commit' <<<"$health" >/dev/null
 fi
 
+checkpoint capacity_before_pull
+timeout --kill-after=5s 60s bash "$payload/release-capacity.sh" "$project_dir" "$record/capacity-before-pull.json"
 checkpoint source
 export GIT_TERMINAL_PROMPT=0
 timeout --kill-after=10s 120s git fetch --no-tags origin main
@@ -221,6 +223,8 @@ jq -r .token "$request" | PULL_RELEASE_NO_TAG=1 timeout --kill-after=15s 720s ba
   "$actor" "$(jq -r .images.app.name "$manifest")" "$(jq -r .images.app.digest "$manifest")" \
   "$(jq -r .images.worker.name "$manifest")" "$(jq -r .images.worker.digest "$manifest")" \
   "$commit" "$(jq -r .images.app.configId "$manifest")" "$(jq -r .images.worker.configId "$manifest")"
+checkpoint capacity_after_pull
+timeout --kill-after=5s 60s bash "$payload/release-capacity.sh" "$project_dir" "$record/capacity-after-pull.json"
 jq --arg runtime "$runtime" '{services:{app:{image:(.images.app.name+"@"+.images.app.digest)},
   worker:{image:(.images.worker.name+"@"+.images.worker.digest)},
   migrate:{image:(.images.worker.name+"@"+.images.worker.digest)},

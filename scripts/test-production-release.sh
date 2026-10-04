@@ -47,7 +47,13 @@ printf '%s\n' "$*" >> "$TEST_PROJECT/docker.log"
 phase="$(jq -r .phase "$TEST_PROJECT/releases/active.json" 2>/dev/null || true)"
 if [[ "$*" == 'rm -f miaomiao-release-'*'-migrate '* ]]; then touch "$TEST_PROJECT/recovering"; fi
 [[ "$phase" != "${FAIL_PHASE:-none}" || -f "$TEST_PROJECT/recovering" ]] || exit 42
-if [[ "$*" == *'pg_dump --format'* ]]; then
+if [[ "${1:-}" == exec && "$*" == *'df -Pi'* ]]; then
+  printf 'Filesystem Inodes Used Available Capacity Mounted\nfixture 2000000 0 2000000 0%% /\n'
+elif [[ "${1:-}" == exec && "$*" == *'df -Pk'* ]]; then
+  printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nfixture 200000000 0 200000000 0%% /var/lib/postgresql/data\n'
+elif [[ "$*" == *'SELECT pg_database_size(current_database())'* ]]; then
+  printf '65000000\n'
+elif [[ "$*" == *'pg_dump --format'* ]]; then
   printf 'PGDMPsynthetic-test-backup'
 elif [[ "$*" == *'pg_restore --list'* ]]; then
   [[ "$(cat)" == PGDMPsynthetic-test-backup ]]
@@ -59,7 +65,9 @@ elif [[ "$*" == *'psql -v ON_ERROR_STOP'* ]]; then
 elif [[ "${1:-}" == login ]]; then
   [[ "$(cat)" == fixture-secret-token ]]
 elif [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
-  if [[ "$*" == *'{{.Id}}'* ]]; then printf '%s\n' "$TEST_IMAGE_ID"; else printf '%s\n' "$TEST_SHA"; fi
+  if [[ "$*" == *'{{.Id}}'* ]]; then printf '%s\n' "$TEST_IMAGE_ID"
+  elif [[ "$*" == *'{{.Os}}/{{.Architecture}}'* ]]; then printf 'linux/amd64\n'
+  else printf '%s\n' "$TEST_SHA"; fi
 elif [[ "${1:-}" == ps ]]; then
   letter=c
   if [[ "$*" == *service=app* ]]; then letter=a; fi
@@ -97,7 +105,7 @@ fixture() {
   mkdir -p "$TEST_PROJECT/certs" "$test_root/payload-$scenario"
   payload="$test_root/payload-$scenario"
   cp scripts/{production-lock,production-release,production-preflight,pull-release-images,backup-db,verify-release-health,release-lifecycle}.sh "$payload/"
-  cp scripts/nginx-release.conf scripts/verify-web-candidate.mjs scripts/legacy-queue-drain.cjs "$payload/"
+  cp scripts/nginx-release.conf scripts/verify-web-candidate.mjs scripts/legacy-queue-drain.cjs scripts/release-capacity.sh "$payload/"
   printf '{"syntheticHostFixture":true}\n' > "$payload/attestation.json"
   printf 'test\n' > "$TEST_PROJECT/certs/fullchain.pem"
   printf 'test\n' > "$TEST_PROJECT/certs/privkey.pem"
@@ -166,13 +174,13 @@ cp "$TEST_PROJECT/releases/active.json" "$test_root/last-record"
 if run_release; then echo 'duplicate attempt was accepted' >&2; exit 1; fi
 cmp "$TEST_PROJECT/releases/active.json" "$test_root/last-record"
 
-for failure in images migration_check candidate_preflight maintenance drain database_quiescence backup migrate application local_health ingress public_health reopen; do
+for failure in capacity_before_pull images capacity_after_pull migration_check candidate_preflight maintenance drain database_quiescence backup migrate application local_health ingress public_health reopen; do
   fixture
   FAIL_PHASE="$failure"
   if run_release; then echo "failure not detected: $failure" >&2; exit 1; fi
   jq -e --arg phase "$failure" '.status=="failed" and .phase==$phase' "$TEST_PROJECT/releases/active.json" >/dev/null
   [[ ! -e "$TEST_PROJECT/releases/current.json" ]]
-  if [[ "$failure" =~ ^(images|backup|migration_check|candidate_preflight|maintenance|drain|database_quiescence)$ ]]; then
+  if [[ "$failure" =~ ^(capacity_before_pull|capacity_after_pull|images|backup|migration_check|candidate_preflight|maintenance|drain|database_quiescence)$ ]]; then
     cmp "$TEST_PROJECT/.env.production" "$test_root/old-env"
     [[ "$("$REAL_GIT" -C "$TEST_PROJECT" rev-parse HEAD)" == "$(cat "$test_root/old-sha")" ]]
     if grep -q 'up -d --no-deps --no-build --pull never app worker' "$TEST_PROJECT/docker.log"; then exit 1; fi
@@ -249,4 +257,4 @@ touch "$test_root/release-lock"
 wait "$holder"
 if ! wait "$runner"; then cat "$test_root/run.log"; exit 1; fi
 assert_no_secret_evidence
-echo 'Production release: success, 13 phase faults, forced drain/database/recovery failures, rollback checks, duplicate attempt, secrets and real host lock passed.'
+echo 'Production release: success, 15 phase faults, forced drain/database/recovery failures, rollback checks, duplicate attempt, secrets and real host lock passed.'

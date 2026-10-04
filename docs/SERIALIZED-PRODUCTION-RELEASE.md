@@ -17,6 +17,7 @@ Deploy Production 先在 GitHub runner 验证已合并 SHA、唯一正式版本 
 | 阶段 | 行为 | 失败处理 |
 | --- | --- | --- |
 | verify_host / source | 保存当前 SHA、实际容器镜像 ID，检查当前健康与源码无修改，校验目标 main 祖先 | 不启动新服务；记录失败 |
+| capacity_before_pull / capacity_after_pull | 源码/镜像变更前及拉取后，检查项目、镜像存储、数据库文件系统的空间和inode；至少3GiB，数据库较大时提高至其大小3倍+1GiB | 停在维护前，保留当前正常服务；不自动扩大清理范围 |
 | config_validate / images | 在私有文件中一次组装配置、预检；拉取并校验两个镜像，暂不更新 production 标签 | 原 `.env.production` 不变，恢复原 checkout |
 | dependencies | 依赖就绪 | 不修改旧版本运行状态 |
 | migration_check | 对比数据库已执行迁移和目标清单 | 同名 checksum 不符始终拒绝；仅目标版本缺少已执行迁移时，可附明确的应用兼容性评估 |

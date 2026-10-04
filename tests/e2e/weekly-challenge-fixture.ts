@@ -53,8 +53,9 @@ export async function seedWeeklyChallengeE2E() {
       },
     }),
   ]);
-  const current = shanghaiWeekBounds();
-  const next = nextShanghaiWeekBounds();
+  const now = new Date();
+  const current = shanghaiWeekBounds(now);
+  const next = nextShanghaiWeekBounds(now);
   const [period] = await Promise.all([
     db.weeklyChallengePeriod.create({
     data: {

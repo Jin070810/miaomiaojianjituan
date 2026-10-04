@@ -1,0 +1,65 @@
+name: Reclaim Old Production Build Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inspect or reclaim the selected old unused private build cache
+        type: choice
+        options: [inspect, clean]
+        default: inspect
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  reclaim:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Configure existing deployment connection
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          timeout 20 ssh-keyscan -T 10 -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+          printf '%s\n' 'Host *' '  BatchMode yes' '  ConnectTimeout 10' '  ServerAliveInterval 15' '  ServerAliveCountMax 3' > "$HOME/.ssh/config"
+          chmod 600 "$HOME/.ssh/config"
+      - name: Preserve data and reclaim selected old cache
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          CLEANUP_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_PATH"
+          test -n "$PRODUCTION_USER"
+          mkdir -p output/production-cache
+          remote="$(printf 'timeout --signal=TERM --kill-after=10s 5m bash -s -- %q %q %q' "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN" "$CLEANUP_MODE")"
+          timeout --signal=TERM --kill-after=10s 6m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" \
+            < scripts/production-cache-cleanup.sh > output/production-cache/report.json
+      - name: Retain sanitized result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-cache-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/production-cache/report.json
+          if-no-files-found: warn
+          retention-days: 90

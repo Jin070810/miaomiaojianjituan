@@ -24,6 +24,9 @@ for service in app worker postgres redis nginx; do
       state:.State.Status,health:(.State.Health.Status // null),oom:.State.OOMKilled,
       memoryLimitBytes:.HostConfig.Memory,startedAt:.State.StartedAt,restartCount:.RestartCount,
       initEnabled:(.HostConfig.Init // false),
+      entrypointKind:(if .Path=="docker-entrypoint.sh" then "node-entrypoint" elif (.Path=="node" or .Path=="/usr/local/bin/node") then "node" else "other" end),
+      standaloneArguments:(.Args==["node","server.js"] or .Args==["server.js"]),
+      healthIntervalNs:(.Config.Healthcheck.Interval // null),
       stopSignal:(.Config.StopSignal // "SIGTERM" | if test("^(SIG[A-Z0-9]+|[0-9]+)$") then . else "custom" end),
       manualSignalHandler:any(.Config.Env[]?; startswith("NEXT_MANUAL_SIG_HANDLE=") and (ltrimstr("NEXT_MANUAL_SIG_HANDLE=")|length>0)),
       customNodeOptions:any(.Config.Env[]?; startswith("NODE_OPTIONS=") and (ltrimstr("NODE_OPTIONS=")|length>0))}' > "$private/container.json"

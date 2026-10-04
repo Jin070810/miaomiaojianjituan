@@ -59,6 +59,9 @@ worker_image="$(jq -sr '.[]|select(.service=="worker")|.Image' "$private/before.
 [[ "$pg_image" =~ ^sha256:[a-f0-9]{64}$ && "$worker_image" =~ ^sha256:[a-f0-9]{64}$ ]]
 [[ -d "$payload/prisma/migrations" && -f "$payload/prisma/schema.prisma" ]]
 [[ -z "$(find "$payload/prisma" -type l -print -quit)" ]]
+# Schema contains no production secrets. Keep its parent private on the host,
+# but let the non-root image user read the mounted schema regardless of SSH UID.
+chmod -R u=rwX,go=rX "$payload/prisma"
 # Do not overwrite an earlier attempt or unrelated container.
 if docker container inspect "$name-db" >/dev/null 2>&1 || docker container inspect "$name-prisma" >/dev/null 2>&1; then
   echo 'Rehearsal container name already exists; refusing to replace it.' >&2; exit 1
@@ -125,9 +128,13 @@ inventory > "$private/after.jsonl"
 cmp -s "$private/before.jsonl" "$private/after.jsonl"
 health
 [[ "$(git rev-parse HEAD)" == "$source_sha" && "$(sha256sum "$backup" | cut -d' ' -f1)" == "$expected" ]]
+phase=remove_isolated_copy
+timeout 20 docker rm -f "$name-db" >/dev/null
+if docker container inspect "$name-db" >/dev/null 2>&1 || docker container inspect "$name-prisma" >/dev/null 2>&1; then exit 1; fi
+created=false
 jq -n --arg candidate "$candidate" --arg source "$source_sha" --arg at "$(date -u +%FT%TZ)" \
   --arg backup "$(basename "$backup")" --slurpfile aggregates "$private/after.json" --slurpfile migrations "$private/migrations.json" \
   '{schemaVersion:1,candidateCommit:$candidate,productionCommit:$source,checkedAt:$at,backup:$backup,
     backupChecksumVerified:true,networkIsolated:true,rawDataExported:false,sanitizedBeforeMigration:true,
     repeatMigrationPassed:true,schemaDrift:false,aggregatesPreserved:true,productionServicesPreserved:true,
-    aggregates:$aggregates[0],migrations:$migrations[0],qualified:true}'
+    isolatedCopyRemoved:true,aggregates:$aggregates[0],migrations:$migrations[0],qualified:true}'

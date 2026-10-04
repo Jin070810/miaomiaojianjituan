@@ -20,4 +20,8 @@
 
 原镜像资格验证使用实际 Web/Worker 和生产 Nginx digest、隔离网络及合成数据库：在同一模板恢复旧的两个 header 设置作为负对照，断开客户端后统计 Web 3000 端口的 CLOSE_WAIT 并验证 137 被控制器拒绝；随后用实际修复模板重试同一请求，要求 404、无残留连接及正常退出，再验证活动请求/任务排空。双存储模式均须通过。具体历史生产请求并未留存，修复这一可复现机制不等于声称已识别当时的请求。
 
+[run 37192791823](https://github.com/Jin070810/miaomiaojianjituan/actions/runs/37192791823) 双模式验证通过：旧配置均留下 1 条 CLOSE_WAIT、最终退出 137 且非 OOM；新配置均返回 404、残留为 0、Web 正常退出 143，后续在途请求、Worker 任务及队列恢复测试通过。历史日志只读 run 37192732799 未截断且未匹配固定错误类别，没有框架栈；无法据此确认历史请求类型。
+
+恢复后的下一次发版不再仅因旧 journal 为 failed 而停在人为确认项。控制器先只读核验未迁移、配置/源码/维护标记恢复、历史记录一致、原 App/Worker 同版健康及内外网健康/登录；全部满足才建立新尝试，记录 previousRecovery。未恢复、正在运行、已开始 migration、版本不一致或健康不通过仍停止；原失败记录不被覆盖。
+
 参考：[Nginx 协议升级说明](https://nginx.org/en/docs/http/websocket.html)、[Node 22 HTTP 关闭语义](https://nodejs.org/download/release/latest-v22.x/docs/api/http.html#serverclosecallback)。

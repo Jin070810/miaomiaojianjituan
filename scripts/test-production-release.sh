@@ -38,7 +38,10 @@ if [[ "$url" != */api/health ]]; then
   printf '%s' "$code"
   exit 0
 fi
-jq -n --arg sha "$TEST_SHA" '{ok:true,database:"ok",redis:"ok",worker:"ok",app:{commit:$sha},workerVersion:{commit:$sha},weeklyChallenges:{enabled:false}}'
+sha="$TEST_SHA"
+if [[ "${TEST_PREVIOUS_HEALTH:-0}" == 1 && "$(jq -r .status "$TEST_PROJECT/releases/active.json")" == failed ]]; then sha="$TEST_OLD_SHA"; fi
+if [[ "${TEST_PUBLIC_HEALTH_FAIL:-0}" == 1 && "$url" == https:* ]]; then exit 42; fi
+jq -n --arg sha "$sha" '{ok:true,database:"ok",redis:"ok",worker:"ok",app:{commit:$sha},workerVersion:{commit:$sha},weeklyChallenges:{enabled:false}}'
 FAKE
 cat > "$test_root/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
@@ -88,15 +91,19 @@ elif [[ "${1:-}" == inspect ]]; then
   [[ "$id" != b* ]] || service=worker
   running=true
   [[ ! -f "$TEST_PROJECT/stopped-$id" ]] || running=false
-  jq -n --arg id "$id" --arg image "$TEST_IMAGE_ID" --arg service "$service" --arg sha "$TEST_SHA" \
+  sha="$TEST_SHA"
+  if [[ "${TEST_PREVIOUS_HEALTH:-0}" == 1 && "$(jq -r .status "$TEST_PROJECT/releases/active.json")" == failed ]]; then sha="$TEST_OLD_SHA"; fi
+  if [[ "${TEST_WRONG_WORKER:-0}" == 1 && "$service" == worker ]]; then sha=wrong; fi
+  jq -n --arg id "$id" --arg image "$TEST_IMAGE_ID" --arg service "$service" --arg sha "$sha" \
     --argjson running "$running" --argjson exitCode "${TEST_DRAIN_EXIT:-0}" \
-    '{Id:$id,Image:$image,State:{Status:(if $running then "running" else "exited" end),Running:$running,Restarting:false,Paused:false,OOMKilled:false,ExitCode:$exitCode},
+    '{Id:$id,Image:$image,State:{Status:(if $running then "running" else "exited" end),Running:$running,Restarting:false,Paused:false,OOMKilled:false,ExitCode:$exitCode,Health:{Status:"healthy"}},
       Config:{Env:["SECRET=must-never-reach-journal"],Labels:{"com.docker.compose.project":"miaomiao-points","com.docker.compose.service":$service,"org.opencontainers.image.revision":$sha}}}'
 fi
 FAKE
 chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
 export TEST_SHA TEST_PROJECT TEST_IMAGE_ID FAIL_PHASE TEST_MIGRATIONS TEST_CLIENTS TEST_DRAIN_EXIT FAIL_RECOVERY
+export TEST_OLD_SHA TEST_PREVIOUS_HEALTH TEST_PUBLIC_HEALTH_FAIL TEST_WRONG_WORKER
 TEST_IMAGE_ID="sha256:$(printf 'a%.0s' {1..64})"
 scenario=0
 fixture() {
@@ -128,6 +135,7 @@ fixture() {
     "$REAL_GIT" checkout -q --detach "$(cat "$test_root/old-sha")"
   )
   TEST_SHA="$(cat "$test_root/new-sha")"
+  TEST_OLD_SHA="$(cat "$test_root/old-sha")"
   cat > "$TEST_PROJECT/.env.production" <<'ENV'
 POSTGRES_USER=fixture
 POSTGRES_DB=fixture
@@ -152,6 +160,7 @@ ENV
   FAIL_PHASE=none
   TEST_MIGRATIONS='[]'
   TEST_CLIENTS=0 TEST_DRAIN_EXIT=0 FAIL_RECOVERY=0
+  TEST_PREVIOUS_HEALTH=0 TEST_PUBLIC_HEALTH_FAIL=0 TEST_WRONG_WORKER=0
 }
 run_release() {
   (cd "$TEST_PROJECT" && bash "$payload/production-release.sh" "$TEST_PROJECT" "$payload") > "$test_root/run.log" 2>&1
@@ -222,7 +231,7 @@ for blocked in force_kill database_client failed_recovery; do
   if [[ "$blocked" == failed_recovery ]]; then [[ -f "$TEST_PROJECT/.release-runtime/maintenance" ]]; fi
 done
 
-# An unfinished attempt is visible and requires the existing recovery input.
+# Inconsistent or unfinished recovery still requires a separate technical repair.
 fixture
 FAIL_PHASE=images
 if run_release; then exit 1; fi
@@ -236,6 +245,43 @@ mv "$payload/new.json" "$payload/request.json"
 if ! run_release; then cat "$test_root/run.log"; exit 1; fi
 jq -e '.status=="succeeded" and .id=="124-1"' "$TEST_PROJECT/releases/active.json" >/dev/null
 jq -e '.status=="failed"' "$TEST_PROJECT/releases/attempts/123-1/journal.json" >/dev/null
+
+# A fully restored failure before migration can continue without human approval.
+for scenario_kind in clean migrated config gate_record running source_mismatch gate_file queue_file public_health worker_revision stopped_container journal_mismatch; do
+  fixture
+  FAIL_PHASE=images
+  if run_release; then exit 1; fi
+  jq '.id="124-1"' "$payload/request.json" > "$payload/new.json"
+  mv "$payload/new.json" "$payload/request.json"
+  FAIL_PHASE=none TEST_PREVIOUS_HEALTH=1
+  mutation='.'
+  case "$scenario_kind" in
+    migrated) mutation='.migrationsStarted=true' ;;
+    config) mutation='.configCommitted=true' ;;
+    gate_record) mutation='.maintenanceEngaged=true' ;;
+    running) mutation='.status="running"' ;;
+    source_mismatch) mutation='.previousCommit=("c"*40)' ;;
+    gate_file) mkdir -p "$TEST_PROJECT/.release-runtime"; touch "$TEST_PROJECT/.release-runtime/maintenance" ;;
+    queue_file) mkdir -p "$TEST_PROJECT/.release-runtime"; touch "$TEST_PROJECT/.release-runtime/legacy-queues-before.json" ;;
+    public_health) TEST_PUBLIC_HEALTH_FAIL=1 ;;
+    worker_revision) TEST_WRONG_WORKER=1 ;;
+    stopped_container) touch "$TEST_PROJECT/stopped-$(printf 'a%.0s' {1..64})" ;;
+  esac
+  jq "$mutation" "$TEST_PROJECT/releases/active.json" > "$test_root/changed.json"
+  cp "$test_root/changed.json" "$TEST_PROJECT/releases/active.json"
+  if [[ "$scenario_kind" != journal_mismatch ]]; then cp "$test_root/changed.json" "$TEST_PROJECT/releases/attempts/123-1/journal.json"; fi
+  if [[ "$scenario_kind" == journal_mismatch ]]; then printf '{}\n' > "$TEST_PROJECT/releases/attempts/123-1/journal.json"; fi
+  : > "$TEST_PROJECT/docker.log"
+  if [[ "$scenario_kind" == clean ]]; then
+    if ! run_release; then cat "$test_root/run.log"; exit 1; fi
+    jq -e '.status=="succeeded" and .previousRecovery.verified and .previousRecovery.previousAttempt=="123-1"' "$TEST_PROJECT/releases/active.json" >/dev/null
+  else
+    if run_release; then echo "Unsafe automatic recovery accepted: $scenario_kind" >&2; exit 1; fi
+    [[ ! -d "$TEST_PROJECT/releases/attempts/124-1" ]]
+    cmp "$test_root/changed.json" "$TEST_PROJECT/releases/active.json"
+    if grep -Eq '^(stop|start|pull|rm) ' "$TEST_PROJECT/docker.log"; then echo 'Mutated before recovery proof' >&2; exit 1; fi
+  fi
+done
 
 fixture
 TEST_MIGRATIONS='[{"name":"later","checksum":"123"}]'

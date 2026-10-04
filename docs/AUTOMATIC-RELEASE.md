@@ -47,6 +47,7 @@ GitHub Release 包含 commit、CI run/attempt、App/Worker digest、migration �
 - production Environment：只允许精确 main，无 required reviewers，无人工等待计时器；保留现有密钥。
 - workflow_dispatch 同时承接 CI 自动交接和有明确版本依据的故障恢复/归档重发；默认 automatic=false 保留恢复语义。没有日常人工确认项；重置管理员、放宽失败前置健康或延期告警仍是有技术含义的显式参数，不是审查按钮。
 - 迁移开始前失败按旧容器和健康证据恢复；迁移后失败保留维护入口与证据，采用兼容的前向修复。自动化不能使不兼容的历史镜像安全回滚。
+- 上次失败已完整恢复时，下一次发布自动核验而不要求人工确认：不可变历史 journal 与 active 记录一致，未开始 migration、配置已恢复、维护和旧队列恢复标记不存在，源码回到原 SHA，原 Web/Worker 同版且容器健康，内网/公网数据库、Redis、Worker 检查及登录页均正常。核验结果以 previousRecovery 记入新 journal。任一条件不满足则在新尝试和生产变更前停止，保留旧记录；异常恢复参数仍仅用于有明确技术依据的前向修复。
 - 首次全量整改仍要完成脱敏生产副本 migration 演练和原 v1.11 镜像资格验证。平台爬取沿用生产实现，新增 UID 绑定已移出本次范围，不再要求其真实样本作为本次发布门槛。它们是技术证据，不再要求所有者审核；缺证据的整合 PR 保持 Draft。
 
 当前实现验证结果写入 PR。合并前只表示候选代码完成，不能宣称此工作流已经在生产运行。

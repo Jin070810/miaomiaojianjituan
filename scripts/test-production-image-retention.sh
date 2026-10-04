@@ -30,6 +30,14 @@ jq -n '["sha256:"+("2"*64)]' > "$fixture/used.json"
 select_images() { jq --arg cutoff '2026-01-01T00:00:00Z' --slurpfile used "$fixture/used.json" -f scripts/select-retired-images.jq "$1"; }
 select_images "$fixture/images.json" > "$fixture/selection.json"
 jq -e '(.selected|length)==2 and all(.selected[]; .revision==("1"*40)) and (.retainedVersions|length)==4' "$fixture/selection.json" >/dev/null
+# Match Docker 29 containerd's collectRepoTagsAndDigests output: a digest-only
+# image has the same immutable reference in both arrays. Do not mistake it for
+# a foreign tag, and emit the reference only once for removal.
+jq '.[0].RepoTags=.[0].RepoDigests' "$fixture/images.json" > "$fixture/variant.json"
+select_images "$fixture/variant.json" | jq -e '(.selected|length)==2 and all(.selected[]; (.refs|length)==1)' >/dev/null
+# A digest alias not present in this image's verified immutable refs stays out.
+jq '.[0].RepoTags=["ghcr.io/jin070810/miaomiaojianjituan-app@sha256:"+("f"*64)]' "$fixture/images.json" > "$fixture/variant.json"
+select_images "$fixture/variant.json" | jq -e 'all(.selected[]; .id!=("sha256:"+("1"*64)))' >/dev/null
 # Foreign references, unknown provenance, recent age, production tag, and a
 # stopped local-only counterpart must each preserve the entire relevant image.
 for transform in \

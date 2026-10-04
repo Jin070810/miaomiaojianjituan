@@ -1,6 +1,42 @@
 #!/usr/bin/env bash
 # Sourced by the trusted release controller; no environment file is executed.
 
+release_verify_previous_recovery() {
+  local root="$1" domain="$2" previous id service container health code base
+  [[ "$root" == /* && "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || return 1
+  [[ -f "$root/releases/active.json" && ! -L "$root/releases/active.json" ]] || return 1
+  [[ "$(stat -c %s "$root/releases/active.json")" -le 16384 ]] || return 1
+  previous="$(jq -er 'select(.status=="failed" and (.exitCode|type)=="number" and .exitCode>0 and .migrationsStarted==false
+    and .configCommitted==false and .maintenanceEngaged==false)
+    | .previousCommit | select(test("^[a-f0-9]{40}$"))' "$root/releases/active.json")" || return 1
+  id="$(jq -er '.id | select(test("^[1-9][0-9]*-[1-9][0-9]*$"))' "$root/releases/active.json")" || return 1
+  [[ "$(realpath -e "$root/releases/attempts/$id")" == "$root/releases/attempts/$id" ]] || return 1
+  [[ -f "$root/releases/attempts/$id/journal.json" && ! -L "$root/releases/attempts/$id/journal.json" ]] || return 1
+  cmp -s "$root/releases/active.json" "$root/releases/attempts/$id/journal.json" || return 1
+  [[ ! -e "$root/.release-runtime/maintenance" && ! -L "$root/.release-runtime/maintenance"
+    && ! -e "$root/.release-runtime/legacy-queues-before.json" && ! -L "$root/.release-runtime/legacy-queues-before.json" ]] || return 1
+  [[ "$(timeout 10 git -C "$root" rev-parse HEAD)" == "$previous" ]] || return 1
+  for service in app worker; do
+    container="$(timeout 10 docker ps -a --no-trunc --filter label=com.docker.compose.project=miaomiao-points \
+      --filter "label=com.docker.compose.service=$service" --filter label=com.docker.compose.oneoff=False --format '{{.ID}}')" || return 1
+    [[ "$container" =~ ^[a-f0-9]{64}$ ]] || return 1
+    timeout 10 docker inspect --format '{{json .}}' "$container" | jq -e --arg id "$container" --arg service "$service" --arg sha "$previous" '
+      .Id==$id and .Config.Labels["com.docker.compose.project"]=="miaomiao-points"
+      and .Config.Labels["com.docker.compose.service"]==$service and .Config.Labels["org.opencontainers.image.revision"]==$sha
+      and .State.Status=="running" and .State.Running==true and .State.Restarting==false
+      and .State.Paused==false and .State.OOMKilled==false and .State.Health.Status=="healthy"' >/dev/null || return 1
+  done
+  for base in http://127.0.0.1:3000 "https://$domain"; do
+    health="$(curl --fail --silent --show-error --connect-timeout 3 --max-time 8 "$base/api/health")" || return 1
+    jq -e --arg sha "$previous" '.ok==true and .database=="ok" and .redis=="ok" and .worker=="ok"
+      and .app.commit==$sha and .workerVersion.commit==$sha' <<<"$health" >/dev/null || return 1
+  done
+  code="$(curl --silent --show-error --connect-timeout 3 --max-time 8 --head --output /dev/null --write-out '%{http_code}' "https://$domain/login")" || return 1
+  [[ "$code" == 200 ]] || return 1
+  jq -cn --arg attempt "$id" --arg sha "$previous" --arg at "$(date -u +%FT%TZ)" \
+    '{previousAttempt:$attempt,previousCommit:$sha,checkedAt:$at,verified:true}'
+}
+
 release_container_snapshot() {
   local id="$1" service="$2" destination="$3"
   [[ "$id" =~ ^[a-f0-9]{64}$ && "$service" =~ ^(app|worker)$ ]] || return 1

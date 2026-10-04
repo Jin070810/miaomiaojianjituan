@@ -117,4 +117,24 @@ jq -e '.otherClients==0' "$project/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_
 bash scripts/verify-release-health.sh https://localhost "$GITHUB_SHA" > output/release-controller/tls-health.json
 bash scripts/probe-production-release.sh "$project" "$GITHUB_SHA" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" localhost integrity > output/release-controller/observation-probe.json
 jq -e '.state == "healthy" and .integrity == true' output/release-controller/observation-probe.json >/dev/null
-echo 'Real staging candidate preflight, maintenance gate, pending request drain, quiescent backup, migration and TLS ingress passed.'
+# Verify automatic recovery against actual healthy containers and TLS ingress,
+# with separate synthetic metadata; preserve the completed deployment journal.
+recovery_root="$fixture/recovery-project"
+git clone --quiet "$fixture/origin.git" "$recovery_root"
+mkdir -p "$recovery_root/releases/attempts/1-1"
+jq -n --arg sha "$GITHUB_SHA" '{id:"1-1",previousCommit:$sha,status:"failed",exitCode:1,
+  migrationsStarted:false,configCommitted:false,maintenanceEngaged:false}' > "$recovery_root/releases/active.json"
+cp "$recovery_root/releases/active.json" "$recovery_root/releases/attempts/1-1/journal.json"
+# shellcheck source=scripts/release-lifecycle.sh
+source scripts/release-lifecycle.sh
+for _ in {1..15}; do
+  if release_verify_previous_recovery "$recovery_root" localhost > output/release-controller/recovered-failure-verification.json; then break; fi
+  sleep 2
+done
+jq -e --arg sha "$GITHUB_SHA" '.verified and .previousCommit==$sha and .previousAttempt=="1-1"' \
+  output/release-controller/recovered-failure-verification.json >/dev/null
+jq '.migrationsStarted=true' "$recovery_root/releases/active.json" > "$fixture/unsafe-recovery.json"
+cp "$fixture/unsafe-recovery.json" "$recovery_root/releases/active.json"
+cp "$fixture/unsafe-recovery.json" "$recovery_root/releases/attempts/1-1/journal.json"
+if release_verify_previous_recovery "$recovery_root" localhost >/dev/null; then echo 'Unsafe migration recovery accepted' >&2; exit 1; fi
+echo 'Real staging preflight, maintenance, request drain, backup, migration, TLS and recovered-failure verification passed.'

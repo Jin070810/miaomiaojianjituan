@@ -43,7 +43,7 @@ on:
         default: false
         type: boolean
       recover_from_failed_release:
-        description: "确认当前线上是已知失败发布，允许跳过切换前健康门禁"
+        description: "已评估的异常状态恢复：允许跳过切换前健康门禁（完整恢复会自动核验）"
         required: false
         default: false
         type: boolean

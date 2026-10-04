@@ -44,11 +44,14 @@ fi
 
 mkdir -p releases/attempts .release-private
 chmod 700 .release-private
+previous_recovery=null
 if [[ -f releases/active.json ]] && ! jq -e '.status == "succeeded"' releases/active.json >/dev/null; then
-  jq -e '.recover == true' "$request" >/dev/null || {
-    echo '上一次发布未完成。请先核对 releases/active.json，再使用已知失败发布恢复确认。' >&2
-    exit 1
-  }
+  if ! jq -e '.recover == true' "$request" >/dev/null; then
+    previous_recovery="$(release_verify_previous_recovery "$project_dir" "$domain")" || {
+      echo '上一次发布尚未满足自动恢复校验；保留原记录，禁止继续发布。' >&2
+      exit 1
+    }
+  fi
 fi
 record="releases/attempts/$release_id"
 [[ ! -e "$record" ]] || { echo '发布尝试 ID 已使用，拒绝覆盖历史记录。' >&2; exit 1; }
@@ -69,9 +72,9 @@ cp "$manifest" "$record/manifest.json"
 cp "$attestation" "$record/attestation.json"
 jq -n --arg id "$release_id" --arg actor "$actor" --arg commit "$commit" --arg previous "$previous_commit" \
   --arg version "$(jq -r .version "$request")" --arg hash "$(sha256sum "$manifest" | cut -d' ' -f1)" \
-  --arg at "$(date -u +%FT%TZ)" \
+  --arg at "$(date -u +%FT%TZ)" --argjson previousRecovery "$previous_recovery" \
   '{id:$id, actor:$actor, commit:$commit, version:$version, manifestSha256:$hash, previousCommit:$previous, startedAt:$at,
-    status:"running", phase:"accepted", configCommitted:false, migrationsStarted:false}' > "$journal"
+    previousRecovery:$previousRecovery,status:"running", phase:"accepted", configCommitted:false, migrationsStarted:false}' > "$journal"
 if [[ -f releases/current.json ]]; then cp releases/current.json "$record/previous.json"; fi
 persist() {
   local status="$1" code="${2:-0}" temp

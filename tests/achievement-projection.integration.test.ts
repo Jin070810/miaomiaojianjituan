@@ -1,4 +1,3 @@
-import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -178,7 +177,6 @@ describe.skipIf(process.env.RUN_DB_TESTS !== "1")("achievement projection", () =
     const video = await db.videoSubmission.create({ data: { userId, sourceUrl: `https://v.kuaishou.com/${prefix}-credit`, requestUrl: "https://v.kuaishou.com/test", sourceKind: "short-link", submittedNickname: "成长读模型测试",
       likes: 1000, submittedAt: reference, idempotencyKey: `${prefix}-credit` } });
     const spy = vi.spyOn(achievements, "reconcileMemberAchievements").mockRejectedValue(new Error("display unavailable"));
-    await seedVerifiedVideoAuthor(video.id);
     const result = await creditVideoReward({ videoId: video.id, userId, points: 100 });
     expect(result.status).toBe("APPROVED");
     expect(spy).not.toHaveBeenCalled();

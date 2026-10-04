@@ -78,6 +78,7 @@ jobs:
       - run: node --test scripts/test-automatic-release.mjs
       - run: bash scripts/test-pull-release-images.sh
       - run: bash scripts/test-production-evidence.sh
+      - run: bash scripts/test-buildkit-cache-filter.sh
       - run: bash scripts/test-release-capacity.sh
       - run: bash scripts/test-publish-release-candidate.sh
       - run: bash scripts/test-release-health.sh

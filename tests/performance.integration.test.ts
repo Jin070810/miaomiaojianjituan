@@ -1,4 +1,3 @@
-import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { Queue } from "bullmq";
@@ -24,7 +23,6 @@ describe.skipIf(!enabled)("real Redis and PostgreSQL performance probes", () => 
     const user = await db.user.create({ data: { kuaishouId: "performance-" + suffix, nickname: "合成观测测试", passwordHash: "unused", account: { create: { balance: 0 } } } });
     const video = await db.videoSubmission.create({ data: { userId: user.id, sourceUrl: "https://www.kuaishou.com/short-video/test", requestUrl: "https://www.kuaishou.com/short-video/test", sourceKind: "long-link", submittedNickname: user.nickname, photoId: "perf-" + suffix, likes: 300, status: "PROCESSING", idempotencyKey: "perf-" + suffix } }).catch(async (error) => { await db.user.delete({ where: { id: user.id } }); throw error; });
     try {
-      await seedVerifiedVideoAuthor(video.id);
       await requestContext.run({ id: trace }, () => creditVideoReward({ videoId: video.id, userId: user.id, points: 50 }));
       expect(await db.auditLog.count({ where: { action: "VIDEO_APPROVED", entityId: video.id, requestId: trace } })).toBe(1);
       expect((await db.pointAccount.findUniqueOrThrow({ where: { userId: user.id } })).balance).toBe(50);

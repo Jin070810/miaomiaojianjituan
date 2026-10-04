@@ -1,4 +1,3 @@
-import { seedVerifiedVideoAuthor } from "../helpers/verified-author";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { db } from "@/lib/db";
@@ -22,7 +21,6 @@ test.beforeAll(async () => {
     photoId: `e2e-appeal-${Date.now()}`, reviewReason: "作者名称需要确认", idempotencyKey: "e2e-appeal-policy",
   } });
   appealVideoId = appealVideo.id;
-  await seedVerifiedVideoAuthor(appealVideo.id);
   await db.videoAppeal.create({ data: { videoId: appealVideo.id, userId: member.id, reason: "作者昵称带有装饰字符", idempotencyKey: "e2e-policy-appeal" } });
 });
 test.afterAll(async () => { await cleanupWeeklyChallengeE2E(); await db.$disconnect(); });

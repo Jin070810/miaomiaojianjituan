@@ -1072,7 +1072,7 @@ function VideosView({
           <p className="modal-lead">简单说说这条切片为什么应该通过，管理员会再看一次。</p>
           <div className="field">
             <label htmlFor="appeal-reason">你的说明</label>
-            <textarea id="appeal-reason" value={appealReason} onChange={(event) => setAppealReason(event.target.value)} maxLength={1000} rows={5} placeholder="请说明需要复查的原因；如因账号未验证被驳回，请先完成平台账号验证" />
+            <textarea id="appeal-reason" value={appealReason} onChange={(event) => setAppealReason(event.target.value)} maxLength={1000} rows={5} placeholder="例如：昵称里只是多了装饰符号，确实是妙妙的直播切片" />
           </div>
           {appealError && <p className="form-error" role="alert">{appealError}</p>}
           <button className="primary-button full-button modal-submit" disabled={appealSaving || appealReason.trim().length < 2} onClick={submitAppeal}>
@@ -1420,7 +1420,6 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
         <div className="journal-section-heading ruled"><h2>账号</h2></div>
         <div className="journal-menu">
           <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
-          <Link href="/account-bindings" prefetch={false}><span><ShieldCheck size={19} />平台账号验证</span><ChevronRight size={18} /></Link>
           <button className="danger-menu-item" aria-label="主动退团" onClick={() => onOpen("leave")}><span><WarningCircle size={19} />主动退团</span><ChevronRight size={18} /></button>
           {data.user.role === "REVIEWER" && <Link href="/reviewer" aria-label="历史二审记录"><span><ClipboardCheck size={19} />历史二审记录</span><ChevronRight size={18} /></Link>}
           {data.user.role === "REVIEWER" && <Link href="/password-support" aria-label="密码协助中心"><span><ShieldCheck size={19} />密码协助中心</span><ChevronRight size={18} /></Link>}
@@ -1753,7 +1752,7 @@ function SubmitDialog({ onClose, onComplete }: { onClose: () => void; onComplete
           </div>
           <div className="rule-notice">
             <ShieldCheck size={18} />
-            <span>视频必须来自你已验证的平台账号，可在“我的 → 平台账号验证”完成绑定。正在检查或已经通过的切片不能重复提交，未通过后可以再试一次。</span>
+            <span>视频昵称要和你填写的快手昵称一致。正在检查或已经通过的切片不能重复提交，未通过后可以再试一次。</span>
           </div>
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-button full-button modal-submit" disabled={!link || link.length > 2000 || submitting} onClick={submit}>

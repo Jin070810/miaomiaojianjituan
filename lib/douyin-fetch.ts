@@ -2,7 +2,6 @@ import { chromium, type Browser } from "playwright-core";
 import { buildFetchedDouyinVideo, normalizeDouyinLink, selectDouyinDetailPayload } from "./douyin";
 import { type VideoPointRuleConfig } from "./point-rules";
 import { VideoFetchError } from "./fetch-errors";
-import { trustedDouyinDetailUrl, trustedVideoPageUrl } from "./video-source-policy";
 
 export type FetchedDouyinVideo = ReturnType<typeof buildFetchedDouyinVideo>;
 
@@ -88,14 +87,6 @@ export async function fetchDouyinVideo(
     viewport: { width: 1280, height: 720 },
   });
   const page = await context.newPage();
-  await page.route("**/*", async (route) => {
-    const request = route.request();
-    if (request.isNavigationRequest() && request.frame() === page.mainFrame() && !trustedVideoPageUrl(request.url(), "douyin")) {
-      await route.abort("blockedbyclient");
-      return;
-    }
-    await route.continue();
-  });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
   });
@@ -113,7 +104,7 @@ export async function fetchDouyinVideo(
   };
   page.on("response", (response) => {
     const responseUrl = response.url();
-    if (!trustedDouyinDetailUrl(responseUrl)) return;
+    if (!responseUrl.includes("/aweme/v1/web/aweme/detail/") && !responseUrl.includes("/aweme/v1/web/aweme/post/")) return;
     void response.finished().then(() => response.json()).then((payload) => {
       // pendingPayloads 仅用于在拿到目标 awemeId 前暂存早到的响应，给个上限避免异常页面无限累积。
       if (pendingPayloads.length < 20) pendingPayloads.push(payload);

@@ -14,7 +14,6 @@ import {
   shanghaiWeekBounds,
 } from "@/lib/weekly-challenges";
 import { creditVideoReward, revokeVideoReward } from "@/lib/points";
-import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 
@@ -590,7 +589,6 @@ describe.skipIf(!enabled)("AI 周挑战数据库事务", () => {
       },
     })));
 
-    await Promise.all(videos.map((video) => seedVerifiedVideoAuthor(video.id)));
     await Promise.all(videos.map((video, index) => creditVideoReward({
       videoId: video.id,
       userId: members[index].id,

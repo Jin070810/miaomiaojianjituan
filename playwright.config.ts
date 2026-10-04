@@ -16,8 +16,6 @@ export default defineConfig({
   projects: [
     { name: "ranking-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /ranking-adjustments\.spec\.ts/ },
     { name: "ranking-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /ranking-adjustments\.spec\.ts/ },
-    { name: "bindings-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /platform-bindings\.spec\.ts/ },
-    { name: "bindings-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /platform-bindings\.spec\.ts/ },
     {
       name: "member-loading-mobile",
       use: { viewport: { width: 390, height: 844 } },

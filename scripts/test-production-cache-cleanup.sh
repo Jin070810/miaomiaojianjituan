@@ -14,13 +14,13 @@ case "${1:-}" in
     case "${2:-}" in
       inspect) printf 'Driver: %s\n' "${CACHE_DRIVER:-docker}" ;;
       du)
-        [[ "$*" == *'--filter until=168h --filter inuse=false --filter shared=false'* ]]
+        [[ "$*" == *'--filter private="" --format=json'* ]]
         printf '{"ID":"oldprivatecache1","Reclaimable":true,"Shared":false,"Type":"regular","Size":"5GB","Description":"private-source"}\n'
         printf '{"ID":"sharedcache0001","Reclaimable":true,"Shared":true,"Type":"regular"}\n'
         printf '{"ID":"activecache0001","Reclaimable":false,"Shared":false,"Type":"regular"}\n'
         ;;
       prune)
-        [[ "$*" == 'buildx prune --builder default --force --filter id~=^(oldprivatecache1)$ --filter until=168h --filter inuse=false --filter shared=false' ]]
+        [[ "$*" == 'buildx prune --builder default --force --filter id~=^(oldprivatecache1)$ --filter until=168h --filter private=""' ]]
         touch "$CACHE_FIXTURE/pruned"
         ;;
       *) exit 99 ;;

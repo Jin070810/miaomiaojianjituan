@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -18,7 +19,7 @@ function maskLoginId(value: string) {
   return `${normalized.slice(0, 2)}***${normalized.slice(-2)}`;
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = schema.parse(await request.json());
@@ -83,3 +84,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error instanceof z.ZodError ? "登录信息格式不正确" : "登录失败" }, { status: 400 });
   }
 }
+
+export const POST = observeApi("auth_login_post", handlePOST);

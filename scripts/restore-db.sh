@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/production-lock.sh
+source "$script_dir/production-lock.sh"
+production_lock "$(pwd)"
+
 if [[ $# -lt 1 ]]; then
   echo "用法：bash scripts/restore-db.sh <备份文件> [环境文件]" >&2
   exit 1
@@ -23,8 +28,9 @@ if [[ ! -f "$env_file" ]]; then
 fi
 
 sha256sum --check "$backup_file.sha256"
-docker compose --env-file "$env_file" stop app worker
-docker compose --env-file "$env_file" exec -T postgres \
+timeout --kill-after=15s 120s docker compose --env-file "$env_file" stop app worker
+# shellcheck disable=SC2016
+timeout --kill-after=30s 20m docker compose --env-file "$env_file" exec -T postgres \
   sh -c 'pg_restore --clean --if-exists --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < "$backup_file"
 

@@ -3,6 +3,8 @@
 set -euo pipefail
 root="$(realpath -e "${1:?project}")" payload="$(realpath -e "${2:?payload}")"
 domain="${3:?domain}" candidate="${4:?candidate SHA}" run_id="${5:?run ID}"
+mode="${6:-always}"
+[[ "$mode" =~ ^(always|if-changed)$ ]]
 [[ "$domain" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$candidate" =~ ^[a-f0-9]{40}$ && "$run_id" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
 cd "$root"
 umask 077
@@ -66,6 +68,19 @@ inventory() {
   done
 }
 health
+[[ -d "$payload/prisma/migrations" && -f "$payload/prisma/schema.prisma" ]]
+[[ -z "$(find "$payload/prisma" -type l -print -quit)" ]]
+# Skip a repeated exercise only when schema and every migration are unchanged.
+git diff --quiet -- prisma
+git diff --cached --quiet -- prisma
+if [[ "$mode" == if-changed ]] &&
+   cmp -s prisma/schema.prisma "$payload/prisma/schema.prisma" &&
+   diff -qr prisma/migrations "$payload/prisma/migrations" > "$private/schema-comparison.log"; then
+  jq -n --arg candidate "$candidate" --arg source "$source_sha" --arg at "$(date -u +%FT%TZ)" \
+    '{schemaVersion:1,candidateCommit:$candidate,productionCommit:$source,checkedAt:$at,
+      qualified:true,rehearsalPerformed:false,reason:"unchanged_schema_and_migrations",rawDataExported:false}'
+  exit 0
+fi
 inventory > "$private/before.jsonl"
 (( $(df -B1 --output=avail . | tail -1) >= 3221225472 ))
 (( $(awk '/^MemAvailable:/ {print $2}' /proc/meminfo) >= 2097152 ))
@@ -79,8 +94,6 @@ expected="$(awk 'NR==1 {print $1}' "$backup.sha256")"
 pg_image="$(jq -sr '.[]|select(.service=="postgres")|.Image' "$private/before.jsonl")"
 worker_image="$(jq -sr '.[]|select(.service=="worker")|.Image' "$private/before.jsonl")"
 [[ "$pg_image" =~ ^sha256:[a-f0-9]{64}$ && "$worker_image" =~ ^sha256:[a-f0-9]{64}$ ]]
-[[ -d "$payload/prisma/migrations" && -f "$payload/prisma/schema.prisma" ]]
-[[ -z "$(find "$payload/prisma" -type l -print -quit)" ]]
 # Schema contains no production secrets. Keep its parent private on the host,
 # but let the non-root image user read the mounted schema regardless of SSH UID.
 chmod -R u=rwX,go=rX "$payload/prisma"
@@ -198,7 +211,7 @@ jq -n --arg candidate "$candidate" --arg source "$source_sha" --arg at "$(date -
     repeatMigrationPassed:true,schemaDrift:false,aggregatesPreserved:true,productionServicesPreserved:true,
     isolatedCopyRemoved:true,aggregates:$aggregates[0],migrations:$migrations[0],structuralEquivalence:true,
     historicalChecksumMatches:$history,checksumDifferences:$differences[0],historicalChecksumAccepted:$accepted,
-    acceptedHistoricalVariants:$checked[0].historicalVariants,qualified:$accepted}'
+    acceptedHistoricalVariants:$checked[0].historicalVariants,qualified:$accepted,rehearsalPerformed:true}'
 reported=true
 phase=historical_checksum_differences
 [[ "$history_accepted" == true ]]

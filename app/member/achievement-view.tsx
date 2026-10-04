@@ -1,6 +1,9 @@
-import { ArrowLeft, ChevronRight, Medal, Sparkles, Target, Trophy } from "lucide-react";
+import Image from "next/image";
+import { ArrowLeft, Medal, Sparkles, Target, Trophy } from "lucide-react";
+import { useAchievementRefresh } from "./use-achievement-refresh";
 
 export type AchievementData = {
+  projection?: { state: "pending" | "ready"; initialized: boolean; delayed: boolean; calculatedAt: string | null };
   profile: {
     experience: number;
     level: number;
@@ -75,31 +78,6 @@ function badgeAsset(code: string) {
   return BADGE_ASSETS[code] ?? "/brand/miaomiao/growth/achievement-badge.png";
 }
 
-export function AchievementSummaryCard({ data, loading, error, onOpen, onRetry }: {
-  data: AchievementData | null;
-  loading: boolean;
-  error: string;
-  onOpen: () => void;
-  onRetry: () => void;
-}) {
-  if (loading) return <section className="achievement-summary is-loading" aria-label="成长与成就正在加载"><span className="growth-loading-bar" /><small>正在整理你的成长档案…</small></section>;
-  if (error) return <section className="achievement-summary is-error" role="alert"><span>{error}</span><button onClick={onRetry}>重新加载</button></section>;
-  if (!data) return null;
-  const earned = data.achievements.filter((item) => item.earnedAt).length;
-  const goalProgress = Math.min(ratio(data.goal.progress.videos, data.goal.targetVideos), ratio(data.goal.progress.engagement, data.goal.targetEngagement));
-  return (
-    <section className="achievement-summary" aria-labelledby="achievement-summary-title">
-      <img src="/brand/miaomiao/growth/growth-hero.png" alt="" className="achievement-summary-figure" />
-      <div>
-        <span className="journal-kicker">成长与成就</span>
-        <h2 id="achievement-summary-title">Lv.{data.profile.level} · {data.profile.name}</h2>
-        <p>{data.profile.experience.toLocaleString()} 经验 · 已点亮 {earned} 枚勋章 · 本月目标 {goalProgress}%</p>
-      </div>
-      <button onClick={onOpen} aria-label="查看成长与成就"><span>查看档案</span><ChevronRight size={19} /></button>
-    </section>
-  );
-}
-
 export function AchievementView({ data, loading, error, onBack, onRetry }: {
   data: AchievementData | null;
   loading: boolean;
@@ -107,17 +85,20 @@ export function AchievementView({ data, loading, error, onBack, onRetry }: {
   onBack: () => void;
   onRetry: () => void;
 }) {
+  useAchievementRefresh(data, loading, error, onRetry);
   if (loading) return <div className="member-content journal-page achievement-page"><button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button><section className="achievement-local-state"><span className="growth-loading-bar" /><p>正在打开成长档案…</p></section></div>;
   if (error || !data) return <div className="member-content journal-page achievement-page"><button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button><section className="achievement-local-state is-error" role="alert"><p>{error || "成长档案暂时不可用"}</p><button className="journal-primary" onClick={onRetry}>重新加载</button></section></div>;
+  if (data.projection?.initialized === false) return <div className="member-content journal-page achievement-page"><button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button><section className="achievement-local-state" role="status"><h1>成长档案更新中</h1><p>正在整理你的创作记录，积分以账户余额为准。</p><button className="journal-primary" onClick={onRetry} style={{ minHeight: 44 }}>刷新档案</button></section></div>;
   const next = data.profile.nextLevel;
   const levelProgress = next ? ratio(data.profile.experience - (next.level === 1 ? 0 : [0, 500, 1500, 3500, 7000][next.level - 2] ?? 0), next.minimumExperience - ([0, 500, 1500, 3500, 7000][next.level - 2] ?? 0)) : 100;
   const recommendation = data.goal.completedAt ? "继续复用高互动选题，让下一支作品成为新的高光。" : data.goal.progress.videos < data.goal.targetVideos ? "先稳定完成一条通过作品，再集中优化互动表现。" : "作品数量已达标，下一步聚焦点赞、播放和评论互动。";
   return (
     <div className="member-content journal-page achievement-page">
       <button className="achievement-back" type="button" aria-label="返回首页" title="返回首页" onClick={onBack}><ArrowLeft size={20} /></button>
+      {data.projection?.state === "pending" && <section className="achievement-local-state achievement-projection-notice" role="status"><p>{data.projection.delayed ? "档案更新稍有延迟，可稍后刷新。" : "档案正在更新，当前显示上次结果。"} 积分以账户余额为准。</p><button className="journal-primary" onClick={onRetry} style={{ minHeight: 44 }}>刷新档案</button></section>}
       <section className="achievement-hero">
         <div><span className="journal-kicker">我的成长档案</span><h1>Lv.{data.profile.level} {data.profile.name}</h1><p>成长经验独立累计，不参与积分兑换或结算。</p></div>
-        <img src="/brand/miaomiao/growth/growth-hero.png" alt="剪辑团成长档案插画" />
+        <Image src="/brand/miaomiao/growth/growth-hero.png" width={240} height={280} sizes="(max-width: 760px) 160px, 240px" alt="剪辑团成长档案插画" />
       </section>
       <section className="achievement-level-card">
         <div><span>累计成长经验</span><strong>{data.profile.experience.toLocaleString()}</strong></div>

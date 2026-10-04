@@ -6,7 +6,10 @@ import { assertSameOrigin, getClientIp } from "@/lib/security";
 
 const schema = z.object({
   action: z.enum(["approve", "reject"]),
-  points: z.number().int().min(0).max(5000).optional(),
+  // The service enforces this video's captured cap; the API limit matches allowed rule settings.
+  points: z.number().int().min(0).max(10_000_000).optional(),
+  expectedRuleRevision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  expectedCalculatedPoints: z.number().int().min(0).max(10_000_000).optional(),
   reason: z.string().trim().max(500).optional(),
 });
 
@@ -23,6 +26,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       appealId: id,
       action: input.action,
       points: input.points,
+      expectedRuleRevision: input.expectedRuleRevision,
+      expectedCalculatedPoints: input.expectedCalculatedPoints,
       reason: input.reason,
       actorId: admin.id,
       ip: getClientIp(request),

@@ -46,19 +46,27 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import NotificationCenter, { clearNotificationPromptSession } from "./components/NotificationCenter";
 import { BrandMark, PageScene, StateMessage } from "./member/brand";
-import { LedgerView, RedemptionRecordsView, TransferRecordsView } from "./member/record-views";
 import { miaoAssets } from "./member/visual-assets";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
 import { ledgerLabel } from "@/lib/labels";
 import { chooseGrowthAction, type GrowthActionKind } from "@/lib/member-growth-guidance";
 import { fetchMemberJson, MemberFetchError } from "@/lib/member-fetch";
-import { AchievementSummaryCard, AchievementView, type AchievementData } from "./member/achievement-view";
-import BirthdayView, { BirthdayEntry } from "./member/birthday-view";
+import type { AchievementData } from "./member/achievement-view";
+import { AchievementSummaryCard } from "./member/achievement-summary";
+import { BirthdayEntry } from "./member/birthday-entry";
+import { MemberViewBoundary, MemberViewLoading } from "./member/lazy-view";
+
+const BirthdayView = dynamic(() => import("./member/birthday-view"), { loading: MemberViewLoading });
+const AchievementView = dynamic(() => import("./member/achievement-view").then((module) => module.AchievementView), { loading: MemberViewLoading });
+const LedgerView = dynamic(() => import("./member/record-views").then((module) => module.LedgerView), { loading: MemberViewLoading });
+const TransferRecordsView = dynamic(() => import("./member/record-views").then((module) => module.TransferRecordsView), { loading: MemberViewLoading });
+const RedemptionRecordsView = dynamic(() => import("./member/record-views").then((module) => module.RedemptionRecordsView), { loading: MemberViewLoading });
 
 type MemberView = "home" | "videos" | "mall" | "rank" | "profile" | "challenge" | "growth" | "achievements" | "birthday" | "ledger" | "transfers" | "orders";
 
@@ -139,7 +147,7 @@ type DashboardData = {
   leaderboard: Array<{ rank: number; userId: string; kuaishouId: string; nickname: string; avatarUrl: string | null; points: number; current: boolean }>;
 };
 
-type DeferredSection = "videos" | "gifts" | "ledger" | "transfers" | "orders";
+type DeferredSection = "videos" | "ledger" | "transfers" | "orders";
 type DeferredState = "idle" | "loading" | "ready" | "error";
 
 type WeeklyChallengeData = {
@@ -226,6 +234,8 @@ type GrowthData = {
 };
 
 type MemberAward = {
+  frozen?: boolean;
+  adjustmentPending?: boolean;
   id: string;
   rank: number;
   value: number;
@@ -590,6 +600,7 @@ function HomeView({
   achievementsLoading,
   achievementsError,
   onRetryAchievements,
+  onNeedAchievements,
 }: {
   onNavigate: (view: MemberView) => void;
   onOpen: (dialog: DialogType) => void;
@@ -606,6 +617,7 @@ function HomeView({
   achievementsLoading: boolean;
   achievementsError: string;
   onRetryAchievements: () => void;
+  onNeedAchievements: () => void;
 }) {
   const recentLedger = data.ledger.slice(0, 3);
   const progressPercent = challenge ? challengeProgressPercent(challenge) : 0;
@@ -647,6 +659,7 @@ function HomeView({
         error={achievementsError}
         onOpen={() => onNavigate("achievements")}
         onRetry={onRetryAchievements}
+        onNeeded={onNeedAchievements}
       />
 
       <BirthdayEntry onOpen={() => onNavigate("birthday")} />
@@ -1071,12 +1084,73 @@ function VideosView({
   );
 }
 
-function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: DialogType, gift?: DisplayGift) => void; onNavigate: (view: MemberView) => void; items: DisplayGift[]; balance: number }) {
+function displayGift(gift: DashboardData["gifts"][number], index: number): DisplayGift {
+  return {
+    id: gift.id, name: gift.name, points: gift.pointsCost, stock: gift.stock, kind: gift.kind,
+    image: gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl) ? gift.imageUrl : GIFT_PLACEHOLDER_IMAGE,
+    tag: gift.stock > 0 ? "可兑换" : "已售罄", tone: GIFT_PLACEHOLDER_TONES[index % GIFT_PLACEHOLDER_TONES.length],
+    salesCount: gift.salesCount ?? 0, pinned: gift.pinned ?? false, category: gift.category || "实用好物",
+    tags: gift.tags?.length ? gift.tags : [gift.category || "实用好物"],
+    fulfillmentFields: Array.isArray(gift.fulfillmentFields) ? gift.fulfillmentFields : [],
+  };
+}
+
+function MallView({ onOpen, onNavigate, balance, revision }: { onOpen: (dialog: DialogType, gift?: DisplayGift) => void; onNavigate: (view: MemberView) => void; balance: number; revision: number }) {
   const [activeCategory, setActiveCategory] = useState("全部");
   const [sortMode, setSortMode] = useState<"featured" | "sales" | "priceAsc" | "priceDesc">("featured");
   const [selectedGift, setSelectedGift] = useState<DisplayGift | null>(null);
+  const [items, setItems] = useState<DisplayGift[]>([]);
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [failedPage, setFailedPage] = useState(1);
+  const sequence = useRef(0);
+  const requestController = useRef<AbortController | null>(null);
+  const loadGifts = useCallback(async (page: number, append = false) => {
+    const current = ++sequence.current;
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    setError("");
+    if (append) setLoadingMore(true);
+    else { setLoading(true); setItems([]); }
+    try {
+      const query = new URLSearchParams({ page: String(page), take: "24", sort: sortMode });
+      if (activeCategory !== "全部") query.set("category", activeCategory);
+      const response = await fetch(`/api/gifts?${query}`, { cache: "no-store", signal: controller.signal });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "礼物屋加载失败");
+      if (!Array.isArray(result.gifts)) throw new Error("礼品数据暂时不可用，请重试");
+      if (current !== sequence.current) return;
+      const allItems = (result.gifts as DashboardData["gifts"]).map(displayGift);
+      const hasPages = result.pagination && Number.isSafeInteger(result.pagination.page) && Number.isSafeInteger(result.pagination.pages) && Number.isSafeInteger(result.pagination.total);
+      const nextItems = hasPages ? allItems : allItems.filter((gift) => activeCategory === "全部" || gift.category === activeCategory).sort((left, right) => {
+        if (sortMode === "sales") return right.salesCount - left.salesCount;
+        if (sortMode === "priceAsc") return left.points - right.points;
+        if (sortMode === "priceDesc") return right.points - left.points;
+        return Number(right.pinned) - Number(left.pinned);
+      });
+      setItems((previous) => append ? [...previous, ...nextItems.filter((gift) => !previous.some((old) => old.id === gift.id))] : nextItems);
+      setPagination(hasPages ? result.pagination : { page: 1, pages: 1, total: nextItems.length });
+      setAllCategories(Array.isArray(result.categories) ? result.categories.filter((value: unknown): value is string => typeof value === "string") : Array.from(new Set(allItems.map((gift) => gift.category))));
+    } catch (error) {
+      if (current !== sequence.current) return;
+      setFailedPage(page);
+      setError(controller.signal.aborted ? "礼物屋加载超时，请重试" : error instanceof Error ? error.message : "礼物屋加载失败");
+    } finally {
+      clearTimeout(timer);
+      if (current === sequence.current) { setLoading(false); setLoadingMore(false); }
+    }
+  }, [activeCategory, sortMode]);
+  useEffect(() => {
+    void loadGifts(1);
+    return () => { sequence.current += 1; requestController.current?.abort(); };
+  }, [loadGifts, revision]);
   const preferredOrder = ["实用好物", "零食饮品", "潮玩周边", "数码设备", "特别体验", "重磅大奖", "会员权益", "现金福利"];
-  const categories = ["全部", ...Array.from(new Set(items.map((item) => item.category))).sort((left, right) => {
+  const categories = ["全部", ...allCategories.slice().sort((left, right) => {
     const leftIndex = preferredOrder.indexOf(left);
     const rightIndex = preferredOrder.indexOf(right);
     if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right, "zh-CN");
@@ -1084,14 +1158,8 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
     if (rightIndex === -1) return -1;
     return leftIndex - rightIndex;
   })];
-  const sortedItems = items.filter((item) => activeCategory === "全部" || item.category === activeCategory).sort((left, right) => {
-    if (sortMode === "sales") return right.salesCount - left.salesCount || Number(right.pinned) - Number(left.pinned);
-    if (sortMode === "priceAsc") return left.points - right.points || Number(right.pinned) - Number(left.pinned);
-    if (sortMode === "priceDesc") return right.points - left.points || Number(right.pinned) - Number(left.pinned);
-    return Number(right.pinned) - Number(left.pinned);
-  });
   return (
-    <div className="member-content journal-page">
+    <div className="member-content journal-page mall-catalog">
       <section className="compact-journal-hero mall-journal-hero">
         <div>
           <span className="journal-kicker">用努力换一份小惊喜</span>
@@ -1127,10 +1195,10 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
         ] as const).map(([value, label]) => <button key={value} className={sortMode === value ? "active" : ""} onClick={() => setSortMode(value)}>{label}</button>)}
       </div>
       <section className="journal-gift-grid">
-        {sortedItems.map((gift) => (
+        {items.map((gift) => (
           <article className="journal-gift-card" key={gift.id}>
             <div className="gift-image-wrap">
-              <img src={gift.image} alt={gift.name} />
+              <img src={gift.image} alt={gift.name} loading="lazy" decoding="async" />
             </div>
             <div className="gift-body">
               <h3>{gift.name}</h3>
@@ -1155,8 +1223,14 @@ function MallView({ onOpen, onNavigate, items, balance }: { onOpen: (dialog: Dia
             </div>
           </article>
         ))}
-        {sortedItems.length === 0 && <StateMessage {...miaoAssets.actions.gift}>礼物屋正在补货，晚点再来看看吧</StateMessage>}
+        {!loading && !error && items.length === 0 && <StateMessage {...miaoAssets.actions.gift}>礼物屋正在补货，晚点再来看看吧</StateMessage>}
       </section>
+      {loading && <p role="status">正在加载礼品…</p>}
+      {error && <div role="alert" className="member-inline-error"><p>{error}</p><button className="journal-outline-button" onClick={() => void loadGifts(failedPage, failedPage > 1)}>重新加载礼品</button></div>}
+      {!loading && items.length > 0 && <div className="gift-pagination">
+        <p role="status">已显示 {items.length} / {pagination.total} 件礼品</p>
+        {pagination.page < pagination.pages && <button className="journal-outline-button" disabled={loadingMore} onClick={() => void loadGifts(pagination.page + 1, true)}>{loadingMore ? "正在加载…" : "加载更多礼品"}</button>}
+      </div>}
       {selectedGift && (
         <div className="sr-only" aria-live="polite">
           已选择 {selectedGift.name}
@@ -1286,12 +1360,12 @@ function RankView({ data }: { data: DashboardData }) {
       </section>
       {awards.length > 0 && (
         <section className="journal-section award-section">
-          <div className="journal-section-heading ruled"><h2>我的榜单奖励</h2><span>{awards.filter((award) => award.status === "PENDING").length} 份待领取</span></div>
+          <div className="journal-section-heading ruled"><h2>我的榜单奖励</h2><span>{awards.filter((award) => award.status === "PENDING" && !award.frozen).length} 份待领取</span></div>
           <div className="journal-menu">
             {awards.map((award) => (
-              <button key={award.id} disabled={award.status !== "PENDING"} onClick={() => setSelectedAward(award)}>
+              <button key={award.id} disabled={award.status !== "PENDING" || award.frozen} onClick={() => setSelectedAward(award)}>
                 <span><Trophy size={19} />{award.period.type === "WEEK" ? "周榜" : "月榜"}第 {award.rank} 名 · 榜单奖励</span>
-                <span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.status === "PENDING" ? "填写信息" : award.status === "CLAIMED" ? "待发放" : "已完成"}</span>
+                <span className={`status-chip ${award.status === "FULFILLED" ? "success" : award.status === "CLAIMED" ? "teal" : "warning"}`}>{award.frozen ? "已冻结待核实" : award.adjustmentPending ? "已发待核实" : award.status === "PENDING" ? "填写信息" : award.status === "CLAIMED" ? "待发放" : award.status === "EXPIRED" ? "已取消或过期" : "已完成"}</span>
               </button>
             ))}
           </div>
@@ -1347,7 +1421,7 @@ function ProfileView({ onNavigate, onOpen, data, onLogout }: { onNavigate: (view
         <div className="journal-menu">
           <button aria-label="账号安全" onClick={() => onOpen("password")}><span><KeyRound size={19} />账号安全</span><ChevronRight size={18} /></button>
           <button className="danger-menu-item" aria-label="主动退团" onClick={() => onOpen("leave")}><span><WarningCircle size={19} />主动退团</span><ChevronRight size={18} /></button>
-          {data.user.role === "REVIEWER" && <Link href="/reviewer" aria-label="视频二次审核台"><span><ClipboardCheck size={19} />视频二次审核台</span><ChevronRight size={18} /></Link>}
+          {data.user.role === "REVIEWER" && <Link href="/reviewer" aria-label="历史二审记录"><span><ClipboardCheck size={19} />历史二审记录</span><ChevronRight size={18} /></Link>}
           {data.user.role === "REVIEWER" && <Link href="/password-support" aria-label="密码协助中心"><span><ShieldCheck size={19} />密码协助中心</span><ChevronRight size={18} /></Link>}
         </div>
       </section>
@@ -1959,14 +2033,16 @@ export default function MemberApp() {
   const [growthLoading, setGrowthLoading] = useState(true);
   const [growthError, setGrowthError] = useState("");
   const [growthRevision, setGrowthRevision] = useState(0);
+  const [achievementsRequested, setAchievementsRequested] = useState(false);
+  const needAchievements = useCallback(() => setAchievementsRequested(true), []);
   const [achievements, setAchievements] = useState<AchievementData | null>(null);
   const [achievementsLoading, setAchievementsLoading] = useState(true);
   const [achievementsError, setAchievementsError] = useState("");
   const [achievementsRevision, setAchievementsRevision] = useState(0);
   const [loadError, setLoadError] = useState("");
   const [homeRevision, setHomeRevision] = useState(0);
-  const [sectionStates, setSectionStates] = useState<Record<DeferredSection, DeferredState>>({ videos: "idle", gifts: "idle", ledger: "idle", transfers: "idle", orders: "idle" });
-  const [sectionErrors, setSectionErrors] = useState<Record<DeferredSection, string>>({ videos: "", gifts: "", ledger: "", transfers: "", orders: "" });
+  const [sectionStates, setSectionStates] = useState<Record<DeferredSection, DeferredState>>({ videos: "idle", ledger: "idle", transfers: "idle", orders: "idle" });
+  const [sectionErrors, setSectionErrors] = useState<Record<DeferredSection, string>>({ videos: "", ledger: "", transfers: "", orders: "" });
   const [historyMore, setHistoryMore] = useState({ ledger: false, videos: false, transfers: false, orders: false });
   const [historyLoading, setHistoryLoading] = useState(false);
   const [clearanceOnboardingOpen, setClearanceOnboardingOpen] = useState(false);
@@ -2049,6 +2125,7 @@ export default function MemberApp() {
   }, [growthRevision, homeRevision, router]);
 
   useEffect(() => {
+    if (!achievementsRequested) return;
     let active = true;
     setAchievementsLoading(true);
     fetchMemberJson<AchievementData>("/api/member/achievements", "成长与成就加载失败")
@@ -2065,7 +2142,7 @@ export default function MemberApp() {
       })
       .finally(() => { if (active) setAchievementsLoading(false); });
     return () => { active = false; };
-  }, [achievementsRevision, homeRevision, router]);
+  }, [achievementsRequested, achievementsRevision, homeRevision, router]);
 
   async function loadSection(section: DeferredSection, force = false) {
     if (!force && ["loading", "ready"].includes(sectionStates[section])) return;
@@ -2076,9 +2153,6 @@ export default function MemberApp() {
         const result = await fetchMemberJson<{ videos: DashboardData["videos"]; pagination: { page: number; pages: number }; summary: Omit<DashboardData["summary"], "monthlyIncome" | "rank"> }>("/api/videos?page=1&take=50", "切片记录加载失败");
         setDashboard((current) => current ? { ...current, videos: result.videos, summary: { ...current.summary, ...result.summary } } : current);
         setHistoryMore((current) => ({ ...current, videos: result.pagination.page < result.pagination.pages }));
-      } else if (section === "gifts") {
-        const result = await fetchMemberJson<{ gifts: DashboardData["gifts"] }>("/api/gifts", "礼物屋加载失败");
-        setDashboard((current) => current ? { ...current, gifts: result.gifts } : current);
       } else if (section === "ledger") {
         const result = await fetchMemberJson<{ ledger: DashboardData["ledger"]; pagination: { page: number; pages: number } }>("/api/points?page=1&take=50", "积分记录加载失败");
         setDashboard((current) => current ? { ...current, ledger: result.ledger } : current);
@@ -2105,7 +2179,6 @@ export default function MemberApp() {
 
   useEffect(() => {
     const section = view === "videos" ? "videos"
-      : view === "mall" ? "gifts"
         : view === "ledger" ? "ledger"
           : view === "transfers" ? "transfers"
             : view === "orders" ? "orders" : null;
@@ -2123,30 +2196,12 @@ export default function MemberApp() {
     setHomeRevision((value) => value + 1);
   }
 
-  const giftRows = useMemo<DisplayGift[]>(() => {
-    if (!dashboard) return [];
-    return dashboard.gifts.map((gift, index) => ({
-      id: gift.id,
-      name: gift.name,
-      points: gift.pointsCost,
-      stock: gift.stock,
-      kind: gift.kind,
-      image: gift.imageUrl && /^(?:https?:\/\/|\/|data:image\/webp;base64,)/i.test(gift.imageUrl) ? gift.imageUrl : GIFT_PLACEHOLDER_IMAGE,
-      tag: gift.stock > 0 ? "可兑换" : "已售罄",
-      tone: GIFT_PLACEHOLDER_TONES[index % GIFT_PLACEHOLDER_TONES.length],
-      salesCount: gift.salesCount ?? 0,
-      pinned: gift.pinned ?? false,
-      category: gift.category || "实用好物",
-      tags: gift.tags?.length ? gift.tags : [gift.category || "实用好物"],
-      fulfillmentFields: Array.isArray(gift.fulfillmentFields) ? gift.fulfillmentFields : [],
-    }));
-  }, [dashboard]);
-
   const openDialog = (type: DialogType) => {
     setDialog(type);
   };
 
   const handleNavigate = (nextView: MemberView) => {
+    if (nextView === "achievements") needAchievements();
     setView(nextView);
     window.scrollTo({ top: 0, behavior: "auto" });
   };
@@ -2186,7 +2241,7 @@ export default function MemberApp() {
   const page = useMemo(() => {
     if (!dashboard) return null;
     if (view === "videos") return <DeferredPage state={sectionStates.videos} error={sectionErrors.videos} onRetry={() => void loadSection("videos", true)}><VideosView onOpen={openDialog} data={dashboard} hasMore={historyMore.videos} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("videos")} /></DeferredPage>;
-    if (view === "mall") return <DeferredPage state={sectionStates.gifts} error={sectionErrors.gifts} onRetry={() => void loadSection("gifts", true)}><MallView items={giftRows} balance={dashboard.user.balance} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? giftRows[0]); openDialog(type); }} /></DeferredPage>;
+    if (view === "mall") return <MallView balance={dashboard.user.balance} revision={homeRevision} onNavigate={handleNavigate} onOpen={(type, gift) => { if (type === "redeem") setSelectedGift(gift ?? null); openDialog(type); }} />;
     if (view === "rank") return <RankView data={dashboard} />;
     if (view === "profile") return <ProfileView data={dashboard} onNavigate={handleNavigate} onOpen={openDialog} onLogout={async () => { clearNotificationPromptSession(); await fetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); }} />;
     if (view === "challenge") return <ChallengeView challenge={weeklyChallenge} error={challengeError} onRetry={() => setChallengeRevision((value) => value + 1)} onBack={() => handleNavigate("home")} onNavigate={handleNavigate} onClaimChallenge={claimCurrentChallenge} />;
@@ -2196,8 +2251,8 @@ export default function MemberApp() {
     if (view === "ledger") return <DeferredPage state={sectionStates.ledger} error={sectionErrors.ledger} onRetry={() => void loadSection("ledger", true)}><LedgerView data={dashboard} onBack={() => handleNavigate("home")} hasMore={historyMore.ledger} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("ledger")} /></DeferredPage>;
     if (view === "transfers") return <DeferredPage state={sectionStates.transfers} error={sectionErrors.transfers} onRetry={() => void loadSection("transfers", true)}><TransferRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.transfers} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("transfers")} /></DeferredPage>;
     if (view === "orders") return <DeferredPage state={sectionStates.orders} error={sectionErrors.orders} onRetry={() => void loadSection("orders", true)}><RedemptionRecordsView data={dashboard} onBack={() => handleNavigate("profile")} hasMore={historyMore.orders} loadingMore={historyLoading} onLoadMore={() => void loadMoreHistory("orders")} /></DeferredPage>;
-    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} achievements={achievements} achievementsLoading={achievementsLoading} achievementsError={achievementsError} onRetryAchievements={() => setAchievementsRevision((value) => value + 1)} onNavigate={handleNavigate} onOpen={openDialog} />;
-  }, [achievements, achievementsError, achievementsLoading, challengeError, challengeLoading, dashboard, giftRows, growth, growthError, growthLoading, historyLoading, historyMore, router, sectionErrors, sectionStates, view, weeklyChallenge]);
+    return <HomeView data={dashboard} challenge={weeklyChallenge} challengeLoading={challengeLoading} challengeError={challengeError} onRetryChallenge={() => setChallengeRevision((value) => value + 1)} growth={growth} growthLoading={growthLoading} growthError={growthError} onRetryGrowth={() => setGrowthRevision((value) => value + 1)} achievements={achievements} achievementsLoading={achievementsLoading} achievementsError={achievementsError} onRetryAchievements={() => setAchievementsRevision((value) => value + 1)} onNeedAchievements={needAchievements} onNavigate={handleNavigate} onOpen={openDialog} />;
+  }, [achievements, achievementsError, achievementsLoading, challengeError, challengeLoading, dashboard, homeRevision, growth, growthError, growthLoading, historyLoading, historyMore, needAchievements, router, sectionErrors, sectionStates, view, weeklyChallenge]);
 
   if (!dashboard) {
     return (
@@ -2254,12 +2309,12 @@ export default function MemberApp() {
             <Avatar text={dashboard.user.nickname.slice(0, 1)} tone="coral" imageUrl={dashboard.user.avatarUrl} />
           </div>
         </header>
-        {page}
+        <MemberViewBoundary key={view} onBack={() => handleNavigate("home")}>{page}</MemberViewBoundary>
         <BottomNav active={navigationView} onChange={handleNavigate} />
       </div>
       {dialog === "submit" && <SubmitDialog onClose={closeDialog} onComplete={() => { invalidateSections(["videos", "ledger"]); closeDialog(); handleNavigate("videos"); }} />}
       {dialog === "transfer" && <TransferDialog balance={dashboard.user.balance} onClose={closeDialog} onComplete={() => invalidateSections(["ledger", "transfers"])} />}
-      {dialog === "redeem" && <RedeemDialog balance={dashboard.user.balance} gift={selectedGift ?? giftRows[0] ?? null} onClose={closeDialog} onComplete={() => { invalidateSections(["gifts", "ledger", "orders"]); closeDialog(); handleNavigate("orders"); }} />}
+      {dialog === "redeem" && <RedeemDialog balance={dashboard.user.balance} gift={selectedGift} onClose={closeDialog} onComplete={() => { invalidateSections(["ledger", "orders"]); closeDialog(); handleNavigate("orders"); }} />}
       {dialog === "profile" && <ProfileEditDialog user={dashboard.user} onClose={closeDialog} />}
       {dialog === "recipient" && <RecipientProfileDialog onClose={closeDialog} />}
       {dialog === "password" && <PasswordDialog onClose={closeDialog} />}

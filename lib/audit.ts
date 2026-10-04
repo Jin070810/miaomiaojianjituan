@@ -38,6 +38,10 @@ const actionLabels: Record<string, string> = {
   RANKING_AWARD_CLAIMED: "填写榜单领奖信息",
   RANKING_AWARD_RECIPIENT_VIEWED: "查看榜单领奖资料",
   RANKING_AWARD_UPDATED: "更新榜单奖励",
+  RANKING_AWARD_FROZEN: "冻结榜单奖励",
+  RANKING_AWARD_ADJUSTMENT_OPENED: "建立已发榜单奖励调整待办",
+  RANKING_AWARD_ADJUSTMENT_RESOLVED: "处理榜单奖励调整",
+  RANKING_AWARD_CANCELLED: "取消未发榜单奖励",
   RANKING_SETTLED: "完成榜单结算",
   TRANSFER_COMPLETED: "完成积分转账",
   USER_REGISTERED: "注册账号",
@@ -62,6 +66,7 @@ const actionLabels: Record<string, string> = {
   VIDEO_ENQUEUE_FAILED: "视频入队失败",
   VIDEO_POINTS_ADJUSTED: "调整视频积分",
   VIDEO_POINT_RULE_UPDATED: "修改视频积分规则",
+  VIDEO_POINT_RULE_CAPTURED: "锁定视频积分规则",
   VIDEO_REJECTED: "视频驳回",
   VIDEO_REPROCESS_ENQUEUE_FAILED: "视频重抓入队失败",
   VIDEO_REPROCESS_REQUESTED: "请求重新抓取视频",
@@ -88,6 +93,7 @@ const actionLabels: Record<string, string> = {
 };
 
 const entityLabels: Record<string, string> = {
+  RankingAwardAdjustment: "榜单奖励调整待办",
   Announcement: "公告",
   Authentication: "认证",
   Gift: "礼品",

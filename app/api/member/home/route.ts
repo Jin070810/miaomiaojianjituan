@@ -1,13 +1,15 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { publicAvatarUrl } from "@/lib/public-images";
 import { memberParticipantRoles } from "@/lib/member-roles";
 
-export async function GET() {
-  const user = await currentUser();
+async function handleGET() {
+  const user = await currentUser({ profile: true });
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
 
-  const [recentLedger, videoStatusGroups, higherBalanceCount, approvedVideos, eligibility, birthdayProfile, birthdayBenefit] = await Promise.all([
+  const [recentLedger, videoStatusGroups, higherBalanceCount, eligibility, birthdayProfile, birthdayBenefit] = await Promise.all([
     user.account
       ? db.pointLedger.findMany({
           where: { accountId: user.account.id },
@@ -21,13 +23,18 @@ export async function GET() {
       _count: { id: true },
     }),
     db.pointAccount.count({ where: { balance: { gt: user.account?.balance ?? 0 }, user: { active: true, role: { in: memberParticipantRoles } } } }),
-    db.videoSubmission.count({ where: { userId: user.id, status: "APPROVED" } }),
-    db.memberEligibility.findUnique({ where: { userId: user.id }, include: { policyVersion: true } }),
+    db.memberEligibility.findUnique({ where: { userId: user.id }, select: {
+      status: true, lastOutputAt: true, cycleStartedAt: true, onboardingSeenAt: true,
+      policyVersion: { select: { inactivityDays: true, warningDays: true, cooldownDays: true } },
+    } }),
     db.memberBirthdayProfile.findUnique({ where: { userId: user.id }, select: { birthMonth: true, birthDay: true, pendingEffectiveAt: true, visibleOnWall: true } }).catch((error) => {
       console.error("[member-home] birthday profile unavailable", error);
       return null;
     }),
-    db.birthdayAnnualBenefit.findFirst({ where: { userId: user.id }, orderBy: { occurrenceDate: "desc" }, include: { prize: { select: { id: true, kind: true, status: true, points: true, claimExpiresAt: true } } } }).catch((error) => {
+    db.birthdayAnnualBenefit.findFirst({ where: { userId: user.id }, orderBy: { occurrenceDate: "desc" }, select: {
+      benefitYear: true, drawOpensAt: true, drawClosesAt: true,
+      prize: { select: { id: true, kind: true, status: true, points: true, claimExpiresAt: true } },
+    } }).catch((error) => {
       console.error("[member-home] birthday benefit unavailable", error);
       return null;
     }),
@@ -48,13 +55,13 @@ export async function GET() {
       id: user.id,
       kuaishouId: user.kuaishouId,
       nickname: user.nickname,
-      avatarUrl: user.avatarUrl,
+      avatarUrl: publicAvatarUrl(user),
       role: user.role,
       guildStatus: user.guildStatus,
       invited: user.invited,
       balance: user.account?.balance ?? 0,
     },
-    summary: { approvedVideos, rank: higherBalanceCount + 1, videoCounts },
+    summary: { approvedVideos: videoCounts.approved, rank: higherBalanceCount + 1, videoCounts },
     eligibility: eligibility ? {
       status: eligibility.status,
       deadlineAt: new Date((eligibility.lastOutputAt ?? eligibility.cycleStartedAt).getTime() + eligibility.policyVersion.inactivityDays * 86_400_000),
@@ -78,3 +85,5 @@ export async function GET() {
     } : { registered: false, effective: false, pendingEffectiveAt: null, visibleOnWall: false, benefit: null },
   });
 }
+
+export const GET = observeApi("home_get", handleGET);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CalendarDays, ChevronRight, Gift, PartyPopper, Send, Sparkles, Star, X } from "lucide-react";
+import { ArrowLeft, CalendarDays, Gift, PartyPopper, Send, Sparkles, Star, X } from "lucide-react";
 import { fetchMemberJson } from "@/lib/member-fetch";
 import type { MembershipFieldDefinition } from "@/lib/gifts";
 import { miaoAssets } from "./visual-assets";
@@ -19,10 +19,6 @@ function benefitIsOpen(benefit: BirthdayBenefit, now = Date.now()) { return now 
 function drawRemainingLabel(closesAt: string) { const remaining = Math.max(0, new Date(closesAt).getTime() - Date.now()); const hours = Math.ceil(remaining / 3_600_000); return hours > 24 ? `剩余 ${Math.floor(hours / 24)} 天 ${hours % 24} 小时` : `剩余 ${hours} 小时`; }
 function shanghaiToday() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function membershipFields(value: unknown): MembershipFieldDefinition[] { return Array.isArray(value) ? value.filter((field): field is MembershipFieldDefinition => Boolean(field && typeof field === "object" && "key" in field && "label" in field)) : []; }
-
-export function BirthdayEntry({ onOpen }: { onOpen: () => void }) {
-  return <section className="birthday-entry" aria-labelledby="birthday-entry-title"><img src={miaoAssets.actions.gift.src} alt="" /><div><span>团友生日册</span><h2 id="birthday-entry-title">生日星愿</h2><p>登记生日、抽取年度心意，也为团友送上一张祝福卡。</p></div><button onClick={onOpen} aria-label="进入生日星愿"><ChevronRight size={22} /></button></section>;
-}
 
 export default function BirthdayView({ onBack, onBalanceChanged }: { onBack: () => void; onBalanceChanged: () => void }) {
   const [me, setMe] = useState<BirthdayMeData | null>(null);

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { db } from "@/lib/db";
+import { runBirthdayMaintenance } from "@/lib/birthdays";
 import { birthdayE2EIds, birthdayE2EPassword, cleanupBirthdayE2E, seedBirthdayE2E } from "./birthday-fixture";
 import { expectElementsWithinViewport, expectNoHorizontalOverflow } from "./weekly-challenge-fixture";
 
@@ -21,6 +22,8 @@ test("birthday wall reveals birthdays only after member entry", async ({ page },
   await expect(page.getByText("今日公开寿星")).toHaveCount(0);
   const member = await db.user.findUniqueOrThrow({ where: { kuaishouId: birthdayE2EIds.member } });
   const notificationsBefore = await db.notification.count({ where: { userId: member.id } });
+  // A real staging Worker may perform this cycle between the two observations.
+  await runBirthdayMaintenance();
 
   await page.getByRole("button", { name: "进入生日星愿" }).click();
   await expect(page.getByRole("heading", { name: "生日星愿权益" })).toBeVisible();

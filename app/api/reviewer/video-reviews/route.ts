@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       }),
       db.videoSecondaryReview.count({ where }),
     ]);
-    return NextResponse.json({ reviews, pagination: paginationResult(page, take, total) });
+    return NextResponse.json({ reviews, pagination: paginationResult(page, take, total), readOnly: true, policy: "automatic-with-appeals" });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }

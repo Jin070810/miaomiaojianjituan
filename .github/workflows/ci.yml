@@ -4,18 +4,26 @@ on:
   pull_request:
   push:
     branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: "自动化补触发 PR CI；留空只允许 main CI"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pull_request_number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   core:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -23,136 +31,79 @@ jobs:
           POSTGRES_DB: miaomiao_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres -d miaomiao_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
+          --health-interval 5s --health-timeout 5s --health-retries 12
       redis:
         image: redis:7-alpine
-        ports:
-          - 6379:6379
+        ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
+          --health-interval 5s --health-timeout 3s --health-retries 12
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/miaomiao_test?schema=public
       REDIS_URL: redis://localhost:6379
       SESSION_SECRET: ci-session-secret-012345678901234567890123
       PHONE_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      RUN_DB_TESTS: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
+      - name: Validate explicitly dispatched CI source
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+        run: node scripts/automatic-release.mjs validate-dispatch
       - run: npm ci
       - run: npx prisma migrate deploy
+      - name: Check schema matches applied migrations
+        run: npm run db:check-drift
       - run: npm run lint
-      - run: npm test
-      - run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Database integration tests
+        run: npm test
+        env:
+          RUN_DB_TESTS: "1"
       - run: npm run data:reconcile
       - run: npm audit --omit=dev --audit-level=high
-      - run: docker compose config
-      - run: |
-          docker compose config | grep -q 'HOSTNAME: 0.0.0.0'
-          docker compose config | grep -q 'http://127.0.0.1:3000/api/health'
-      - uses: docker/setup-buildx-action@v3
-      - name: Build app image (target runner) with registry cache
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: runner
-          push: false
-          load: true
-          tags: miaomiao-points-app:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build worker image with registry cache
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: worker
-          push: false
-          load: true
-          tags: miaomiao-points-worker:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts"
+      - name: Audit test and development dependencies
+        run: npm audit --audit-level=moderate
+      - run: docker compose config --quiet
+      - run: node --test scripts/test-release-manifest.mjs
+      - run: node --test scripts/test-automatic-release.mjs
       - run: bash scripts/test-pull-release-images.sh
       - run: bash scripts/test-production-evidence.sh
       - run: bash scripts/test-production-cache-cleanup.sh
       - run: bash scripts/test-rehearsal-sanitization.sh
+      - run: bash scripts/test-copy-rehearsal-gate.sh
       - run: bash scripts/test-migration-history.sh
       - run: bash scripts/test-production-image-retention.sh
       - run: bash scripts/test-buildkit-cache-filter.sh
+      - run: bash scripts/test-release-capacity.sh
+      - run: bash scripts/test-publish-release-candidate.sh
+      - run: bash scripts/test-release-health.sh
+      - run: bash scripts/test-release-lifecycle.sh
+      - run: bash scripts/test-release-observation.sh
+      - run: bash scripts/test-production-release.sh
+      - run: bash scripts/test-signed-release.sh
 
-  e2e:
+  # Full browser matrix now runs against these exact final images, once.
+  # This replaces both host "next start" E2E and the second staging build.
+  staging:
     needs: core
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    container:
-      image: mcr.microsoft.com/playwright:v1.62.0-noble
-      options: --user 1001
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: miaomiao_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd "pg_isready -U postgres -d miaomiao_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/miaomiao_test?schema=public
-      REDIS_URL: redis://redis:6379
-      SESSION_SECRET: ci-session-secret-012345678901234567890123
-      PHONE_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      RUN_DB_TESTS: "1"
-      PLAYWRIGHT_PROD_SERVER: "1"
-      # e2e 走 http://127.0.0.1，生产构建默认 Secure Cookie 会被 WebKit 丢弃。
-      SESSION_COOKIE_SECURE: "false"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npx prisma generate
-      - run: npx prisma migrate deploy
-      - run: npm run build
-      - run: npm run test:e2e
-      - name: Upload Playwright screenshots
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-screenshots
-          path: output/playwright/*.png
-          if-no-files-found: error
-          retention-days: 14
-
-  staging:
-    needs: [core, e2e]
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     environment: staging
+    outputs:
+      app_id: ${{ steps.proof.outputs.app_id }}
+      worker_id: ${{ steps.proof.outputs.worker_id }}
+      build_time: ${{ steps.proof.outputs.build_time }}
+      image_artifact: ${{ steps.proof.outputs.image_artifact }}
     env:
       POSTGRES_DB: miaomiao_staging
       POSTGRES_USER: staging_admin
@@ -160,6 +111,7 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
       ADMIN_KUAISHOU_IDS: staging-health-admin
       ADMIN_NICKNAME: Staging Health Admin
+      SESSION_COOKIE_SECURE: "false"
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
     steps:
@@ -168,86 +120,240 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Prepare isolated staging credentials and immutable metadata
+      - name: Prepare isolated staging credentials and build metadata
         run: |
           database_password="$(openssl rand -hex 24)"
           admin_password="Staging-$(openssl rand -hex 16)"
+          session_secret="$(openssl rand -hex 32)"
+          phone_key="$(openssl rand -hex 32)"
+          for secret in "$database_password" "$admin_password" "$session_secret" "$phone_key"; do
+            echo "::add-mask::$secret"
+          done
           {
             echo "APP_BUILD_TIME=$(date -u --iso-8601=seconds)"
             echo "POSTGRES_PASSWORD=$database_password"
             echo "DOCKER_DATABASE_URL=postgresql://staging_admin:$database_password@postgres:5432/miaomiao_staging?schema=public"
             echo "DATABASE_URL=postgresql://staging_admin:$database_password@127.0.0.1:5433/miaomiao_staging?schema=public"
-            echo "SESSION_SECRET=$(openssl rand -hex 32)"
-            echo "PHONE_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "SESSION_SECRET=$session_secret"
+            echo "PHONE_ENCRYPTION_KEY=$phone_key"
             echo "ADMIN_PASSWORD=$admin_password"
           } >> "$GITHUB_ENV"
-      - name: Build staging App image
-        run: >-
-          docker build --target runner
-          --build-arg APP_COMMIT_SHA="$GITHUB_SHA"
-          --build-arg APP_BUILD_TIME="$APP_BUILD_TIME"
-          -t miaomiao-points-app:production .
-      - name: Build staging Worker image
-        run: >-
-          docker build --target worker
-          --build-arg APP_COMMIT_SHA="$GITHUB_SHA"
-          --build-arg APP_BUILD_TIME="$APP_BUILD_TIME"
-          -t miaomiao-points-worker:production .
-      - name: Start isolated staging dependencies
-        run: docker compose up -d postgres redis
-      - name: Apply staging migrations
-        run: docker compose run --rm migrate
-      - name: Seed staging administrator
-        run: docker compose run --rm --no-deps -e ADMIN_KUAISHOU_IDS -e ADMIN_PASSWORD -e ADMIN_NICKNAME worker npm run seed:admin
-      - name: Start staging App and Worker
-        run: docker compose up -d --no-build app worker
-      - name: Verify staging health and immutable versions
-        run: |
-          for _ in {1..18}; do
-            if health_json="$(curl --fail --silent --show-error http://127.0.0.1:3000/api/health)"; then
-              printf '%s\n' "$health_json"
-              if jq -e --arg sha "$GITHUB_SHA" '
-                .ok == true
-                and .database == "ok"
-                and .redis == "ok"
-                and .worker == "ok"
-                and .app.commit == $sha
-                and .workerVersion.commit == $sha
-              ' <<<"$health_json" >/dev/null; then
-                exit 0
-              fi
-            fi
-            sleep 5
-          done
-          docker compose ps
-          docker compose logs --no-color app worker migrate
-          exit 1
       - run: npm ci
-      - name: Install Chromium for staging acceptance
-        run: npx playwright install --with-deps chromium
-      - name: Run admin staging acceptance at 390x844 and 1440x900
-        run: >-
-          npx playwright test
-          tests/e2e/admin-responsive.spec.ts
-          tests/e2e/birthday-system.spec.ts
-          --project=admin-desktop
-          --project=admin-mobile
-          --project=birthday-desktop
-          --project=birthday-mobile
-      - name: Collect staging container evidence
+      - uses: docker/setup-buildx-action@v3
+      - name: Build candidate App (includes npm run build)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: miaomiao-points-app:production
+          build-args: |
+            APP_COMMIT_SHA=${{ github.sha }}
+            APP_BUILD_TIME=${{ env.APP_BUILD_TIME }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=release-app
+          cache-to: type=gha,mode=max,scope=release-app,timeout=3m,ignore-error=true
+      - name: Build candidate Worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: miaomiao-points-worker:production
+          build-args: |
+            APP_COMMIT_SHA=${{ github.sha }}
+            APP_BUILD_TIME=${{ env.APP_BUILD_TIME }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=release-worker
+          cache-to: type=gha,mode=max,scope=release-worker,timeout=3m,ignore-error=true
+      - name: Verify operational files and writable image cache
+        run: |
+          docker run --rm --entrypoint sh miaomiao-points-worker:production -c 'test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts'
+          docker run --rm --entrypoint sh miaomiao-points-app:production -c 'test "$(id -u)" != 0 && touch .next/cache/ci-write-check && rm .next/cache/ci-write-check'
+      - name: Verify pruned Worker runtime and migration tools
+        run: |
+          mkdir -p output/worker-runtime
+          docker image inspect miaomiao-points-worker:production --format '{{.Size}}' > output/worker-runtime/image-bytes.txt
+          docker run --rm -e DATABASE_URL='postgresql://smoke:smoke@127.0.0.1:1/isolated?schema=public' --entrypoint sh miaomiao-points-worker:production -ec '
+            node --import tsx scripts/verify-worker-runtime.mjs
+            ./node_modules/.bin/prisma --version
+            ./node_modules/.bin/prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > /tmp/schema.sql
+            test -s /tmp/schema.sql
+            curl --version
+          ' | tee output/worker-runtime/smoke.txt
+          docker run --rm --entrypoint npm miaomiao-points-worker:production audit --omit=dev --audit-level=high
+      - name: Upload Worker runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-runtime-evidence
+          path: output/worker-runtime/
+      - name: Start dependencies and migrate the isolated database
+        run: |
+          docker compose up -d --wait --wait-timeout 90 postgres redis
+          docker compose run --rm --no-deps migrate
+          docker compose run --rm --no-deps -e ADMIN_KUAISHOU_IDS -e ADMIN_PASSWORD -e ADMIN_NICKNAME worker npm run seed:admin
+      - name: Start the exact candidate pair
+        run: docker compose up -d --no-deps --no-build --pull never app worker
+      - name: Verify health and matching immutable versions
+        run: bash scripts/verify-release-health.sh "$PLAYWRIGHT_BASE_URL" "$GITHUB_SHA"
+      - name: Verify health boundaries with isolated dependency failures
+        timeout-minutes: 7
+        env:
+          STAGING_HEALTH_FAULT_TESTS: "1"
+        run: bash scripts/test-staging-health.sh
+      - run: npm run smoke:concurrency
+      - name: Install browsers for the complete acceptance matrix
+        run: npx playwright install --with-deps chromium webkit
+      - name: Full E2E against candidate containers
+        env:
+          PLAYWRIGHT_EVIDENCE_DIR: ${{ runner.temp }}/miaomiao-acceptance
+          PERFORMANCE_EVIDENCE_DIR: ${{ runner.temp }}/miaomiao-performance
+        run: npm run test:e2e
+      - name: Reconcile staging and recheck candidate health
+        run: |
+          docker compose run --rm --no-deps worker npm run data:reconcile
+          bash scripts/verify-release-health.sh "$PLAYWRIGHT_BASE_URL" "$GITHUB_SHA"
+      - name: Record verified candidate identities
+        # The controller uses only the disposable staging stack and synthetic credentials.
+        id: proof
+        run: |
+          app_id="$(docker image inspect --format '{{.Id}}' miaomiao-points-app:production)"
+          worker_id="$(docker image inspect --format '{{.Id}}' miaomiao-points-worker:production)"
+          mkdir -p output/release
+          jq -n --arg commit "$GITHUB_SHA" --arg buildTime "$APP_BUILD_TIME" \
+            --arg appId "$app_id" --arg workerId "$worker_id" \
+            '{commit: $commit, buildTime: $buildTime, appId: $appId, workerId: $workerId, e2e: true, staging: true}' \
+            > output/release/staging-proof.json
+          {
+            echo "app_id=$app_id"
+            echo "worker_id=$worker_id"
+            echo "build_time=$APP_BUILD_TIME"
+            echo "image_artifact=candidate-images-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
+      - name: Export verified main images for the publish-only job
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && !inputs.pull_request_number
+        run: docker save miaomiao-points-app:production miaomiao-points-worker:production | zstd -T0 -3 -o output/release/images.tar.zst
+      - name: Upload verified images
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && !inputs.pull_request_number
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.proof.outputs.image_artifact }}
+          path: output/release/
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
+      - name: Exercise the release controller on disposable staging
+        env:
+          RUN_RELEASE_CONTROLLER_TEST: "1"
+        run: bash scripts/test-staging-release-controller.sh
+      - name: Preserve release controller evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-release-controller-${{ github.run_attempt }}
+          path: output/release-controller/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Collect staging evidence
         if: always()
         run: |
           mkdir -p output/playwright
           docker compose ps > output/playwright/staging-containers.txt
           docker compose logs --no-color app worker migrate > output/playwright/staging-containers.log 2>&1
-      - name: Upload staging evidence
+          curl --silent --show-error --connect-timeout 3 --max-time 8 http://127.0.0.1:3000/api/health > output/playwright/staging-health.json || true
+          if test -f output/release/staging-proof.json; then cp output/release/staging-proof.json output/playwright/; fi
+      - name: Upload full browser and container evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: staging-acceptance
-          path: output/playwright/
+          name: staging-acceptance-${{ github.run_attempt }}
+          path: |
+            output/playwright/
+            ${{ runner.temp }}/miaomiao-acceptance/
+            ${{ runner.temp }}/miaomiao-performance/
           if-no-files-found: error
           retention-days: 14
       - name: Tear down isolated staging
         if: always()
         run: docker compose down -v --remove-orphans
+
+  # PRs never receive a registry write token. Publishing loads the tested
+  # archive; it cannot rebuild or substitute a freshly built image.
+  publish:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && !inputs.pull_request_number
+    needs: [core, staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.staging.outputs.image_artifact }}
+          path: output/release
+      - name: Load and verify previously accepted images
+        env:
+          EXPECTED_APP_ID: ${{ needs.staging.outputs.app_id }}
+          EXPECTED_WORKER_ID: ${{ needs.staging.outputs.worker_id }}
+        run: |
+          zstd -dc output/release/images.tar.zst | docker load
+          test "$(docker image inspect --format '{{.Id}}' miaomiao-points-app:production)" = "$EXPECTED_APP_ID"
+          test "$(docker image inspect --format '{{.Id}}' miaomiao-points-worker:production)" = "$EXPECTED_WORKER_ID"
+          for image in miaomiao-points-app:production miaomiao-points-worker:production; do
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+          done
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish the verified pair and write its manifest
+        env:
+          CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          APP_CONFIG_ID: ${{ needs.staging.outputs.app_id }}
+          WORKER_CONFIG_ID: ${{ needs.staging.outputs.worker_id }}
+          APP_BUILD_TIME: ${{ needs.staging.outputs.build_time }}
+        run: bash scripts/publish-release-candidate.sh
+      - name: Attest the exact accepted release manifest
+        id: attestation
+        # actions/attest v4; pin the reviewed action implementation.
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: output/release/release-candidate.json
+      - name: Retain and verify the real signature before publishing a candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attestation.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE_PATH" output/release/release-candidate.sigstore.json
+          bash scripts/verify-signed-release.sh output/release/release-candidate.json \
+            output/release/release-candidate.sigstore.json "$GITHUB_SHA" > output/release/signature-verification.json
+      - name: Preserve immutable release manifest
+        # Both bytes and provenance are retained; a copied JSON alone is insufficient.
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release/release-candidate*.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Candidate summary
+        run: |
+          echo '### Verified release candidate' >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit: $GITHUB_SHA — run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Production and rollback must use the manifest digests; no rebuild is allowed.' >> "$GITHUB_STEP_SUMMARY"

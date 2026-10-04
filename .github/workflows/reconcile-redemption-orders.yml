@@ -103,16 +103,51 @@ jobs:
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
           ADMIN_KUAISHOU_IDS: ${{ secrets.ADMIN_KUAISHOU_IDS }}
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           ACTION: ${{ inputs.action }}
           RELEASE_COMMIT: ${{ inputs.release_commit }}
           CUTOFF: ${{ inputs.cutoff }}
           EXCLUDED_GIFT_NAME: ${{ inputs.excluded_gift_name }}
           REASON: ${{ inputs.reason }}
         run: |
-          # Container and image discovery must run on the remote host.
-          reconciliation_source="$PRODUCTION_PATH/lib/redemption-reconciliation.ts:/app/lib/redemption-reconciliation.ts:ro"
-          command_source="$PRODUCTION_PATH/scripts/reconcile-redemption-orders.ts:/app/scripts/reconcile-redemption-orders.ts:ro"
-          # shellcheck disable=SC2016
-          remote_script="$(printf 'set -e\ncd %q\ngit fetch origin main\ngit cat-file -e %q^{commit}\ngit checkout --detach %q\ntest -f lib/redemption-reconciliation.ts\ntest -f scripts/reconcile-redemption-orders.ts\nworker_container="$(docker ps --filter label=com.docker.compose.project=miaomiao-points --filter label=com.docker.compose.service=worker --format "{{.ID}}" | head -n 1)"\ntest -n "$worker_container"\nworker_image="$(docker inspect --format "{{.Image}}" "$worker_container")"\ndocker tag "$worker_image" miaomiao-points-worker:production\nexport ADMIN_KUAISHOU_IDS=%q\ndocker compose --env-file .env.production run --rm --no-deps -e ADMIN_KUAISHOU_IDS -v %q -v %q worker ./node_modules/.bin/tsx scripts/reconcile-redemption-orders.ts --action %q --cutoff %q --excluded-gift-name %q --reason %q\n' \
-            "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RELEASE_COMMIT" "$ADMIN_KUAISHOU_IDS" "$reconciliation_source" "$command_source" "$ACTION" "$CUTOFF" "$EXCLUDED_GIFT_NAME" "$REASON")"
-          printf '%s\n' "$remote_script" | ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "bash -s"
+          [[ "$RUN_ID" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
+          remote_script="$(cat <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          cd "$1"
+          commit="$2"
+          run_id="$3"
+          export ADMIN_KUAISHOU_IDS="$4"
+          action="$5"
+          cutoff="$6"
+          gift="$7"
+          reason="$8"
+          umask 077
+          exec 9>.production.lock
+          flock --exclusive --wait 120 9
+          test "$(timeout 15 git rev-parse HEAD)" = "$commit"
+          worker_container="$(timeout 15 docker ps --filter label=com.docker.compose.project=miaomiao-points --filter label=com.docker.compose.service=worker --format '{{.ID}}')"
+          [[ -n "$worker_container" && "$worker_container" != *$'\n'* ]]
+          worker_image="$(timeout 15 docker inspect --format '{{.Image}}' "$worker_container")"
+          test "$(timeout 15 docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$worker_image")" = "$commit"
+          override="$(mktemp)"
+          container="miaomiao-reconciliation-$run_id"
+          cleanup() {
+            timeout --kill-after=5s 15s docker rm -f "$container" >/dev/null 2>&1 || true
+            rm -f -- "$override"
+          }
+          trap cleanup EXIT
+          trap 'exit 143' TERM HUP
+          jq -n --arg image "$worker_image" '{services:{worker:{image:$image}}}' > "$override"
+          timeout --signal=TERM --kill-after=20s 10m docker compose --env-file .env.production \
+            -f docker-compose.yml -f "$override" run --rm --no-deps --pull never -T --name "$container" \
+            -e ADMIN_KUAISHOU_IDS worker ./node_modules/.bin/tsx scripts/reconcile-redemption-orders.ts \
+            --action "$action" --cutoff "$cutoff" --excluded-gift-name "$gift" --reason "$reason"
+          REMOTE_SCRIPT
+          )"
+          # Arguments, including credentials, travel as escaped stdin assignments.
+          {
+            printf 'set -- %q %q %q %q %q %q %q %q\n' "$PRODUCTION_PATH" "$RELEASE_COMMIT" "$RUN_ID" \
+              "$ADMIN_KUAISHOU_IDS" "$ACTION" "$CUTOFF" "$EXCLUDED_GIFT_NAME" "$REASON"
+            printf '%s\n' "$remote_script"
+          } | ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            "$PRODUCTION_USER@$PRODUCTION_HOST" "timeout --signal=TERM --kill-after=30s 13m bash -s"

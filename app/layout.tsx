@@ -1,11 +1,7 @@
 import type { Metadata, Viewport } from "next";
-import "@fontsource-variable/noto-sans-sc/wght.css";
-import "@fontsource/noto-serif-sc/400.css";
-import "@fontsource/noto-serif-sc/600.css";
-import "@fontsource/noto-serif-sc/700.css";
+import { PerformanceReporter } from "./performance-reporter";
 import "./globals.css";
 import "./member/member-theme.css";
-import "./admin/admin-theme.css";
 
 export const metadata: Metadata = {
   title: "妙妙剪辑团积分中心",
@@ -26,7 +22,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>{children}<PerformanceReporter /></body>
     </html>
   );
 }

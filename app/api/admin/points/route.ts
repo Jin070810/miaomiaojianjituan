@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { adminAdjustPoints } from "@/lib/points";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse, requireIdempotency } from "@/lib/security";
+import { IdempotencyConflictError } from "@/lib/request-idempotency";
 
 const adjustmentSchema = z.object({
   userId: z.string().min(1),
@@ -67,6 +68,6 @@ export async function POST(request: Request) {
     const limited = rateLimitResponse(error);
     if (limited) return limited;
     const message = error instanceof z.ZodError ? "积分调整信息格式不正确" : error instanceof Error ? error.message : "积分调整失败";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: message }, { status: error instanceof IdempotencyConflictError ? 409 : 400 });
   }
 }

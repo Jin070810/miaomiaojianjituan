@@ -18,6 +18,13 @@ BEGIN
       AND data_type IN ('text','character varying','json','jsonb','ARRAY')
     ORDER BY table_name,ordinal_position
   LOOP
+    -- These constrained fields contain only fixed rule/decision vocabulary,
+    -- never member input. Keep immutable rule evidence and state checks valid
+    -- in backups made after the first automatic release as well.
+    IF (c.table_name='VideoPointRuleSnapshot' AND c.column_name IN ('revision','formulaVersion','origin')) OR
+       (c.table_name='RankingAwardAdjustment' AND c.column_name IN ('kind','source','resolution')) THEN
+      CONTINUE;
+    END IF;
     -- Preserve opaque relational IDs and fixed business vocabulary. Platform
     -- handles/video IDs, URLs, tokens, names, encrypted PII and all free text
     -- are replaced. Their original values never leave this private container.

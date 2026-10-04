@@ -60,20 +60,17 @@ describe("视频二次审核接口", () => {
     }));
   });
 
-  it("passes reviewer actions through the transactional resolver", async () => {
-    authMocks.requireVideoReviewOperator.mockResolvedValue({ id: "reviewer-1", role: "REVIEWER" });
+  it.each(["REVIEWER", "ADMIN"])("returns 410 for retired writes from %s without touching points", async (role) => {
+    authMocks.requireVideoReviewOperator.mockResolvedValue({ id: "operator-1", role });
     pointsMocks.resolveVideoSecondaryReview.mockResolvedValue({ id: "review-1", status: "APPROVED" });
     const response = await POST(new Request("http://localhost/api/reviewer/video-reviews/review-1", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "approve" }),
     }), { params: Promise.resolve({ id: "review-1" }) });
-    expect(response.status).toBe(200);
-    expect(pointsMocks.resolveVideoSecondaryReview).toHaveBeenCalledWith(expect.objectContaining({
-      reviewId: "review-1",
-      action: "approve",
-      actorId: "reviewer-1",
-      actorRole: "REVIEWER",
-    }));
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ code: "SECONDARY_REVIEW_RETIRED" });
+    expect(pointsMocks.resolveVideoSecondaryReview).not.toHaveBeenCalled();
+    expect(dbMocks.db.videoSecondaryReview.findUnique).not.toHaveBeenCalled();
   });
 });

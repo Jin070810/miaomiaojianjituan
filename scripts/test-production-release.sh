@@ -106,6 +106,7 @@ fixture() {
   payload="$test_root/payload-$scenario"
   cp scripts/{production-lock,production-release,production-preflight,pull-release-images,backup-db,verify-release-health,release-lifecycle}.sh "$payload/"
   cp scripts/nginx-release.conf scripts/verify-web-candidate.mjs scripts/legacy-queue-drain.cjs scripts/release-capacity.sh "$payload/"
+  cp scripts/migration-history.jq scripts/legacy-migration-checksums.json "$payload/"
   printf '{"syntheticHostFixture":true}\n' > "$payload/attestation.json"
   printf 'test\n' > "$TEST_PROJECT/certs/fullchain.pem"
   printf 'test\n' > "$TEST_PROJECT/certs/privkey.pem"
@@ -226,6 +227,13 @@ fixture
 TEST_MIGRATIONS='[{"name":"later","checksum":"123"}]'
 if run_release; then echo 'rollback without compatibility assessment accepted' >&2; exit 1; fi
 jq -e '.phase=="migration_check" and .migrationsStarted==false' "$TEST_PROJECT/releases/active.json" >/dev/null
+fixture
+jq '.migrations[0].sha256=("a"*64)' "$payload/manifest.json" > "$payload/new.json"
+mv "$payload/new.json" "$payload/manifest.json"
+jq -n '{schemaVersion:1,entries:[{migration:"baseline",recordedChecksum:("b"*64),canonicalChecksum:("a"*64),evidenceRun:"123",evidenceCandidate:("c"*40)}]}' > "$payload/legacy-migration-checksums.json"
+TEST_MIGRATIONS="$(jq -cn '[{name:"baseline",checksum:("b"*64)}]')"
+if ! run_release; then cat "$test_root/run.log"; exit 1; fi
+jq -e '.validChecksums and (.historicalVariants|length)==1' "$TEST_PROJECT/releases/attempts/123-1/migration-history-check.json" >/dev/null
 fixture
 TEST_MIGRATIONS='[{"name":"baseline","checksum":"changed"}]'
 jq '.migrationCompatibilityNote="Reviewed application compatibility; never downgrade the database"' "$payload/request.json" > "$payload/new.json"

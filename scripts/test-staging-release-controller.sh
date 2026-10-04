@@ -92,7 +92,8 @@ done
 set +e
 tar -czf - -C "$fixture/payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
   production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh \
-  release-lifecycle.sh nginx-release.conf verify-web-candidate.mjs legacy-queue-drain.cjs release-capacity.sh |
+  release-lifecycle.sh nginx-release.conf verify-web-candidate.mjs legacy-queue-drain.cjs release-capacity.sh \
+  migration-history.jq legacy-migration-checksums.json |
   bash scripts/receive-production-release.sh "$project"
 status=$?
 set -e

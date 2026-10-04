@@ -20,7 +20,7 @@ Deploy Production 先在 GitHub runner 验证已合并 SHA、唯一正式版本 
 | capacity_before_pull / capacity_after_pull | 源码/镜像变更前及拉取后，检查项目、镜像存储、数据库文件系统的空间和inode；至少3GiB，数据库较大时提高至其大小3倍+1GiB | 停在维护前，保留当前正常服务；不自动扩大清理范围 |
 | config_validate / images | 在私有文件中一次组装配置、预检；拉取并校验两个镜像，暂不更新 production 标签 | 原 `.env.production` 不变，恢复原 checkout |
 | dependencies | 依赖就绪 | 不修改旧版本运行状态 |
-| migration_check | 对比数据库已执行迁移和目标清单 | 同名 checksum 不符始终拒绝；仅目标版本缺少已执行迁移时，可附明确的应用兼容性评估 |
+| migration_check | 对比数据库已执行迁移和目标清单 | 同名 checksum 差异只接受可信登记中具有演练证据的精确名称/历史值/目标值组合；其余全部拒绝，兼容性说明不能覆盖未知差异。仅目标版本缺少已执行迁移时，可附明确的应用兼容性评估 |
 | candidate_preflight | 无宿主机端口的一次性候选 App，验证 ready、SHA、登录静态资源和图片优化 | 预检失败不关闭正常入口；销毁一次性容器 |
 | maintenance / drain / database_quiescence | TLS 入口显示维护页，校验 503 和专用响应头；停止旧 Web/Worker，检查退出状态和数据库其他客户端 | 迁移前仅恢复确切的旧容器；原版本健康无法确认则保持维护 |
 | backup / offsite_backup | 排空后执行 pg_dump、pg_restore 目录验证、SHA-256；OSS 模式额外上传并回读验证 | 不执行 migration；不保留不完整备份为可用结果 |

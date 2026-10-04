@@ -254,14 +254,12 @@ else
 fi
 # An older image may be incompatible with later database migrations. A reviewed
 # application rollback needs an explicit compatibility assessment, never a DB downgrade.
-jq -e --slurpfile target "$manifest" 'all(.[]; . as $row |
-  all($target[0].migrations[]; .path != ($row.name+"/migration.sql") or .sha256 == $row.checksum))' \
-  "$record/migrations-before.json" >/dev/null || {
+jq --slurpfile target "$manifest" --slurpfile aliases "$payload/legacy-migration-checksums.json" \
+  -f "$payload/migration-history.jq" "$record/migrations-before.json" > "$record/migration-history-check.json"
+jq -e '.validChecksums' "$record/migration-history-check.json" >/dev/null || {
   echo '已执行 migration 的校验和与目标版本不同，禁止部署。' >&2; exit 1;
 }
-if ! jq -e --slurpfile target "$manifest" 'all(.[]; . as $row |
-  any($target[0].migrations[]; .path == ($row.name+"/migration.sql") and .sha256 == $row.checksum))' \
-  "$record/migrations-before.json" >/dev/null; then
+if ! jq -e '.missingMigrations|length==0' "$record/migration-history-check.json" >/dev/null; then
   jq -e '.migrationCompatibilityNote | type == "string" and length >= 20 and length <= 2000' "$request" >/dev/null || {
     echo '数据库含目标版本之外的迁移或校验差异；需要应用回滚兼容性评估，拒绝继续。' >&2; exit 1;
   }

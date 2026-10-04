@@ -81,6 +81,7 @@ jobs:
             < output/copy-payload.tar.gz > output/copy-result/report.json
           jq -e --arg sha "$CANDIDATE" '.qualified==true and .candidateCommit==$sha and .rawDataExported==false' output/copy-result/report.json >/dev/null
       - name: Retain only aggregate evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-copy-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}

@@ -18,9 +18,26 @@ phase=preflight
 finish() {
   local code=$?
   trap - EXIT INT TERM HUP
-  if (( code != 0 )); then printf 'Isolated copy rehearsal failed: phase=%s exit=%s\n' "$phase" "$code" >&2; fi
+  set +e
   if [[ "$created" == true ]]; then
     timeout 20 docker rm -f "$name-prisma" "$name-db" >/dev/null 2>&1 || true
+  fi
+  if (( code != 0 )); then
+    local removed=false preserved=false sqlstate=''
+    # Only fixed SQLSTATE codes can leave private logs; SQL messages, contexts,
+    # failing rows and statement text can contain original production data.
+    sqlstate="$(sed -nE 's/^ERROR:  ([A-Z0-9]{5})$/\1/p' "$private"/*.log 2>/dev/null | head -1)"
+    if timeout 15 docker ps --all --format '{{.Names}}' > "$private/remaining" &&
+       ! grep -Fxq "$name-db" "$private/remaining" && ! grep -Fxq "$name-prisma" "$private/remaining"; then removed=true; fi
+    if [[ -s "$private/before.jsonl" ]] && inventory > "$private/failure-after.jsonl" &&
+       cmp -s "$private/before.jsonl" "$private/failure-after.jsonl" && health &&
+       [[ "$(git rev-parse HEAD)" == "$source_sha" ]]; then preserved=true; fi
+    printf 'Isolated copy rehearsal failed: phase=%s exit=%s sqlstate=%s removed=%s productionPreserved=%s\n' \
+      "$phase" "$code" "$sqlstate" "$removed" "$preserved" >&2
+    jq -n --arg candidate "$candidate" --arg phase "$phase" --arg sqlstate "$sqlstate" \
+      --argjson removed "$removed" --argjson preserved "$preserved" \
+      '{qualified:false,candidateCommit:$candidate,phase:$phase,sqlstate:$sqlstate,rawDataExported:false,
+        isolatedCopyRemoved:$removed,productionServicesPreserved:$preserved}'
   fi
   [[ "$private" == /tmp/miaomiao-copy.* ]] && rm -rf -- "$private"
   exit "$code"
@@ -92,20 +109,26 @@ for _ in {1..30}; do
   if docker exec "$name-db" pg_isready -U rehearsal -d miaomiao_rehearsal >/dev/null 2>&1; then break; fi
   sleep 1
 done
-psql_copy() { timeout 60 docker exec -i "$name-db" psql -X -qAt -v ON_ERROR_STOP=1 -U rehearsal -d miaomiao_rehearsal; }
+psql_copy() { timeout 60 docker exec -i "$name-db" psql -X -qAt -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -U rehearsal -d miaomiao_rehearsal; }
 # A guard absent from every production database; sanitizer refuses without it.
 printf 'CREATE SCHEMA rehearsal_guard; CREATE TABLE rehearsal_guard.authorized_copy (id integer);\n' | psql_copy > "$private/initialize.log" 2>&1
 timeout 180 docker exec -i "$name-db" pg_restore --exit-on-error --no-owner --no-privileges \
   -U rehearsal -d miaomiao_rehearsal < "$backup" > "$private/restore.log" 2>&1
-phase=sanitize
+phase=restored_aggregates
 psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/restored.json" 2> "$private/sql.log"
+phase=restored_balance_check
 jq -e '.accountBalanceMismatches==0' "$private/restored.json" >/dev/null
+phase=sanitize_copy
 psql_copy < "$payload/sanitize-rehearsal.sql" > "$private/sanitize.log" 2>&1
+phase=sanitized_aggregates
 psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/sanitized.json" 2> "$private/sql.log"
+phase=sanitized_aggregate_equality
 cmp -s "$private/restored.json" "$private/sanitized.json"
+phase=migration_history
 printf 'SELECT json_agg(json_build_object('\''name'\'',migration_name,'\''checksum'\'',checksum,'\''finished'\'',finished_at IS NOT NULL,'\''rolledBack'\'',rolled_back_at IS NOT NULL)) FROM "_prisma_migrations";\n' |
   psql_copy > "$private/before-migrations.json" 2> "$private/sql.log"
 jq -e 'all(.[]; .finished==true or .rolledBack==true)' "$private/before-migrations.json" >/dev/null
+phase=migration_checksums
 while IFS=$'\t' read -r migration checksum; do
   [[ "$migration" =~ ^[0-9]{12,14}_[a-z0-9_]+$ && "$checksum" =~ ^[a-f0-9]{64}$ ]]
   [[ "$(sha256sum "$payload/prisma/migrations/$migration/migration.sql" | cut -d' ' -f1)" == "$checksum" ]]

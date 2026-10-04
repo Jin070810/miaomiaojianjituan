@@ -20,7 +20,7 @@ WITH relations AS (
   WHERE c.relkind IN ('r','p','v','m','f') AND a.attnum>0 AND NOT a.attisdropped
   UNION ALL
   SELECT 'constraint',c.relname||'.'||x.conname,
-    jsonb_build_object('definition',pg_get_constraintdef(x.oid),'validated',x.convalidated)
+    jsonb_build_object('definition',pg_get_constraintdef(x.oid,true),'validated',x.convalidated)
   FROM relations c JOIN pg_constraint x ON x.conrelid=c.oid
   UNION ALL
   SELECT 'index',c.relname||'.'||i.relname,

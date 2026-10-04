@@ -42,4 +42,4 @@ npx playwright test tests/e2e/member-loading.spec.ts --project=member-loading-mo
 
 本地可将 `PLAYWRIGHT_EVIDENCE_DIR` 设置为仓库外目录保存截图。CI 将截图收集到已有的 Playwright artifact；全量 E2E 保留 320–430px、横屏、WebKit、成员和管理端覆盖。Browser plugin 不可用，本次使用仓库已有 Playwright。
 
-无数据库/API/积分规则变更，无需 migration。应用回滚会恢复之前的字体和资源加载方式。需与发布链路的图片缓存目录权限修复一起验收；仍需维护者自审及正式发布确认。
+无数据库/API/积分规则变更，无需 migration。应用回滚会恢复之前的字体和资源加载方式。需与发布链路的图片缓存目录权限修复一起验收，并通过 [自动发版门禁](AUTOMATIC-RELEASE.md)，不要求逐次人工确认。

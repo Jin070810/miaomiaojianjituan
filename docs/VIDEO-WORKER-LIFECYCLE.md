@@ -24,7 +24,7 @@ Worker 健康由两种信号组成：
 - 新增 migration 20261003123000_video_processing_budget，仅创建附属表、约束与索引，不改旧 migration，不重写历史积分或视频。
 - 历史处理中记录在首次领取尝试时建立预算。已耗尽的旧 failed 队列任务会被恢复流程终结。
 - 老版本应用可以忽略新表，应用回退不需要删除它；回退到旧 Worker 会失去新重试保护，因此应优先前向修复，并在发布记录中明确临时保护措施。
-- 发布前仍需脱敏生产副本 migration 演练、候选镜像 staging、自审和正式发布记录。此文档不是上线证明。
+- 发布前仍需脱敏生产副本 migration 演练、候选镜像 staging、自动发版验收和正式发布记录，不要求逐次人工自审。此文档不是上线证明。
 
 验证覆盖：真实 BullMQ 的三次重试及 failed 恢复、数据库持久预算、并发租约、旧租约隔离、时间预算、显式重试幂等、元数据与积分原子提交、恢复扫描推进、实例心跳归属、维护/排空心跳和 supervisor 超时。实现参照 BullMQ 的延迟任务约定：moveToDelayed 使用当前锁 token，再抛 DelayedError，避免消耗业务重试预算。
 参考：[BullMQ 延迟任务约定](https://docs.bullmq.io/patterns/process-step-jobs)。

@@ -48,4 +48,4 @@
 
 `tests/e2e/ranking-adjustments.spec.ts` 在 `ranking-mobile`（390×844）和 `ranking-desktop`（1440×900）验证管理员登录、读取失败/刷新、加载禁用、保存失败/重试、处理影响确认、取消库存、已发无需调整、解除冻结、空待办、成员冻结展示和成员/审核员 RBAC。截图保存于 CI Playwright/staging 附件的 `ranking-*.png`。新操作按钮至少 44px，无页面横向溢出。
 
-发布前仍需维护者自审、生产副本 migration 演练、整合后的 staging 验收及发布确认。此文档描述候选改动，不代表已上线。
+发布前仍须通过生产副本 migration 演练、整合后的 staging 及 [自动发版门禁](AUTOMATIC-RELEASE.md)，不要求维护者逐次审核。此文档描述候选改动，不代表已上线。

@@ -64,6 +64,6 @@ SQL 事件没有可靠的逐请求异步上下文，当前不为 SQL 伪造 requ
 - 真实 PostgreSQL 锁等待与自动入账审计关联；真实 Redis 写读直方图、真实 BullMQ FIFO/暂停状态且不泄露任务内容。
 - 两种视口真实登录 → API/Redis 统计 → 管理面板；验证匿名 RUM 无 Cookie、权限拒绝、加载/禁用、错误重试、空数据和不可用状态。
 - 合成截图和采样 JSON 保存在工作区外，CI 上传到 Playwright / staging 证据产物。这里的性能数值全部来自合成环境，不是生产基线。
-- 最终命令数量与 CI 结果见本 PR 验证清单；尚需集成 staging、维护者自审与正式发布记录。
+- 最终命令数量与 CI 结果见本 PR 验证清单；须完成集成 staging、自动发版门禁与正式发布记录，不要求维护者逐次自审。
 
 实现参考：[Next.js useReportWebVitals](https://nextjs.org/docs/app/api-reference/functions/use-report-web-vitals)、[Next.js after](https://nextjs.org/docs/app/api-reference/functions/after)、[Prisma 6 QueryEvent 定义](https://docs.prisma.io/docs/orm/v6/reference/prisma-client-reference)。使用仓库锁定的 Next.js 16 / Prisma 6 / BullMQ 5 源码与实际测试验证兼容性。

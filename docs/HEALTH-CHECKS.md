@@ -36,6 +36,6 @@ CI staging 在真实 App/Worker 镜像上执行 `scripts/test-staging-health.sh`
 
 脚本仅接受 `CI=true`、`STAGING_HEALTH_FAULT_TESTS=1`、`POSTGRES_DB=miaomiao_staging` 的显式隔离环境。任何退出都会尝试重新启动依赖；不得在正式主机执行。它不修改或删除数据库数据。生产环境只进行只读检查。
 
-无需 migration。应用回滚时保留详细 `/api/health` 合约；旧版本没有 `/api/health/ready`，必须使用该旧版本配套的 Compose healthcheck，避免旧应用被新路径错误判为不健康。正式发布仍需维护者确认和整合后的 staging 验收。
+无需 migration。应用回滚时保留详细 `/api/health` 合约；旧版本没有 `/api/health/ready`，必须使用该旧版本配套的 Compose healthcheck，避免旧应用被新路径错误判为不健康。正式发布须通过整合后的 staging 和 [自动发版门禁](AUTOMATIC-RELEASE.md)，不要求逐次人工确认。
 
 职责划分参考 [Kubernetes 探测语义](https://kubernetes.io/docs/concepts/workloads/pods/probes/)，Compose 参数参考 [Docker healthcheck 文档](https://docs.docker.com/reference/compose-file/services/#healthcheck)。本项目继续使用 Docker Compose，不引入 Kubernetes。

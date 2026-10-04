@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import argon2 from "argon2";
-import { NextResponse } from "next/server";
 import { RateLimitError } from "./rate-limit";
+import { requestContext } from "./request-context";
 
 export async function hashPassword(password: string) {
   return argon2.hash(password, { type: argon2.argon2id });
@@ -16,7 +16,7 @@ export async function verifyPassword(hash: string, password: string) {
 }
 
 export function requestId() {
-  return crypto.randomUUID();
+  return requestContext.getStore()?.id ?? crypto.randomUUID();
 }
 
 export function getClientIp(request: Request) {
@@ -71,7 +71,7 @@ export const decryptPhone = decryptSensitive;
 
 export function rateLimitResponse(error: unknown) {
   if (!(error instanceof RateLimitError)) return null;
-  return NextResponse.json(
+  return Response.json(
     { error: error.message },
     { status: 429, headers: { "retry-after": String(error.retryAfter) } },
   );

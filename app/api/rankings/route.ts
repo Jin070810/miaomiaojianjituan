@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { getLiveRanking, RankingKind } from "@/lib/rankings";
@@ -8,7 +9,7 @@ function parseKind(value: string | null): RankingKind {
   return "week";
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const url = new URL(request.url);
@@ -23,3 +24,5 @@ export async function GET(request: Request) {
     },
   });
 }
+
+export const GET = observeApi("rankings_get", handleGET);

@@ -48,6 +48,7 @@ describe.skipIf(!enabled)("member voluntary exit database integration", () => {
         sourceKind: "URL",
         submittedNickname: "主动退团测试成员",
         idempotencyKey: `voluntary-exit-video-${suffix}`,
+        secondaryReview: { create: {} },
       },
     });
   });
@@ -74,6 +75,8 @@ describe.skipIf(!enabled)("member voluntary exit database integration", () => {
     expect(await db.pointAccount.findUniqueOrThrow({ where: { id: accountId } })).toMatchObject({ balance: 0 });
     expect(await db.pointLedger.count({ where: { accountId, type: "MEMBER_VOLUNTARY_EXIT_FORFEIT" } })).toBe(1);
     expect(await db.videoSubmission.findFirstOrThrow({ where: { userId } })).toMatchObject({ status: "REJECTED", points: 0 });
+    expect(await db.videoSecondaryReview.findFirstOrThrow({ where: { video: { userId } } }))
+      .toMatchObject({ status: "PENDING", reviewReason: null, reviewedAt: null });
     expect(await db.auditLog.findFirstOrThrow({ where: { action: "MEMBER_VOLUNTARILY_LEFT", entityId: userId } })).toMatchObject({ reason: "其他原因" });
     expect(await db.memberEligibility.findUniqueOrThrow({ where: { id: eligibilityId } })).toMatchObject({ status: "EXEMPT", clearedAt: null });
 

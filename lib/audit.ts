@@ -24,6 +24,11 @@ const actionLabels: Record<string, string> = {
   LOGIN_SUCCEEDED: "登录成功",
   LOGOUT: "退出登录",
   OPERATION_SWITCH_UPDATED: "修改运营开关",
+  PLATFORM_BINDING_REQUESTED: "申请平台账号验证",
+  PLATFORM_BINDING_REQUEST_REPLACED: "替换平台账号验证挑战",
+  PLATFORM_BINDING_VERIFIED: "核验平台账号控制权",
+  PLATFORM_BINDING_REJECTED: "驳回平台账号验证",
+  PLATFORM_BINDING_REVOKED: "撤销平台账号绑定",
   ADMIN_CSV_EXPORTED: "导出脱敏数据",
   PASSWORD_CHANGED: "修改密码",
   PROFILE_UPDATED: "更新个人资料",
@@ -38,6 +43,10 @@ const actionLabels: Record<string, string> = {
   RANKING_AWARD_CLAIMED: "填写榜单领奖信息",
   RANKING_AWARD_RECIPIENT_VIEWED: "查看榜单领奖资料",
   RANKING_AWARD_UPDATED: "更新榜单奖励",
+  RANKING_AWARD_FROZEN: "冻结榜单奖励",
+  RANKING_AWARD_ADJUSTMENT_OPENED: "建立已发榜单奖励调整待办",
+  RANKING_AWARD_ADJUSTMENT_RESOLVED: "处理榜单奖励调整",
+  RANKING_AWARD_CANCELLED: "取消未发榜单奖励",
   RANKING_SETTLED: "完成榜单结算",
   TRANSFER_COMPLETED: "完成积分转账",
   USER_REGISTERED: "注册账号",
@@ -62,6 +71,7 @@ const actionLabels: Record<string, string> = {
   VIDEO_ENQUEUE_FAILED: "视频入队失败",
   VIDEO_POINTS_ADJUSTED: "调整视频积分",
   VIDEO_POINT_RULE_UPDATED: "修改视频积分规则",
+  VIDEO_POINT_RULE_CAPTURED: "锁定视频积分规则",
   VIDEO_REJECTED: "视频驳回",
   VIDEO_REPROCESS_ENQUEUE_FAILED: "视频重抓入队失败",
   VIDEO_REPROCESS_REQUESTED: "请求重新抓取视频",
@@ -88,6 +98,7 @@ const actionLabels: Record<string, string> = {
 };
 
 const entityLabels: Record<string, string> = {
+  RankingAwardAdjustment: "榜单奖励调整待办",
   Announcement: "公告",
   Authentication: "认证",
   Gift: "礼品",

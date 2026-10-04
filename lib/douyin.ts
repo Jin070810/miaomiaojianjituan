@@ -1,4 +1,5 @@
 import { calculateVideoPoints, compareOwnerNames } from "./kuaishou";
+import { stableAuthorUid } from "./video-author-evidence";
 
 export type DouyinSourceKind = "douyin-short-link" | "douyin-long-link" | "douyin-share-text";
 
@@ -97,6 +98,7 @@ export type ParsedDouyinDetail = {
   publishedAt: Date;
   photoId: string;
   owner: string;
+  authorUid: string | null;
 };
 
 /** Normalizes both the detail response and the note/video list response to one aweme_detail shape. */
@@ -156,6 +158,7 @@ export function parseDouyinDetailPayload(payload: unknown): ParsedDouyinDetail {
     publishedAt,
     photoId,
     owner,
+    authorUid: stableAuthorUid(author.uid),
   };
 }
 

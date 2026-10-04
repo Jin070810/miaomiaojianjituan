@@ -6,7 +6,7 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "github" : "list",
-  outputDir: "output/playwright/results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "output/playwright/results",
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3213",
     browserName: "chromium",
@@ -14,10 +14,28 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
+    { name: "ranking-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /ranking-adjustments\.spec\.ts/ },
+    { name: "ranking-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /ranking-adjustments\.spec\.ts/ },
+    { name: "bindings-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /platform-bindings\.spec\.ts/ },
+    { name: "bindings-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /platform-bindings\.spec\.ts/ },
+    {
+      name: "member-loading-mobile",
+      use: { viewport: { width: 390, height: 844 } },
+      testMatch: /member-loading\.spec\.ts/,
+    },
+    {
+      name: "member-loading-desktop",
+      use: { viewport: { width: 1440, height: 900 } },
+      testMatch: /member-loading\.spec\.ts/,
+    },
+    { name: "catalog-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /gift-catalog\.spec\.ts/ },
+    { name: "catalog-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /gift-catalog\.spec\.ts/ },
+    { name: "performance-mobile", use: { viewport: { width: 390, height: 844 } }, testMatch: /performance\.spec\.ts/ },
+    { name: "performance-desktop", use: { viewport: { width: 1440, height: 900 } }, testMatch: /performance\.spec\.ts/ },
     {
       name: "member-mobile",
       use: { viewport: { width: 390, height: 844 } },
-      testMatch: [/member-weekly-challenge\.spec\.ts/, /member-growth\.spec\.ts/],
+      testMatch: [/member-weekly-challenge\.spec\.ts/, /member-growth\.spec\.ts/, /achievement-projection\.spec\.ts/],
     },
     {
       name: "member-android-320",
@@ -62,17 +80,17 @@ export default defineConfig({
     {
       name: "member-growth-desktop",
       use: { viewport: { width: 1440, height: 900 } },
-      testMatch: /member-growth\.spec\.ts/,
+      testMatch: [/member-growth\.spec\.ts/, /achievement-projection\.spec\.ts/],
     },
     {
       name: "admin-desktop",
       use: { viewport: { width: 1440, height: 900 } },
-      testMatch: [/admin-weekly-challenge\.spec\.ts/, /admin-responsive\.spec\.ts/],
+      testMatch: [/admin-weekly-challenge\.spec\.ts/, /admin-responsive\.spec\.ts/, /video-review-policy\.spec\.ts/, /video-rule-snapshots\.spec\.ts/],
     },
     {
       name: "admin-mobile",
       use: { viewport: { width: 390, height: 844 } },
-      testMatch: [/admin-mobile\.spec\.ts/, /admin-responsive\.spec\.ts/],
+      testMatch: [/admin-mobile\.spec\.ts/, /admin-responsive\.spec\.ts/, /video-review-policy\.spec\.ts/, /video-rule-snapshots\.spec\.ts/],
     },
     {
       name: "birthday-mobile",

@@ -1,12 +1,16 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { withPublicGiftImage } from "@/lib/public-images";
 import { redeemGift } from "@/lib/points";
 import { assertSameOrigin, getClientIp, isSafeCashQrCodeUrl, MAX_CASH_QR_CODE_LENGTH, rateLimitResponse, requireIdempotency } from "@/lib/security";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { parsePagination, paginationResult } from "@/lib/pagination";
 import { operationSwitchDefinitions, operationSwitchEnabled } from "@/lib/operation-switches";
+import { IdempotencyConflictError } from "@/lib/request-idempotency";
+import { memberOrderDto } from "@/lib/redemption-dto";
 
 const schema = z.object({
   giftId: z.string().min(1),
@@ -22,7 +26,7 @@ const schema = z.object({
   }).optional(),
 });
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await currentUser();
@@ -33,15 +37,15 @@ export async function POST(request: Request) {
     await enforceRateLimit(`redemption:${user.id}`, 10, 60);
     const input = schema.parse(await request.json());
     const order = await redeemGift({ ...input, userId: user.id, idempotencyKey: requireIdempotency(request), ip: getClientIp(request) });
-    return NextResponse.json({ order }, { status: 201 });
+    return NextResponse.json({ order: memberOrderDto(order) }, { status: 201 });
   } catch (error) {
     const limited = rateLimitResponse(error);
     if (limited) return limited;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "兑换失败" }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "兑换失败" }, { status: error instanceof IdempotencyConflictError ? 409 : 400 });
   }
 }
 
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
   const { page, take, skip } = parsePagination(new URL(request.url), 50, 100);
@@ -51,14 +55,11 @@ export async function GET(request: Request) {
     db.redemptionOrder.count({ where }),
   ]);
   return NextResponse.json({
-    orders: orders.map(({ recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, fulfillmentDataEnc, ...order }) => ({
-      ...order,
-      fulfilledAt: order.fulfilledAt ?? (order.status === "FULFILLED" ? order.reviewedAt : null),
-      hasRecipientPhone: Boolean(recipientPhoneEnc),
-      hasRecipientAddress: Boolean(recipientAddressEnc),
-      hasCashQrCode: Boolean(cashQrCodeUrl),
-      hasFulfillmentData: Boolean(fulfillmentDataEnc),
-    })),
+    orders: orders.map((order) => ({ ...memberOrderDto(order), gift: withPublicGiftImage(order.gift) })),
     pagination: paginationResult(page, take, total),
   });
 }
+
+export const GET = observeApi("redemptions_get", handleGET);
+
+export const POST = observeApi("redemptions_post", handlePOST);

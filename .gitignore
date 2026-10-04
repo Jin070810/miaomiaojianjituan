@@ -21,6 +21,10 @@ output/audit/
 output/dev.*
 # 构建产物、临时文件与本地工具目录整体忽略（此前只按子路径忽略，导致 git status 常驻未跟踪项）
 output/
+releases/
+.release-private/
+.release-runtime/
+.production.lock
 tmp/
 .mimosa/
 .v2c/

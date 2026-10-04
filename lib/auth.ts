@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { cookies } from "next/headers";
 import { db } from "./db";
 import { isPasswordResetApproverRole, isVideoReviewOperatorRole } from "./member-roles";
@@ -39,15 +40,29 @@ export async function destroySession() {
   jar.delete(COOKIE);
 }
 
-export async function currentUser() {
+const identitySelect = {
+  id: true, kuaishouId: true, nickname: true, role: true, active: true,
+} satisfies Prisma.UserSelect;
+
+export const memberProfileSelect = {
+  ...identitySelect,
+  avatarUrl: true, guildStatus: true, invited: true,
+  account: { select: { id: true, balance: true } },
+} satisfies Prisma.UserSelect;
+
+type SessionIdentity = Prisma.UserGetPayload<{ select: typeof identitySelect }>;
+type SessionProfile = Prisma.UserGetPayload<{ select: typeof memberProfileSelect }>;
+
+export function currentUser(options: { profile: true }): Promise<SessionProfile | null>;
+export function currentUser(options?: { profile?: false }): Promise<SessionIdentity | null>;
+export async function currentUser(options?: { profile?: boolean }): Promise<SessionIdentity | SessionProfile | null> {
   const id = (await cookies()).get(COOKIE)?.value;
   if (!id) return null;
-  const session = await db.session.findUnique({
-    where: { id },
-    include: { user: { include: { account: true } } },
-  });
-  if (!session || session.expiresAt < new Date() || !session.user.active) return null;
-  return session.user;
+  // Keep authorization live: no process/TTL cache of sessions, active or role.
+  // Filtering the session in SQL avoids fetching it and the account separately.
+  const where = { active: true, sessions: { some: { id, expiresAt: { gt: new Date() } } } };
+  if (options?.profile) return db.user.findFirst({ where, select: memberProfileSelect });
+  return db.user.findFirst({ where, select: identitySelect });
 }
 
 export async function requireUser() {

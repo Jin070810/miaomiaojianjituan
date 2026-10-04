@@ -1,6 +1,8 @@
-import { Worker } from "bullmq";
+import { DelayedError, Worker } from "bullmq";
 import "dotenv/config";
-import { closeDouyinBrowser, connection, processVideoSubmission } from "./lib/video-jobs";
+import { closeDouyinBrowser, closeVideoQueue, connection, processVideoSubmission } from "./lib/video-jobs";
+import { currentRequestId, requestContext, safeRequestId } from "./lib/request-context";
+import { recordPerformance, recordProcessResources, closePerformanceStore } from "./lib/performance-store";
 import { db } from "./lib/db";
 import { closeWorkerHealth, writeWorkerHeartbeat } from "./lib/worker-health";
 import { sendOperationalAlert } from "./lib/alerts";
@@ -15,15 +17,35 @@ import {
   ensureWeeklyChallengeScheduler,
 } from "./lib/weekly-challenge-jobs";
 import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues } from "./lib/member-clearance-operations";
+import { VideoProcessingDeferredError } from "./lib/video-processing";
+import { startMemberAchievementRefreshWorker } from "./lib/member-achievement-worker";
 
-const worker = new Worker("kuaishou-video", async (job) => {
-  await processVideoSubmission(job.data.videoId);
+// Independent of Redis/DB health; the parent can detect an event-loop stall.
+const watchdogTimer = process.env.MIAOMIAO_WORKER_SUPERVISED === "1" && process.send
+  ? setInterval(() => { if (process.connected) process.send?.({ type: "worker-liveness" }); }, 10_000)
+  : null;
+watchdogTimer?.unref();
+
+const worker = new Worker("kuaishou-video", async (job, token) => {
+  void recordPerformance("video_queue_age", Math.max(0, Date.now() - job.timestamp));
+  try {
+    await requestContext.run({ id: safeRequestId(job.data.requestId) ?? currentRequestId() }, () => processVideoSubmission(job.data.videoId, {
+      finalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
+    }));
+  } catch (error) {
+    if (error instanceof VideoProcessingDeferredError) {
+      await job.moveToDelayed(Math.max(Date.now() + 100, error.retryAt.getTime()), token);
+      throw new DelayedError();
+    }
+    throw error;
+  }
 }, {
   connection: connection(),
   concurrency: Math.min(12, Math.max(1, Number(process.env.VIDEO_WORKER_CONCURRENCY ?? 4))),
 });
 
 const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
+  void recordPerformance("weekly_queue_age", Math.max(0, Date.now() - job.timestamp));
   if (job.name === "scheduled-generate") {
     const maintenance = await runWeeklyChallengeMaintenance();
     if (!maintenance.generationDue || !maintenance.periodStart) return;
@@ -45,10 +67,10 @@ const weeklyChallengeWorker = new Worker("weekly-challenges", async (job) => {
   concurrency: 1,
 });
 
-worker.on("completed", (job) => console.log(`[video-worker] completed ${job.id}`));
+worker.on("completed", (job) => console.log(JSON.stringify({ event: "video_completed", jobId: job.id, requestId: safeRequestId(job.data.requestId) })));
 worker.on("failed", (job, error) => {
   console.error(`[video-worker] failed ${job?.id}`, error);
-  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, error: error.message } });
+  void sendOperationalAlert({ source: "video-worker", severity: "warning", message: "视频任务处理失败", details: { jobId: job?.id, requestId: safeRequestId(job?.data.requestId), error: error.message } });
 });
 worker.on("error", (error) => {
   console.error("[video-worker] redis error", error);
@@ -74,6 +96,17 @@ let closing = false;
 let maintenanceRunning = false;
 let maintenanceTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let heartbeatRunning = false;
+let activeMaintenance: Promise<void> | null = null;
+let activeHeartbeat: Promise<void> | null = null;
+
+function startMaintenance() {
+  if (closing || maintenanceRunning) return;
+  const task = maintenance().catch((error) => console.error("[worker-maintenance] alert failed", error));
+  activeMaintenance = task;
+  void task.finally(() => { if (activeMaintenance === task) activeMaintenance = null; });
+}
+let stopAchievementRefresh: (() => Promise<void>) | null = null;
 
 async function maintenance() {
   if (closing || maintenanceRunning) return;
@@ -148,39 +181,62 @@ async function maintenance() {
 }
 
 async function heartbeat() {
-  if (closing) return;
+  if (heartbeatRunning) return;
+  heartbeatRunning = true;
+  void recordProcessResources("worker");
   try {
-    await writeWorkerHeartbeat();
+    await writeWorkerHeartbeat(closing ? "draining" : "running");
   } catch (error) {
     console.error("[video-worker] heartbeat failed", error);
+  } finally {
+    heartbeatRunning = false;
   }
+}
+
+function startHeartbeat() {
+  if (activeHeartbeat) return activeHeartbeat;
+  const task = heartbeat();
+  activeHeartbeat = task;
+  void task.finally(() => { if (activeHeartbeat === task) activeHeartbeat = null; });
+  return task;
 }
 
 async function start() {
   await ensureWeeklyChallengeScheduler();
   await Promise.all([worker.waitUntilReady(), weeklyChallengeWorker.waitUntilReady()]);
   console.log("[video-worker] listening");
-  await Promise.all([maintenance(), heartbeat()]);
-  maintenanceTimer = setInterval(() => void maintenance(), 60_000);
-  heartbeatTimer = setInterval(() => void heartbeat(), 15_000);
+  stopAchievementRefresh = startMemberAchievementRefreshWorker();
+  await startHeartbeat();
+  heartbeatTimer = setInterval(() => void startHeartbeat(), 15_000);
+  maintenanceTimer = setInterval(startMaintenance, 60_000);
+  startMaintenance();
 }
 
-async function shutdown(signal: string) {
+async function shutdown(signal: string, exitCode = 0) {
   if (closing) return;
   closing = true;
   console.log(`[video-worker] ${signal} received, shutting down`);
   if (maintenanceTimer) clearInterval(maintenanceTimer);
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
   // 先等队列任务排空，再清除心跳：滚动发布期间健康检查不应在活跃任务尚未
   // 完成时就把 Worker 判死。
-  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close()]);
-  await Promise.allSettled([
+  const drained = await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), activeMaintenance, stopAchievementRefresh?.()]);
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  // Finish the last write before deleting this instance's keys.
+  await activeHeartbeat;
+  const released = await Promise.allSettled([
+    closeVideoQueue(),
     closeWeeklyChallengeQueue(),
     closeWorkerHealth(),
     closeDouyinBrowser(),
     db.$disconnect(),
   ]);
-  process.exit(0);
+  if ([...drained, ...released].some((result) => result.status === "rejected")) {
+    console.error("[video-worker] shutdown did not complete cleanly");
+    exitCode = 1;
+  }
+  closePerformanceStore();
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  process.exit(exitCode);
 }
 
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -189,6 +245,5 @@ process.once("SIGINT", () => void shutdown("SIGINT"));
 void start().catch(async (error) => {
   console.error("[video-worker] startup failed", error);
   await sendOperationalAlert({ source: "video-worker", severity: "critical", message: "视频 Worker 启动失败", details: { error: error instanceof Error ? error.message : String(error) } });
-  await shutdown("startup-failure");
-  process.exitCode = 1;
+  await shutdown("startup-failure", 1);
 });

@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { assertSameOrigin, decryptSensitive, getClientIp } from "@/lib/security";
 import { createNotification } from "@/lib/notifications";
+import { assertRankingAwardNotFrozen, lockRankingAward } from "@/lib/ranking-adjustments";
 import { writeAuditLog } from "@/lib/audit";
 
 const schema = z.object({
@@ -54,8 +55,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const { id } = await context.params;
     const input = schema.parse(await request.json());
     const award = await db.$transaction(async (tx) => {
+      await lockRankingAward(tx, id);
+      await assertRankingAwardNotFrozen(tx, id);
       const before = await tx.rankingAward.findUnique({ where: { id }, include: { gift: true } });
       if (!before) throw new Error("榜单奖励不存在");
+      if (before.status === input.status && (!input.giftId || input.giftId === before.giftId)) return before;
       if (before.status === "FULFILLED") throw new Error("已完成的奖励不能修改");
       let nextGiftId = before.giftId;
       if (input.giftId && input.giftId !== before.giftId && before.status !== "PENDING") {
@@ -120,7 +124,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       }
       return updated;
     });
-    return NextResponse.json({ award });
+    const { recipientPhoneEnc, recipientAddressEnc, cashQrCodeUrl, ...safeAward } = award;
+    return NextResponse.json({ award: { ...safeAward, hasRecipientPhone: Boolean(recipientPhoneEnc), hasRecipientAddress: Boolean(recipientAddressEnc), hasCashQrCode: Boolean(cashQrCodeUrl) } }, { headers: privateHeaders });
   } catch (error) {
     return NextResponse.json({ error: error instanceof z.ZodError ? "奖励参数不正确" : error instanceof Error ? error.message : "更新失败" }, { status: 400 });
   }

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { db } from "../lib/db";
+import { inspectFinancialIntegrity } from "../lib/integrity-reconciliation";
 import { closeVideoQueue, getVideoQueueMetrics } from "../lib/video-jobs";
 import { checkRateLimitStore, closeRateLimitStore } from "../lib/rate-limit";
 import { checkWorkerHeartbeat, closeWorkerHealthConnection } from "../lib/worker-health";
@@ -11,22 +12,9 @@ import { getMemberClearanceOperationalSnapshot, memberClearanceOperationalIssues
 import { shanghaiWeekBounds } from "../lib/weekly-challenges";
 
 async function main() {
-  const accounts = await db.pointAccount.findMany({ select: { id: true, balance: true } });
-  const ledgerTotals = await db.pointLedger.groupBy({ by: ["accountId"], _sum: { amount: true } });
-  const totals = new Map(ledgerTotals.map((row) => [row.accountId, row._sum.amount ?? 0]));
-  const balanceMismatches = accounts.filter((row) => row.balance !== (totals.get(row.id) ?? 0)).length;
-  const duplicatePhotoIds = await db.$queryRaw<Array<{ photoId: string }>>`
-    SELECT "photoId"
-    FROM "VideoSubmission"
-    WHERE "photoId" IS NOT NULL AND "status" IN ('PROCESSING', 'PENDING_REVIEW', 'APPROVED')
-    GROUP BY "photoId"
-    HAVING COUNT(*) > 1
-  `;
-  const invalidOrders = await db.$queryRaw<Array<{ id: string }>>`
-    SELECT id FROM "RedemptionOrder"
-    WHERE quantity < 1 OR "unitCost" < 1 OR "totalCost" <> quantity * "unitCost"
-    LIMIT 20
-  `;
+  const integrity = await inspectFinancialIntegrity();
+  const balanceMismatches = integrity.balanceMismatches.length;
+  const { duplicatePhotoIds, invalidOrders, invalidGifts, nonIntegerPoints, unexplainedNegativeBalances, compensatingDebts } = integrity;
   const [redis, worker, queue] = await Promise.all([
     checkRateLimitStore().catch(() => "unavailable"),
     checkWorkerHeartbeat().catch(() => "unavailable"),
@@ -115,7 +103,11 @@ async function main() {
   const backupAgeHours = newestBackup ? (Date.now() - fs.statSync(newestBackup).mtimeMs) / 3_600_000 : null;
   const backupHash = newestBackup ? crypto.createHash("sha256").update(fs.readFileSync(newestBackup)).digest("hex") : null;
   const checksum = newestBackup && fs.existsSync(`${newestBackup}.sha256`) ? fs.readFileSync(`${newestBackup}.sha256`, "utf8").trim().split(/\s+/)[0] : null;
+  const warnings = compensatingDebts.length ? [`${compensatingDebts.length} 个账户存在有来源证据的补偿性欠额，需业务跟进`] : [];
   const issues = [
+    ...(unexplainedNegativeBalances.length ? [`${unexplainedNegativeBalances.length} 个账户存在无法解释的负余额`] : []),
+    ...(invalidGifts.length ? [`${invalidGifts.length} 个礼品库存或积分价格异常`] : []),
+    ...(nonIntegerPoints.length ? [`${nonIntegerPoints.length} 笔非整数积分流水`] : []),
     ...(balanceMismatches ? [`${balanceMismatches} 个积分账户余额不一致`] : []),
     ...(duplicatePhotoIds.length ? [`${duplicatePhotoIds.length} 个有效视频存在重复 photoId`] : []),
     ...(invalidOrders.length ? [`${invalidOrders.length} 个兑换订单数据不一致`] : []),
@@ -141,6 +133,12 @@ async function main() {
   const report = {
     checkedAt: new Date().toISOString(),
     balanceMismatches,
+    negativeBalances: integrity.negativeBalances.length,
+    compensatingDebts,
+    unexplainedNegativeBalances,
+    invalidGifts: invalidGifts.length,
+    nonIntegerPoints: nonIntegerPoints.length,
+    warnings,
     duplicatePhotoIds: duplicatePhotoIds.length,
     invalidOrders: invalidOrders.length,
     redis,
@@ -164,6 +162,8 @@ async function main() {
   if (issues.length) {
     await sendOperationalAlert({ source: "ops-daily-check", severity: "critical", message: "每日积分中心巡检发现异常", details: report });
     process.exitCode = 1;
+  } else if (warnings.length) {
+    await sendOperationalAlert({ source: "ops-business-debt", severity: "warning", message: "积分账目一致，存在需跟进的补偿性欠额", details: { compensatingDebts } });
   }
 }
 

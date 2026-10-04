@@ -32,8 +32,8 @@ describe("admin section loader", () => {
       return jsonResponse(String(input).includes("appeals") ? { appeals: [] } : { videos: [] });
     }) as unknown as typeof fetch;
     const result = await loadAdminSection("videos", fetcher);
-    expect(paths.sort()).toEqual(["/api/admin/video-appeals?take=50", "/api/admin/videos?take=50", "/api/reviewer/video-reviews?take=50"].sort());
-    expect(result).toEqual({ reviews: { reviews: [] }, videos: { videos: [] }, appeals: { appeals: [] } });
+    expect(paths.sort()).toEqual(["/api/admin/video-appeals?take=50", "/api/admin/videos?take=50"].sort());
+    expect(result).toEqual({ videos: { videos: [] }, appeals: { appeals: [] } });
   });
 
   it("uses 50-member pages for selection-backed modules", async () => {

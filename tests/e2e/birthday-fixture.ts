@@ -1,7 +1,10 @@
 import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { encryptSensitive } from "@/lib/security";
-import { birthdayOccurrence, shanghaiDateParts } from "@/lib/birthdays";
+import { birthdayOccurrence, runBirthdayMaintenance, shanghaiDateParts } from "@/lib/birthdays";
+import { preserveTestSettings } from "./setting-fixture";
+
+let restoreSettings: (() => Promise<void>) | null = null;
 
 export const birthdayE2EPassword = "BirthdayE2E-2026";
 export const birthdayE2EIds = {
@@ -14,6 +17,7 @@ export const birthdayE2EIds = {
 export async function seedBirthdayE2E(reference = new Date()) {
   if (!process.env.DATABASE_URL?.includes("schema=")) throw new Error("生日 E2E 必须使用显式指定 schema 的测试数据库");
   await cleanupBirthdayE2E();
+  restoreSettings = await preserveTestSettings(["BIRTHDAY_PROGRAM", "BIRTHDAY_REWARDS"]);
   const passwordHash = await argon2.hash(birthdayE2EPassword);
   const [member, birthdayFriend, privateFriend, admin] = await Promise.all([
     db.user.create({ data: { kuaishouId: birthdayE2EIds.member, nickname: "生日墙测试成员", passwordHash, role: "MEMBER", active: true, account: { create: { balance: 1_000 } } } }),
@@ -29,12 +33,27 @@ export async function seedBirthdayE2E(reference = new Date()) {
     { userId: birthdayFriend.id, birthDateEnc: encryptSensitive(`1999-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`), birthMonth: today.month, birthDay: today.day, birthEffectiveAt: effectiveAt, visibleOnWall: true, visibilityConsentedAt: effectiveAt },
     { userId: privateFriend.id, birthDateEnc: encryptSensitive(`2000-${String(today.month).padStart(2, "0")}-${String(today.day).padStart(2, "0")}`), birthMonth: today.month, birthDay: today.day, birthEffectiveAt: effectiveAt, visibleOnWall: false },
   ] });
-  await db.birthdayAnnualBenefit.create({ data: { userId: member.id, benefitYear: today.year, occurrenceDate: occurrence, drawOpensAt: occurrence, drawClosesAt: new Date(occurrence.getTime() + 7 * 86_400_000) } });
+  await db.birthdayAnnualBenefit.upsert({
+    where: { userId_benefitYear: { userId: member.id, benefitYear: today.year } },
+    create: { userId: member.id, benefitYear: today.year, occurrenceDate: occurrence, drawOpensAt: occurrence, drawClosesAt: new Date(occurrence.getTime() + 7 * 86_400_000) },
+    update: {},
+  });
   await Promise.all(["BIRTHDAY_PROGRAM", "BIRTHDAY_REWARDS"].map((key) => db.systemSetting.upsert({ where: { key }, create: { key, enabled: true }, update: { enabled: true, updatedById: null } })));
+  // Establish the legitimate once-per-year notifications before observing the
+  // read-only page. A concurrent real Worker must be free to repeat this cycle.
+  await runBirthdayMaintenance(reference);
+  await db.notification.updateMany({
+    where: { userId: { in: [member.id, birthdayFriend.id, privateFriend.id, admin.id] } },
+    data: { readAt: reference },
+  });
   return { member, birthdayFriend, privateFriend, admin };
 }
 
 export async function cleanupBirthdayE2E() {
+  if (restoreSettings) {
+    await restoreSettings();
+    restoreSettings = null;
+  }
   const users = await db.user.findMany({ where: { kuaishouId: { in: Object.values(birthdayE2EIds) } }, select: { id: true } });
   const userIds = users.map((user) => user.id);
   if (!userIds.length) return;

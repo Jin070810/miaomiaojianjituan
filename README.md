@@ -2,9 +2,11 @@
 
 这是“妙妙剪辑团积分中心”的可部署版本，包含成员端、管理员端、认证、成员头像、积分账户、视频审核、转账、积分商城、榜单结算、AI 周挑战和生产运维工具。
 
+写操作重试、请求冲突及成员订单字段的约定见 [请求幂等说明](docs/REQUEST-IDEMPOTENCY.md)。
+
 ## 本地运行
 
-1. 安装依赖：`npm install`
+1. 使用 Node.js 22 安装锁定依赖：`npm ci`。测试工具链版本与安全检查见 [`docs/TEST-DEPENDENCY-SECURITY.md`](docs/TEST-DEPENDENCY-SECURITY.md)。
 2. 复制 `.env.example` 为 `.env`，设置 `DATABASE_URL`、`SESSION_SECRET` 和 32 字节的 `PHONE_ENCRYPTION_KEY`。
 3. 启动 PostgreSQL 与 Redis：`docker compose up -d postgres redis`
 4. 初始化数据库：`npm run db:deploy`
@@ -17,23 +19,31 @@
 
 完整 Docker 部署可使用 `docker compose up -d`。`migrate` 服务会等待 PostgreSQL 健康后执行版本化的 `prisma migrate deploy`。
 
+执行 migration 后运行 `npm run db:check-drift`，只读检查数据库结构是否与 Prisma 声明一致。CI 会重放全部 migration 并执行这一门禁；检查范围与故障处理见 [`docs/SCHEMA-DRIFT-CHECK.md`](docs/SCHEMA-DRIFT-CHECK.md)。
+
 生产环境准备证书到 `certs/fullchain.pem` 和 `certs/privkey.pem` 后，使用 `docker compose --profile production up -d` 启动 Nginx HTTPS 入口。
 
 Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份，恢复使用 `bash scripts/restore-db.sh <备份文件> .env.production`；Windows 运维可使用对应的 `.ps1` 脚本。生产默认 `BACKUP_STORAGE_MODE=local`，每日生成并校验 SHA-256、保留 7 天；OSS 保留为显式可选模式，不配置时不要求 Bucket 或密钥。零成本方案的本地 dump 与服务器同盘，发布前还必须创建轻量应用服务器免费快照作为回滚点。详见 [`docs/OSS-BACKUP-RUNBOOK.md`](docs/OSS-BACKUP-RUNBOOK.md)。
 
 新服务器首次准备可由 root 执行 `bash scripts/bootstrap-server.sh`，它会安装 Docker/Compose、配置 2GB Swap、限制入站端口并创建 `/opt/miaomiaojianjituan`。正式 workflow 会在备份和启动容器前执行 `bash scripts/production-preflight.sh`，检查生产密钥、非默认数据库密码、Docker Compose 和 HTTPS 证书。
 
-正式发布由 GitHub Actions 校验已合并的 release commit，在隔离的 Actions runner 构建 App/Worker 镜像并推送 GHCR。生产服务器只按不可变 digest 拉取镜像并校验 OCI revision，不执行应用构建；镜像验证成功后才生成发布前备份、执行 migration、切换 Web/Worker 并刷新 Nginx。详细设计和耗时目标见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)。
+CI 为每个候选构建一对 App/Worker 镜像，完整浏览器验收直接使用这对容器；main 验收成功后将原镜像推送 GHCR 并保存 release manifest。正式发布输入已合并的完整 SHA 和对应 CI run ID，校验来源、验收、migration 校验和后只按 digest 拉取，并比对 staging 镜像 ID；发布及应用回滚均不重新构建。生产前置检查、备份、migration 和健康检查仍是必需门禁。详细流程见 [`docs/RELEASE-PIPELINE.md`](docs/RELEASE-PIPELINE.md)；生产发布、备份和维护使用同一主机锁，发布阶段与失败恢复规则见 [`docs/SERIALIZED-PRODUCTION-RELEASE.md`](docs/SERIALIZED-PRODUCTION-RELEASE.md)。
+
+成员端商品图片与头像使用独立版本 URL 缓存，礼物屋按分类和全局排序分页加载；私密收款码保持原权限链路。兼容范围、测试与回滚见 [公开图片缓存与商品分页](docs/PUBLIC-IMAGE-DELIVERY.md)。
 
 ## 快手与抖音视频抓取
 
+Worker 的累计重试预算保存在数据库中，恢复扫描不会无限补发失败任务；实例心跳和独立事件循环看门狗覆盖启动、排空与假死恢复。迁移、重试边界和回滚注意事项见 [视频 Worker 生命周期](docs/VIDEO-WORKER-LIFECYCLE.md)。
+
+视频作者归属使用已验证的平台内部 UID，昵称仅作展示。成员从“我的 → 平台账号验证”生成挑战，管理员核验实际账号控制权后绑定；申诉也不能绕过绑定要求。历史积分不自动重算。流程、抓取来源边界及上线前真实样本验收要求见 [`docs/PLATFORM-ACCOUNT-VERIFICATION.md`](docs/PLATFORM-ACCOUNT-VERIFICATION.md)。
+
 成员可以粘贴快手或抖音的短链接、长链接或包含链接的分享文本。快手仍使用页面源码抓取；抖音短链先由 Worker 内置 Chromium 完成跳转，再监听抖音页面返回的公开视频详情/作品列表接口，从目标 `aweme_id` 对应对象的 `statistics.digg_count` 读取精确点赞数。页面上的“1.9万”等展示缩写不会直接用于积分计算，未拿到精确详情时会自动驳回，避免近似数据入账。
 
-抖音支持普通视频和图文作品，提交时记录 `aweme_id` 到现有 `photoId` 字段，后续点赞变化不回溯、不重算历史积分；同一 `photoId` 在处理中、待审核和已通过记录中仍然全局去重。Worker 镜像需要 Chromium，默认路径为 `/usr/bin/chromium`，如部署环境不同可设置 `DOUYIN_BROWSER_EXECUTABLE_PATH`。本次不需要数据库 migration。
+抖音支持普通视频和图文作品，提交时记录 `aweme_id` 到现有 `photoId` 字段，后续点赞变化不回溯、不重算历史积分；同一 `photoId` 在处理中、待审核和已通过记录中仍然全局去重。Worker 镜像需要 Chromium，默认路径为 `/usr/bin/chromium`，如部署环境不同可设置 `DOUYIN_BROWSER_EXECUTABLE_PATH`。账号归属验证需要下文所列新增 migration。
 
-作者名会先做 NFKC 规范化、去除 emoji/符号、团名标记和常见装饰差异，再按双向包含、团名别名和有限编辑距离判断。匹配成功会自动入账并进入二次审核池；作者不一致、低赞、超期、重复、字段缺失或链接失效都会自动驳回，不进入普通人工队列。快手页面抓取使用 5 次递增退避，耗尽后才判定链接不可用。抓取错误分为两类：链接无效等确定性失败立即自动驳回；超时、反爬壳页、网络抖动等瞬时失败会由队列按指数退避重试（默认 3 次），全部失败后才按“抓取暂时失败”自动驳回，成员仍可重新提交或申诉，避免把可恢复的抖动误判成链接问题。
+作者 UID 必须与成员已验证的绑定一致；昵称相似度只保留为诊断信息，不能据此入账。作者未验证、低赞、超期、重复、字段缺失或链接失效都会自动驳回。快手页面抓取使用 5 次递增退避，耗尽后才判定链接不可用。抓取错误分为两类：链接无效等确定性失败立即自动驳回；超时、反爬壳页、网络抖动等瞬时失败会由队列按指数退避重试（默认 3 次），全部失败后才按“抓取暂时失败”自动驳回，成员仍可重新提交或申诉，避免把可恢复的抖动误判成链接问题。
 
-机审通过后成员端仍显示已到账；系统会把新通过视频平均分配给启用中的审核员二审。审核员可从“视频二次审核台”直接打开视频链接核查，二审通过只关闭任务，二审驳回会在同一事务内撤销视频、扣回已发积分、写审计日志、发通知并联动周挑战和成长记录重算。没有启用审核员时任务保持未分配，由管理员在后台二审池接管。
+普通视频仅自动通过或自动驳回，人工只处理成员申诉，不再创建或分配二审任务。旧二审记录保留在“历史二审记录”中，只读且不计入待办；旧写入接口返回 410。详见 [自动审核与申诉约定](docs/VIDEO-REVIEW-POLICY.md)。
 
 成员可对自动驳回记录提交一次待处理申诉；只有申诉进入管理员复查。申诉通过时管理员可以确认或修改整数积分，视频入账、申诉状态和审计日志在同一事务完成。
 
@@ -43,7 +53,7 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 - 200–1000 赞兑换 50 积分；超过 1000 赞按 `floor(点赞量 / 2)` 计算，最高 5000 积分。
 - `photoId` 对处理中、待审核和已通过记录全局唯一，同一视频不能重复结算。
 - 已驳回记录不占用唯一约束，修正问题后可以重新提交。
-- 新规则只影响后续抓取和申诉处理，不自动重算历史已到账积分；二次审核池也只接收上线后的新机审通过视频。上线前可用 `npm run video:audit-approved` 只读复查样本，使用 `npm run video:reprocess-pending -- --apply` 批量重抓旧的失败/历史待审核记录。
+- 积分规则在每条视频首次自动审核、调用外部抓取前锁定；网络重试、管理员重新抓取和申诉沿用同一快照。新提交首次审核采用当时规则，不追溯改写历史到账。无原始规则的历史申诉明确记录本次采用口径，不能冒充历史规则。详见 [视频规则快照](docs/VIDEO-POINT-RULE-SNAPSHOTS.md)。上线前可用 `npm run video:audit-approved` 只读复查样本，使用 `npm run video:reprocess-pending -- --apply` 批量重抓旧的失败/历史待审核记录。
 
 ## 榜单与领奖
 
@@ -148,6 +158,8 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 
 ## 数据安全
 
+视频撤销后的历史榜单、冻结奖励和已发奖励审计调整规则见 [`docs/RANKING-REVOCATION-POLICY.md`](docs/RANKING-REVOCATION-POLICY.md)。结算保存规则与贡献快照，旧周期保留证据缺失标记；发布前需完成新增 migration 的生产副本演练。
+
 - 密码使用 Argon2id，Session 使用 HttpOnly、Secure（生产环境）和 SameSite Cookie。
 - 手机号使用 AES-256-GCM 加密保存。
 - 转账、兑换和视频入账在数据库事务内完成，余额使用条件更新防止并发超扣。
@@ -157,11 +169,15 @@ Linux 服务器使用 `bash scripts/backup-db.sh backups .env.production` 备份
 - 成员账号和入团申请均使用大小写不敏感的快手 ID 唯一校验；关键提交使用幂等键。
 - 生产健康检查会拒绝默认数据库密码、无效密钥、Redis 不可用或没有启用管理员的部署。
 - 生产健康检查同时校验 Worker 心跳；Worker 会定时恢复因入队或重启中断而滞留的视频任务。
+- Web 容器使用 `/api/health/ready` 检查必需依赖；`/api/health/live` 只判断进程存活。正式发布和运维仍校验完整 `/api/health` 的 Worker、队列与版本一致性，超时及故障演练见 [`docs/HEALTH-CHECKS.md`](docs/HEALTH-CHECKS.md)。
 - 默认 Worker 并发为 4，可通过 `VIDEO_WORKER_CONCURRENCY` 调整；按约 310 名成员、峰值 20 人同时使用设计。
+- Worker 镜像只携带受审查的后台运行依赖和迁移/运维工具，保留包与根锁文件逐一核验；体积记录、实际 Chromium/迁移工具 smoke 和回退约束见 [Worker 运行时依赖](docs/WORKER-RUNTIME-DEPENDENCIES.md)。
 - `output/feishu` 中的飞书导出文件已加入忽略规则，不应提交到代码仓库。
 - 上线前运行 `npm run data:reconcile` 只读核对积分余额与流水、重复有效视频、待处理申诉、库存及整数积分约束。
 
 ## 验证命令
+
+管理员可从后台菜单打开“性能观测”，查看主要 API、抽样页面体验、查询耗时、锁等待、队列和进程资源。采样比例、数据隐私、统计区间和诊断步骤见 [性能观测说明](docs/PERFORMANCE-OBSERVABILITY.md)；缺失样本不代表系统健康。
 
 ```powershell
 npm run lint
@@ -178,4 +194,12 @@ docker build --target worker -t miaomiao-points-worker:verify .
 
 ## 工程协作
 
-开发约束见 [`AGENTS.md`](AGENTS.md)，完整分支、PR、测试、发布和回滚流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)，生日功能的开关、Worker、验收和回滚见 [`docs/BIRTHDAY-SYSTEM.md`](docs/BIRTHDAY-SYSTEM.md)。单人维护仓库使用维护者自审清单，多人协作时使用非作者审查；任何正式部署仍必须通过 CI、staging 验收和 GitHub `production` 环境批准。
+成员端字体、按需加载、图片尺寸和性能验收见 [`docs/MEMBER-LOADING-PERFORMANCE.md`](docs/MEMBER-LOADING-PERFORMANCE.md)。
+
+会话字段精简、首页查询复用及验证边界见 [`docs/MEMBER-SESSION-READ-PATH.md`](docs/MEMBER-SESSION-READ-PATH.md)。
+
+成长档案的后台重建、只读查询和运维核对见 [`docs/ACHIEVEMENT-PROJECTION.md`](docs/ACHIEVEMENT-PROJECTION.md)。
+
+订单确认、履约、取消和生日零价订单的规则见 [`docs/REDEMPTION-STATE-MACHINE.md`](docs/REDEMPTION-STATE-MACHINE.md)。
+
+开发约束见 [`AGENTS.md`](AGENTS.md)，完整分支、PR、测试、发布和回滚流程见 [`docs/ENGINEERING-PROCESS.md`](docs/ENGINEERING-PROCESS.md)，生日功能的开关、Worker、验收和回滚见 [`docs/BIRTHDAY-SYSTEM.md`](docs/BIRTHDAY-SYSTEM.md)，合法零价订单与补偿性欠额的对账规则见 [`docs/RECONCILIATION-RULES.md`](docs/RECONCILIATION-RULES.md)。单人维护仓库使用维护者自审清单，多人协作时使用非作者审查；任何正式部署仍必须通过 CI、staging 验收和 GitHub `production` 环境批准。

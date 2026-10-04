@@ -35,8 +35,7 @@ health
 inventory "$private/before"
 while IFS= read -r id; do
   [[ "$id" =~ ^sha256:[a-f0-9]{64}$ ]]
-  timeout 10 docker image inspect "$id" | jq -ce '.[0] |
-    {Id,Created,Size,RepoTags:(.RepoTags//[]),RepoDigests:(.RepoDigests//[]),revision:.Config.Labels["org.opencontainers.image.revision"]}'
+  timeout 10 docker image inspect "$id" | jq -ce -f "$payload/image-retention-metadata.jq"
 done < "$private/before.images" | jq -s '.' > "$private/images.json"
 jq -s 'map(.Image)|unique' "$private/before.containers" > "$private/used.json"
 jq --arg cutoff "$(date -u -d '14 days ago' +%FT%TZ)" --slurpfile used "$private/used.json" \
@@ -99,6 +98,7 @@ jq -n --arg mode "$mode" --arg sha "$source_sha" --arg at "$(date -u +%FT%TZ)" \
   --argjson unavailable "$unavailable" --argjson preserved "$preserved" \
   --argjson before "$(cat "$private/before.available")" --argjson after "$(cat "$private/after.available")" \
   '{schemaVersion:1,mode:$mode,productionCommit:$sha,checkedAt:$at,retainedVersions:$selection[0].retainedVersions,
+    excludedProjectImages:$selection[0].excludedProjectImages,
     recoverableCandidates:$verified[0],unavailableImagesPreserved:$unavailable,removedIds:$removed[0],
     availableBeforeBytes:$before,availableAfterBytes:$after,protectedResourcesPreserved:$preserved,healthy:true,capacityAtLeast6GiB:($after>=6442450944)}'
 [[ "$preserved" == true ]]

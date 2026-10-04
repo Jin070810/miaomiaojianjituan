@@ -39,6 +39,8 @@ GitHub Release 包含 commit、CI run/attempt、App/Worker digest、migration �
 
 ## 平台设置与失败处理
 
+无人值守路径可能以 `github-actions[bot]` 等 GitHub App 身份执行。发布请求和镜像保留工具接受规范的 `[bot]` 后缀并保留原始操作者名称进入审计；仍拒绝嵌入后缀、空白或命令字符，不冒用所有者身份。依据：[GitHub 机器人 actor 示例](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions)及 [GITHUB_TOKEN 身份与触发规则](https://docs.github.com/en/actions/concepts/security/github_token)。
+
 - main：PR 必需、批准数 0、core/staging 必需且绑定 GitHub Actions、strict、管理员同样受约束、只允许 squash、禁止强推和删除。
 - production Environment：只允许精确 main，无 required reviewers，无人工等待计时器；保留现有密钥。
 - workflow_dispatch 仅用于有明确版本依据的故障恢复/归档重发。没有日常人工确认项；重置管理员、放宽失败前置健康或延期告警仍是有技术含义的显式参数，不是审查按钮。

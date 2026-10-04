@@ -170,6 +170,20 @@ cmp "$payload/attestation.json" "$TEST_PROJECT/releases/$TEST_SHA/candidates/100
 [[ "$(jq -r .sha256 "$TEST_PROJECT/releases/attempts/123-1/backup.json")" =~ ^[a-f0-9]{64}$ ]]
 if grep -q 'restart nginx' "$TEST_PROJECT/docker.log"; then exit 1; fi
 assert_no_secret_evidence
+# Automatic Integration dispatches main CI as the GitHub App bot. Keep that
+# exact actor in the audit journal and accept it throughout the controller.
+fixture
+jq '.actor="github-actions[bot]"' "$payload/request.json" > "$payload/new.json"
+mv "$payload/new.json" "$payload/request.json"
+if ! run_release; then cat "$test_root/run.log"; exit 1; fi
+jq -e '.status=="succeeded" and .actor=="github-actions[bot]"' "$TEST_PROJECT/releases/active.json" >/dev/null
+fixture
+jq '.actor="github-actions[bot];invalid"' "$payload/request.json" > "$payload/new.json"
+mv "$payload/new.json" "$payload/request.json"
+if run_release; then echo 'Malformed actor was accepted' >&2; exit 1; fi
+[[ ! -d "$TEST_PROJECT/releases" ]]
+fixture
+if ! run_release; then cat "$test_root/run.log"; exit 1; fi
 # Exact retries may not overwrite history or repeat admin/migration side effects.
 cp "$TEST_PROJECT/releases/active.json" "$test_root/last-record"
 if run_release; then echo 'duplicate attempt was accepted' >&2; exit 1; fi

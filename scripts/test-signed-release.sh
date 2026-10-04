@@ -5,6 +5,21 @@ trap 'rm -rf -- "$test_root"' EXIT
 mkdir "$test_root/bin"
 printf '{"commit":"fixture"}\n' > "$test_root/manifest.json"
 printf '{"synthetic":true}\n' > "$test_root/bundle.json"
+sha="$(printf 'a%.0s' {1..40})"
+# Exercise the installed CLI before substituting our contract adapter. Invalid
+# bundle media must reach the real parser; argument/auth/network errors cannot
+# pass this check. Positive cryptographic verification remains in main publish.
+if [[ "${RUN_REAL_GH_ATTESTATION:-0}" == 1 ]]; then
+  if GITHUB_REPOSITORY=Example/system bash scripts/verify-signed-release.sh \
+    "$test_root/manifest.json" "$test_root/bundle.json" "$sha" \
+    > "$test_root/real-output" 2> "$test_root/real-error"; then
+    echo 'real CLI accepted an unsigned synthetic bundle' >&2; exit 1
+  fi
+  if ! grep -Fq 'unsupported media type' "$test_root/real-error"; then
+    cat "$test_root/real-error" >&2
+    echo 'real CLI did not reach bundle parsing' >&2; exit 1
+  fi
+fi
 cat > "$test_root/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -14,16 +29,20 @@ printf '[{"synthetic":true}]\n'
 FAKE
 chmod +x "$test_root/bin/gh"
 export PATH="$test_root/bin:$PATH" GITHUB_REPOSITORY=Example/system TEST_GH_ARGS="$test_root/args"
-sha="$(printf 'a%.0s' {1..40})"
 bash scripts/verify-signed-release.sh "$test_root/manifest.json" "$test_root/bundle.json" "$sha" > "$test_root/verified.json"
 for arg in attestation verify --bundle --repo Example/system --source-ref refs/heads/main --source-digest \
-  "$sha" --signer-digest --signer-workflow Example/system/.github/workflows/ci.yml \
+  "$sha" --signer-digest \
   --cert-identity https://github.com/Example/system/.github/workflows/ci.yml@refs/heads/main \
   --cert-oidc-issuer https://token.actions.githubusercontent.com --deny-self-hosted-runners \
   --predicate-type https://slsa.dev/provenance/v1 --format json; do
   grep -Fxq -- "$arg" "$TEST_GH_ARGS"
 done
 if grep -Fq -- --custom-trusted-root "$TEST_GH_ARGS"; then exit 1; fi
+for conflicting in --signer-workflow --signer-repo --cert-identity-regex; do
+  if grep -Fxq -- "$conflicting" "$TEST_GH_ARGS"; then
+    echo 'mutually exclusive identity selectors were combined' >&2; exit 1
+  fi
+done
 if TEST_CRYPTO_REJECT=1 bash scripts/verify-signed-release.sh "$test_root/manifest.json" "$test_root/bundle.json" "$sha"; then
   echo 'cryptographic verification failure was ignored' >&2; exit 1
 fi

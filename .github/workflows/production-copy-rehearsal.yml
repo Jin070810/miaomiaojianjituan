@@ -51,7 +51,7 @@ jobs:
           cp -R candidate/prisma output/copy-payload/prisma
           # Seed scripts/application code are not needed or executed.
           find output/copy-payload/prisma -maxdepth 1 -type f ! -name schema.prisma -delete
-          cp scripts/production-copy-rehearsal.sh scripts/sanitize-rehearsal.sql scripts/rehearsal-aggregate.sql output/copy-payload/
+          cp scripts/production-copy-rehearsal.sh scripts/sanitize-rehearsal.sql scripts/rehearsal-aggregate.sql scripts/rehearsal-structure.sql output/copy-payload/
           tar -C output/copy-payload -czf output/copy-payload.tar.gz .
       - name: Configure existing production connection
         env:

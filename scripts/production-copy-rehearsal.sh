@@ -14,7 +14,9 @@ flock --exclusive --wait 15 9
 private="$(mktemp -d /tmp/miaomiao-copy.XXXXXX)"
 name="miaomiao-copy-$run_id"
 created=false
+reported=false
 phase=preflight
+printf '[]\n' > "$private/structure-differences.json"
 finish() {
   local code=$?
   trap - EXIT INT TERM HUP
@@ -34,10 +36,13 @@ finish() {
        [[ "$(git rev-parse HEAD)" == "$source_sha" ]]; then preserved=true; fi
     printf 'Isolated copy rehearsal failed: phase=%s exit=%s sqlstate=%s removed=%s productionPreserved=%s\n' \
       "$phase" "$code" "$sqlstate" "$removed" "$preserved" >&2
-    jq -n --arg candidate "$candidate" --arg phase "$phase" --arg sqlstate "$sqlstate" \
+    if [[ "$reported" == false ]]; then
+      jq -n --arg candidate "$candidate" --arg phase "$phase" --arg sqlstate "$sqlstate" \
       --argjson removed "$removed" --argjson preserved "$preserved" \
+      --slurpfile differences "$private/structure-differences.json" \
       '{qualified:false,candidateCommit:$candidate,phase:$phase,sqlstate:$sqlstate,rawDataExported:false,
-        isolatedCopyRemoved:$removed,productionServicesPreserved:$preserved}'
+        isolatedCopyRemoved:$removed,productionServicesPreserved:$preserved,structureDifferences:$differences[0]}'
+    fi
   fi
   [[ "$private" == /tmp/miaomiao-copy.* ]] && rm -rf -- "$private"
   exit "$code"
@@ -129,10 +134,18 @@ printf 'SELECT json_agg(json_build_object('\''name'\'',migration_name,'\''checks
   psql_copy > "$private/before-migrations.json" 2> "$private/sql.log"
 jq -e 'all(.[]; .finished==true or .rolledBack==true)' "$private/before-migrations.json" >/dev/null
 phase=migration_checksums
+printf '[]\n' > "$private/checksum-differences.json"
 while IFS=$'\t' read -r migration checksum; do
   [[ "$migration" =~ ^[0-9]{12,14}_[a-z0-9_]+$ && "$checksum" =~ ^[a-f0-9]{64}$ ]]
-  [[ "$(sha256sum "$payload/prisma/migrations/$migration/migration.sql" | cut -d' ' -f1)" == "$checksum" ]]
+  actual="$(sha256sum "$payload/prisma/migrations/$migration/migration.sql" | cut -d' ' -f1)"
+  if [[ "$actual" != "$checksum" ]]; then
+    jq --arg name "$migration" --arg recorded "$checksum" --arg target "$actual" \
+      '.+[{name:$name,recorded:$recorded,target:$target}]' "$private/checksum-differences.json" > "$private/next.json"
+    mv "$private/next.json" "$private/checksum-differences.json"
+  fi
 done < <(jq -r '.[]|select(.rolledBack==false)|[.name,.checksum]|@tsv' "$private/before-migrations.json")
+# A mismatch still prevents qualification. Continue only inside the isolated
+# copy to gather structural evidence; never resolve or rewrite migration rows.
 # New SQL/schema only; never start Worker or import candidate application code.
 # The existing Prisma CLI has no host mounts except read-only schema, and shares
 # the copy's network NONE namespace: it cannot reach production or the Internet.
@@ -152,6 +165,19 @@ prisma_copy migrate deploy --schema /rehearsal/prisma/schema.prisma > "$private/
 phase=schema_drift
 prisma_copy migrate diff --from-url postgresql://rehearsal@127.0.0.1:5432/miaomiao_rehearsal?schema=public \
   --to-schema-datamodel /rehearsal/prisma/schema.prisma --exit-code > "$private/drift.log" 2>&1
+phase=reference_schema
+printf 'CREATE DATABASE miaomiao_reference;\n' | psql_copy > "$private/reference.log" 2>&1
+psql_reference() { timeout 90 docker exec -i "$name-db" psql -X -qAt -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate -U rehearsal -d miaomiao_reference; }
+for migration_file in "$payload"/prisma/migrations/*/migration.sql; do
+  psql_reference < "$migration_file" >> "$private/reference.log" 2>&1
+done
+phase=structural_equivalence
+psql_copy < "$payload/rehearsal-structure.sql" > "$private/copy-structure.json" 2> "$private/sql.log"
+psql_reference < "$payload/rehearsal-structure.sql" > "$private/reference-structure.json" 2> "$private/sql.log"
+jq --slurpfile expected "$private/reference-structure.json" \
+  '(. - $expected[0]) + ($expected[0] - .) | map({kind,key}) | unique' \
+  "$private/copy-structure.json" > "$private/structure-differences.json"
+jq -e 'length==0' "$private/structure-differences.json" >/dev/null
 psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/after.json" 2> "$private/sql.log"
 cmp -s "$private/sanitized.json" "$private/after.json"
 jq -e '.accountBalanceMismatches==0' "$private/after.json" >/dev/null
@@ -168,9 +194,15 @@ phase=remove_isolated_copy
 timeout 20 docker rm -f "$name-db" >/dev/null
 if docker container inspect "$name-db" >/dev/null 2>&1 || docker container inspect "$name-prisma" >/dev/null 2>&1; then exit 1; fi
 created=false
+history_matches="$(jq 'length==0' "$private/checksum-differences.json")"
 jq -n --arg candidate "$candidate" --arg source "$source_sha" --arg at "$(date -u +%FT%TZ)" \
   --arg backup "$(basename "$backup")" --slurpfile aggregates "$private/after.json" --slurpfile migrations "$private/migrations.json" \
+  --slurpfile differences "$private/checksum-differences.json" --argjson history "$history_matches" \
   '{schemaVersion:1,candidateCommit:$candidate,productionCommit:$source,checkedAt:$at,backup:$backup,
     backupChecksumVerified:true,networkIsolated:true,rawDataExported:false,sanitizedBeforeMigration:true,
     repeatMigrationPassed:true,schemaDrift:false,aggregatesPreserved:true,productionServicesPreserved:true,
-    isolatedCopyRemoved:true,aggregates:$aggregates[0],migrations:$migrations[0],qualified:true,rehearsalPerformed:true}'
+    isolatedCopyRemoved:true,aggregates:$aggregates[0],migrations:$migrations[0],structuralEquivalence:true,
+    historicalChecksumMatches:$history,checksumDifferences:$differences[0],qualified:$history,rehearsalPerformed:true}'
+reported=true
+phase=historical_checksum_differences
+[[ "$history_matches" == true ]]

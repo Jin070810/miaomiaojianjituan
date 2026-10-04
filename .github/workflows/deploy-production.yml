@@ -96,7 +96,7 @@ jobs:
       deployed: ${{ steps.record.outputs.deployed }}
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - name: Validate release commit
         env:
@@ -237,6 +237,30 @@ jobs:
             output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" release-source
           cp output/release/candidate/release-candidate.json output/release/deploy-candidate.json
           cp output/release/candidate/release-candidate.sigstore.json output/release/deploy-candidate.sigstore.json
+
+      - name: Automatically rehearse changed migrations on an isolated sanitized copy
+        if: steps.fresh.outputs.eligible == 'true'
+        timeout-minutes: 15
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload="$(mktemp -d)"
+          trap 'rm -rf -- "$payload"' EXIT
+          test -z "$(find release-source/prisma -type l -print -quit)"
+          cp -R release-source/prisma "$payload/prisma"
+          find "$payload/prisma" -maxdepth 1 -type f ! -name schema.prisma -delete
+          cp scripts/production-copy-rehearsal.sh scripts/sanitize-rehearsal.sql scripts/rehearsal-aggregate.sql "$payload/"
+          receiver='set -euo pipefail; umask 077; payload=$(mktemp -d /tmp/miaomiao-copy-payload.XXXXXX); trap '\''[[ "$payload" == /tmp/miaomiao-copy-payload.* ]] && rm -rf -- "$payload"'\'' EXIT; tar --no-same-owner --no-same-permissions -xzf - -C "$payload"; timeout --signal=TERM --kill-after=20s 12m bash "$payload/production-copy-rehearsal.sh" "$1" "$payload" "$2" "$3" "$4" if-changed'
+          remote="$(printf 'bash -c %q -- %q %q %q %q' "$receiver" "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN" "$RELEASE_COMMIT" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
+          tar -czf - -C "$payload" . |
+            timeout --signal=TERM --kill-after=30s 14m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" > output/release/copy-rehearsal.json
+          jq -e --arg sha "$RELEASE_COMMIT" '.qualified and .candidateCommit==$sha and .rawDataExported==false' output/release/copy-rehearsal.json >/dev/null
 
       - name: Allocate or reuse an immutable release version
         if: steps.fresh.outputs.eligible == 'true'

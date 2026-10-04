@@ -80,6 +80,7 @@ jobs:
       - run: bash scripts/test-production-evidence.sh
       - run: bash scripts/test-production-cache-cleanup.sh
       - run: bash scripts/test-rehearsal-sanitization.sh
+      - run: bash scripts/test-copy-rehearsal-gate.sh
       - run: bash scripts/test-buildkit-cache-filter.sh
       - run: bash scripts/test-release-capacity.sh
       - run: bash scripts/test-publish-release-candidate.sh

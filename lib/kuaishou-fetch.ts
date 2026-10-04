@@ -2,8 +2,6 @@ import { spawn } from "node:child_process";
 import { normalizeKuaishouLink, calculateVideoPoints, compareOwnerNames } from "./kuaishou";
 import { DEFAULT_VIDEO_POINT_RULE, VideoPointRuleConfig } from "./point-rules";
 import { VideoFetchError } from "./fetch-errors";
-import { parseStructuredKuaishouWork } from "./video-author-evidence";
-import { followTrustedKuaishouRedirects, parseCurlHttpResponse } from "./video-source-policy";
 
 export type FetchedKuaishouVideo = {
   source: ReturnType<typeof normalizeKuaishouLink>;
@@ -15,7 +13,6 @@ export type FetchedKuaishouVideo = {
   publishedAt: Date;
   photoId: string;
   owner: string;
-  authorUid: string | null;
   points: number;
   rawHtml: string;
   ownerMatches: boolean;
@@ -28,15 +25,14 @@ export function concatUtf8Chunks(chunks: Buffer[]) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function runCurlResponse(url: string, timeoutMs: number) {
+function runCurl(url: string, timeoutMs = 10_000) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn("curl", [
       "-sS",
-      "--include",
-      "--suppress-connect-headers",
+      "-L",
       "--proto", "=https",
       "--proto-redir", "=https",
-      "--max-redirs", "0",
+      "--max-redirs", "5",
       "--connect-timeout", "5",
       "-A", "Mozilla/5.0",
       "--max-time", String(Math.ceil(timeoutMs / 1000)),
@@ -68,20 +64,34 @@ function runCurlResponse(url: string, timeoutMs: number) {
     child.on("close", (code) => {
       clearTimeout(timer);
       if (oversized) reject(new Error("快手页面响应过大，已停止处理"));
-      else if (code !== 0) reject(new Error(stderr || `curl exited with ${code}`));
+      else if (code !== 0 && chunks.length === 0) reject(new Error(stderr || `curl exited with ${code}`));
       else resolve(concatUtf8Chunks(chunks));
     });
   });
 }
 
-async function runCurlPage(url: string, timeoutMs = 10_000) {
-  return followTrustedKuaishouRedirects(url, async (target, remainingMs) => (
-    parseCurlHttpResponse(await runCurlResponse(target, remainingMs))
-  ), timeoutMs);
+function capture(html: string, pattern: RegExp) {
+  const match = html.match(pattern);
+  return match?.[1] ?? null;
 }
 
-async function runCurl(url: string, timeoutMs = 10_000) {
-  return (await runCurlPage(url, timeoutMs)).body;
+function decodeJsonText(value: string | null) {
+  if (value === null) return null;
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+}
+
+function safePublicImageUrl(value: string | null) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 export function captureVideoPublishedAt(html: string) {
@@ -97,12 +107,22 @@ export function captureVideoPublishedAt(html: string) {
   return Number.isNaN(publishedAt.getTime()) ? null : publishedAt;
 }
 
-export function parseKuaishouHtml(rawHtml: string, expectedPhotoId?: string | null) {
-  try {
-    return parseStructuredKuaishouWork(rawHtml, expectedPhotoId);
-  } catch (error) {
-    throw new VideoFetchError(error instanceof Error ? error.message : "快手页面未返回完整的视频数据，请稍后重试", "transient");
+export function parseKuaishouHtml(rawHtml: string) {
+  const likesText = capture(rawHtml, /"likeCount"\s*:\s*(\d+)/);
+  const photoId = capture(rawHtml, /"photoId"\s*:\s*"(\d+)"/);
+  const owner = capture(rawHtml, /"userName"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  const viewsText = capture(rawHtml, /"viewCount"\s*:\s*(\d+)/);
+  const commentsText = capture(rawHtml, /"commentCount"\s*:\s*(\d+)/);
+  const caption = decodeJsonText(capture(rawHtml, /"caption"\s*:\s*"((?:\\.|[^"\\])*)"/));
+  const coverUrl = safePublicImageUrl(decodeJsonText(capture(rawHtml, /"(?:coverUrl|cover)"\s*:\s*"((?:\\.|[^"\\])*)"/)));
+  const publishedAt = captureVideoPublishedAt(rawHtml);
+  if (!likesText || !photoId || owner === null || !publishedAt) {
+    throw new VideoFetchError("快手页面未返回完整的视频数据，请稍后重试", "transient");
   }
+  const decodedOwner = decodeJsonText(owner) ?? "";
+  const likes = Number(likesText);
+  const views = viewsText ? Number(viewsText) : null;
+  return { likes, views, commentCount: commentsText ? Number(commentsText) : null, caption, coverUrl, publishedAt, photoId, owner: decodedOwner };
 }
 
 export async function fetchKuaishouVideo(
@@ -126,11 +146,8 @@ export async function fetchKuaishouVideo(
       if (retryDelays[attempt - 1] > 0) {
         await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt - 1]));
       }
-      const response = await runCurlPage(source.requestUrl);
-      const rawHtml = response.body;
-      const targetId = new URL(response.finalUrl).pathname.match(/^\/(?:short-video|fw\/photo)\/([A-Za-z0-9_-]+)\/?$/)?.[1];
-      if (!targetId) throw new VideoFetchError("快手跳转后未返回可识别的作品地址，请使用作品长链接重新提交", "permanent");
-      const parsed = parseKuaishouHtml(rawHtml, targetId);
+      const rawHtml = await runCurl(source.requestUrl);
+      const parsed = parseKuaishouHtml(rawHtml);
       const ownerComparison = compareOwnerNames(submittedNickname, parsed.owner);
       return {
         source,
@@ -142,7 +159,6 @@ export async function fetchKuaishouVideo(
       };
     } catch (error) {
       lastError = error;
-      if (error instanceof VideoFetchError && error.kind === "permanent") throw error;
     }
   }
   throw lastError instanceof Error ? lastError : new Error("快手页面抓取失败，请稍后重试");

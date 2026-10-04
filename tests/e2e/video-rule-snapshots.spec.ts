@@ -1,4 +1,3 @@
-import { seedVerifiedVideoAuthor } from "../helpers/verified-author";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import argon2 from "argon2";
@@ -42,7 +41,6 @@ async function seedAppeal(locked: boolean) {
     reviewReason: "作者名称需核实", idempotencyKey: randomUUID(),
     ...(locked ? { pointRuleSnapshot: { create: { ...DEFAULT_VIDEO_POINT_RULE, revision: videoRuleRevision(DEFAULT_VIDEO_POINT_RULE), formulaVersion: "likes-v1", origin: "FIRST_AUTOMATIC_REVIEW" } } } : {}),
   } });
-  await seedVerifiedVideoAuthor(video.id);
   const appeal = await db.videoAppeal.create({ data: { videoId: video.id, userId: memberId, reason: "请核对作者信息", idempotencyKey: randomUUID() } });
   return { video, appeal };
 }

@@ -1,4 +1,3 @@
-import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Queue, Worker } from "bullmq";
@@ -109,11 +108,10 @@ describe.skipIf(process.env.RUN_DB_TESTS !== "1")("durable video processing", ()
 
   it("commits fetched metadata, approval and the point ledger together", async () => {
     const row = await video();
-    await seedVerifiedVideoAuthor(row.id);
     const photoId = `processing-photo-${randomUUID()}`;
     fetchMock.mockResolvedValue({
       source: { requestUrl: row.requestUrl, sourceUrl: row.sourceUrl, sourceKind: row.sourceKind, shortCode: null },
-      authorUid: `fixture_${userId}`, photoId, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
+      photoId, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
       publishedAt: row.submittedAt, owner: row.submittedNickname, ownerMatches: true, ownerMatchMethod: "exact", points: 50,
     });
     const result = await processVideoSubmission(row.id);
@@ -125,11 +123,10 @@ describe.skipIf(process.env.RUN_DB_TESTS !== "1")("durable video processing", ()
 
   it("does not hold the video row while waiting for the shared photo lock", async () => {
     const row = await video();
-    await seedVerifiedVideoAuthor(row.id);
     const photoId = `lock-order-${randomUUID()}`;
     fetchMock.mockResolvedValue({
       source: { requestUrl: row.requestUrl, sourceUrl: row.sourceUrl, sourceKind: row.sourceKind, shortCode: null },
-      photoId, authorUid: `fixture_${userId}`, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
+      photoId, likes: 500, views: 1000, commentCount: 2, caption: "test", coverUrl: null,
       publishedAt: row.submittedAt, owner: row.submittedNickname, ownerMatches: true, ownerMatchMethod: "exact", points: 50,
     });
     let processing!: ReturnType<typeof processVideoSubmission>;

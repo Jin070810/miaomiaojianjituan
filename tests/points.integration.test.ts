@@ -1,4 +1,3 @@
-import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { adminAdjustPoints, adminAdjustPointsBatch, completeTransfer, creditVideoReward, redeemGift, resolveVideoAppeal, resolveVideoSecondaryReview, revokeVideoReward, updateRedemptionOrder } from "@/lib/points";
@@ -80,7 +79,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: "integration-video",
       },
     });
-    await seedVerifiedVideoAuthor(video.id);
     await Promise.all([
       creditVideoReward({ videoId: video.id, userId: senderId, points: 50 }),
       creditVideoReward({ videoId: video.id, userId: senderId, points: 50 }),
@@ -97,7 +95,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
       userId: reviewerAId, sourceUrl: "https://v.kuaishou.com/auto-only", requestUrl: "https://v.kuaishou.com/auto-only",
       sourceKind: "short-link", submittedNickname: "审核员甲", idempotencyKey: `auto-only-${Date.now()}`,
     } });
-    await seedVerifiedVideoAuthor(video.id);
     await creditVideoReward({ videoId: video.id, userId: reviewerAId, points: 60 });
     expect(await db.videoSecondaryReview.count({ where: { videoId: video.id } })).toBe(0);
     expect(await db.videoSubmission.findUniqueOrThrow({ where: { id: video.id } })).toMatchObject({ status: "APPROVED", points: 60 });
@@ -128,7 +125,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
       userId: senderId, sourceUrl: "https://v.kuaishou.com/historical-revoke", requestUrl: "https://v.kuaishou.com/historical-revoke",
       sourceKind: "short-link", submittedNickname: "测试转出", idempotencyKey: `historical-revoke-${Date.now()}`,
     } });
-    await seedVerifiedVideoAuthor(video.id);
     await creditVideoReward({ videoId: video.id, userId: senderId, points: 90 });
     const review = await db.videoSecondaryReview.upsert({ where: { videoId: video.id }, create: { videoId: video.id, reviewerId: reviewerAId }, update: {} });
     await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
@@ -152,7 +148,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: `integration-appeal-video-${Date.now()}`,
       },
     });
-    await seedVerifiedVideoAuthor(video.id);
     const appeal = await db.videoAppeal.create({
       data: {
         videoId: video.id,
@@ -187,7 +182,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: `integration-appeal-race-a-${photoId}`,
       },
     });
-    await seedVerifiedVideoAuthor(videoA.id);
     const videoB = await db.videoSubmission.create({
       data: {
         userId: senderId,
@@ -201,7 +195,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: `integration-appeal-race-b-${photoId}`,
       },
     });
-    await seedVerifiedVideoAuthor(videoB.id);
     const [appealA, appealB] = await Promise.all([
       db.videoAppeal.create({ data: { videoId: videoA.id, userId: senderId, reason: "同一内容申诉A", idempotencyKey: `integration-appeal-race-a-appeal-${photoId}` } }),
       db.videoAppeal.create({ data: { videoId: videoB.id, userId: senderId, reason: "同一内容申诉B", idempotencyKey: `integration-appeal-race-b-appeal-${photoId}` } }),
@@ -240,7 +233,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: "integration-reversal-video",
       },
     });
-    await seedVerifiedVideoAuthor(video.id);
     await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
     await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
     await Promise.all([
@@ -305,7 +297,6 @@ describe.skipIf(!enabled)("积分事务并发", () => {
         idempotencyKey: `integration-reprocess-${Date.now()}`,
       },
     });
-    await seedVerifiedVideoAuthor(video.id);
     const results = await Promise.all([
       prepareVideoReprocess({ videoId: video.id, actorId: receiverId }),
       prepareVideoReprocess({ videoId: video.id, actorId: receiverId }),

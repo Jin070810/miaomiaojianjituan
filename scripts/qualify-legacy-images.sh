@@ -7,6 +7,7 @@ source scripts/release-lifecycle.sh
 legacy_sha=752b084ec220ce5c827609611e51ce718b28b92d
 app_ref=ghcr.io/jin070810/miaomiaojianjituan-app@sha256:609d72450c2dfec9105302b2368979cac4853c9ab7c55b8af69021307385eca6
 worker_ref=ghcr.io/jin070810/miaomiaojianjituan-worker@sha256:21ae3d56522cf9cd02e249b9804c747b2288195b4bd66bcc2b63a8a9c8ceda71
+nginx_ref=nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
 prefix="miaomiao-legacy-$GITHUB_RUN_ID"
 private="$(mktemp -d "$RUNNER_TEMP/legacy-qualification.XXXXXX")"
 evidence="$(pwd)/output/legacy-qualification"
@@ -32,7 +33,7 @@ finish() {
   for pid in "$pending_pid" "$blocker_pid" "$worker_stop_pid" "$app_stop_pid"; do
     [[ -z "$pid" ]] || kill "$pid" 2>/dev/null
   done
-  for service in app worker postgres redis migration seed request; do
+  for service in app worker postgres redis nginx migration seed request; do
     timeout 15 docker rm -f "$prefix-$service" >/dev/null 2>&1
   done
   timeout 15 docker network rm "$prefix" >/dev/null 2>&1
@@ -87,6 +88,59 @@ for _ in {1..40}; do
 done
 jq -e --arg sha "$legacy_sha" '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' "$private/health.json" >/dev/null
 jq '{ok,database,redis,worker,appCommit:.app.commit,workerCommit:.workerVersion.commit}' "$private/health.json" > "$evidence/initial-health.json"
+
+# The old proxy forwarded arbitrary Upgrade headers to an application without
+# WebSocket endpoints. A disconnected unknown upgrade can remain CLOSE_WAIT in
+# the original Next server. Prove the failure with the old two header settings,
+# then verify the production template prevents it; no original image is rebuilt.
+checkpoint legacy_upgrade_regression
+internal_private="/tmp/$(basename "$private")"
+app_container="$(docker inspect --format '{{.Id}}' "$prefix-app")"
+timeout 15 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=legacy.test \
+  -keyout "$private/privkey.pem" -out "$private/fullchain.pem" > "$private/cert.log" 2>&1
+# shellcheck disable=SC2016 # Keep the Nginx variable literal in the negative control.
+sed 's/proxy_set_header Upgrade "";/proxy_set_header Upgrade $http_upgrade;/;s/proxy_set_header Connection "";/proxy_set_header Connection "upgrade";/' \
+  scripts/nginx-release.conf > "$private/proxy.conf"
+grep -qF 'proxy_set_header Connection "upgrade";' "$private/proxy.conf"
+start_proxy() {
+  docker run -d --name "$prefix-nginx" --network "$prefix" --network-alias nginx \
+    --mount "type=bind,source=$private/proxy.conf,target=/etc/nginx/nginx.conf,readonly" \
+    --mount "type=bind,source=$private,target=/etc/nginx/certs,readonly" "$nginx_ref" >/dev/null
+  for _ in {1..20}; do
+    if timeout 5 docker exec "$prefix-nginx" wget -qO- --no-check-certificate https://127.0.0.1/api/health >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+upgrade_client() {
+  docker run --rm --name "$prefix-request" --network "$prefix" -e CI=true -e RUNNER_TEMP=/tmp \
+    -e LEGACY_INTERNAL_NETWORK=true --mount "type=bind,source=$private,target=$internal_private" \
+    --mount "type=bind,source=$(pwd)/scripts/test-legacy-upgrade-client.mjs,target=/tmp/upgrade-client.mjs,readonly" \
+    "$worker_ref" node /tmp/upgrade-client.mjs "$internal_private" "$1"
+  cp "$private/upgrade-$1.json" "$evidence/upgrade-$1.json"
+}
+web_close_waits() {
+  docker exec "$prefix-app" node -e 'const fs=require("fs");let n=0;for(const file of ["/proc/net/tcp","/proc/net/tcp6"]) {for(const line of fs.readFileSync(file,"utf8").trim().split("\n").slice(1)) {const p=line.trim().split(/\s+/);if(p[1].endsWith(":0BB8")&&p[3]==="08")n++;}} console.log(n)'
+}
+timeout --kill-after=10s 180s docker pull "$nginx_ref" >/dev/null
+start_proxy
+upgrade_client legacy
+legacy_close_waits="$(web_close_waits)"
+[[ "$legacy_close_waits" =~ ^[1-9][0-9]*$ ]]
+if release_drain_container "$app_container" app "$evidence/legacy-upgrade-app.json"; then
+  echo 'Expected the isolated legacy Upgrade regression to block shutdown' >&2; exit 1
+fi
+jq -e '.state.ExitCode==137 and (.state.OOMKilled|not)' "$evidence/legacy-upgrade-app.json" >/dev/null
+docker rm -f "$prefix-nginx" >/dev/null
+cp scripts/nginx-release.conf "$private/proxy.conf"
+docker start "$prefix-app" >/dev/null
+start_proxy
+upgrade_client protected
+protected_close_waits="$(web_close_waits)"
+[[ "$protected_close_waits" == 0 ]]
+jq -n --argjson before "$legacy_close_waits" --argjson after "$protected_close_waits" \
+  '{isolatedSyntheticData:true,historicalRequestIdentified:false,legacyCloseWaitSockets:$before,protectedCloseWaitSockets:$after,
+    legacyForcedStopRejected:true}' > "$evidence/upgrade-regression.json"
 
 # The actual failed release drained Web first, with its healthcheck enabled.
 # Exercise a fully loaded page before shutdown, not only an untouched server.

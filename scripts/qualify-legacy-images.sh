@@ -72,7 +72,7 @@ timeout --kill-after=10s 120s docker run --rm --name "$prefix-migration" --netwo
 timeout --kill-after=10s 60s docker run --rm --name "$prefix-seed" --network "$prefix" --env-file "$private/app.env" \
   "$worker_ref" ./node_modules/.bin/tsx scripts/seed-admin.ts > "$private/seed.log" 2>&1
 checkpoint original_startup
-docker run -d --name "$prefix-worker" --network "$prefix" --env-file "$private/app.env" "$worker_ref" >/dev/null
+docker run -d --name "$prefix-worker" --restart unless-stopped --network "$prefix" --env-file "$private/app.env" "$worker_ref" >/dev/null
 docker run -d --name "$prefix-app" --network "$prefix" --network-alias app --env-file "$private/app.env" "$app_ref" >/dev/null
 for _ in {1..40}; do
   if timeout 8 docker exec "$prefix-app" node -e '(async()=>{const r=await fetch("http://127.0.0.1:3000/api/health",{signal:AbortSignal.timeout(5000)});process.stdout.write(await r.text());process.exitCode=r.ok?0:1})().catch(()=>process.exit(1))' > "$private/health.json" &&
@@ -106,7 +106,13 @@ for _ in {1..50}; do
   sleep 0.1
 done
 [[ "${active:-}" == legacy-drain-check ]]
-docker stop --time 75 "$prefix-worker" >/dev/null &
+# Original docker-stop was proven to interrupt the job (run 37175301016).
+# Test a narrow first-transition procedure: disable this container's restart,
+# signal its validated tsx child, then wait for the wrapper to exit naturally.
+docker update --restart=no "$prefix-worker" >/dev/null
+docker exec -i -e LEGACY_SIGNAL_EXECUTE=true "$prefix-worker" node --input-type=module \
+  < scripts/signal-legacy-worker.mjs > "$evidence/worker-signal.json"
+timeout --kill-after=5s 75s docker wait "$prefix-worker" > "$private/worker-wait-exit" &
 worker_stop_pid=$!
 sleep 1
 worker_waited="$(docker inspect --format '{{.State.Running}}' "$prefix-worker")"
@@ -145,6 +151,7 @@ jq -n --slurpfile worker "$evidence/worker-exit.json" --slurpfile app "$evidence
   --arg at "$(date -u +%FT%TZ)" --argjson workerWaited "$worker_waited" --argjson workerCompleted "$worker_completed" \
   --argjson appWaited "$app_waited" --argjson appCompleted "$app_completed" --argjson clients "$clients" \
   '{checkedAt:$at,isolatedSyntheticData:true,workerWaitedForActiveJob:$workerWaited,workerJobCompleted:$workerCompleted,
+    workerDrainStrategy:"legacy-child-term",originalDockerStopQualified:false,
     appWaitedForRequest:$appWaited,appRequestCompleted:$appCompleted,remainingDatabaseClients:$clients,worker:$worker[0],app:$app[0]}
     | .qualified=(.workerWaitedForActiveJob and .workerJobCompleted and .appWaitedForRequest and .appRequestCompleted
       and .remainingDatabaseClients==0 and .worker.Status=="exited" and .worker.ExitCode==0 and (.worker.OOMKilled|not)

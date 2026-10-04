@@ -32,6 +32,17 @@ inventory() {
   df -B1 --output=avail . | tail -1 | tr -d ' ' > "$prefix.available"
 }
 health
+available="$(df -B1 --output=avail . | tail -1 | tr -d ' ')"
+[[ "$available" =~ ^[0-9]+$ ]]
+if [[ "$mode" == clean ]] && (( available >= 6442450944 )); then
+  # A normal release needs only capacity and health checks. Avoid inventory and
+  # remote registry round trips when there is no reason to remove an image.
+  jq -n --arg sha "$source_sha" --arg at "$(date -u +%FT%TZ)" --argjson available "$available" \
+    '{schemaVersion:1,mode:"clean",productionCommit:$sha,checkedAt:$at,maintenanceSkipped:true,
+      reason:"sufficient_capacity",removedIds:[],availableBeforeBytes:$available,availableAfterBytes:$available,
+      protectedResourcesPreserved:true,healthy:true,capacityAtLeast6GiB:true}'
+  exit 0
+fi
 inventory "$private/before"
 while IFS= read -r id; do
   [[ "$id" =~ ^sha256:[a-f0-9]{64}$ ]]

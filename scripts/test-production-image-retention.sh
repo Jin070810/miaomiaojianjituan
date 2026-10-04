@@ -91,11 +91,16 @@ FAKE
 cat > "$fixture/bin/df" <<'FAKE'
 #!/usr/bin/env bash
 printf 'Avail\n'
-if [[ -f "$RETENTION_FIXTURE/removed" ]]; then printf '8000000000\n'; else printf '3100000000\n'; fi
+if [[ -n "${RETENTION_AVAILABLE:-}" ]]; then printf '%s\n' "$RETENTION_AVAILABLE"
+elif [[ -f "$RETENTION_FIXTURE/removed" ]]; then printf '8000000000\n'; else printf '3100000000\n'; fi
 FAKE
 chmod +x "$fixture/bin/"*
 export PATH="$fixture/bin:$PATH"
 run() { bash scripts/production-image-retention.sh "$fixture/project" "$fixture/payload" example.test "$1"; }
+RETENTION_AVAILABLE=6442450944 run clean > "$fixture/skipped.json"
+jq -e '.maintenanceSkipped and .reason=="sufficient_capacity" and .healthy and .capacityAtLeast6GiB and (.removedIds|length)==0' "$fixture/skipped.json" >/dev/null
+[[ ! -f "$fixture/commands" && ! -f "$fixture/removed" ]]
+if RETENTION_AVAILABLE=8000000000 RETENTION_HEALTH=false run clean >/dev/null; then exit 1; fi
 run inspect > "$fixture/inspect.json"
 [[ ! -f "$fixture/removed" ]]
 jq -e '(.recoverableCandidates|length)==2 and .protectedResourcesPreserved' "$fixture/inspect.json" >/dev/null

@@ -33,6 +33,16 @@ INSERT INTO "AuditLog" (id,action,entity,"beforeValue","afterValue",ip,reason)
 VALUES ('fixture_audit','fixture','fixture','{"private":"SENSITIVE_SENTINEL_BEFORE"}','{"private":"SENSITIVE_SENTINEL_AFTER"}','SENSITIVE_SENTINEL_IP','SENSITIVE_SENTINEL_REASON');
 INSERT INTO "LegacyImport" (id,"sourceTable","sourceId","rawValue")
 VALUES ('fixture_import','fixture','SENSITIVE_SENTINEL_SOURCE','{"private":"SENSITIVE_SENTINEL_RAW"}');
+INSERT INTO "VideoSubmission" (id,"userId","sourceUrl","requestUrl","sourceKind","submittedNickname","idempotencyKey","photoId")
+VALUES ('fixture_video','fixture_user_a','SENSITIVE_SENTINEL_URL','SENSITIVE_SENTINEL_REQUEST','share','SENSITIVE_SENTINEL_NICKNAME','SENSITIVE_SENTINEL_VIDEO_KEY','SENSITIVE_SENTINEL_PHOTO');
+INSERT INTO "VideoPointRuleSnapshot" ("videoId",revision,"formulaVersion",origin,"minimumLikes","fixedTierMaxLikes","fixedTierPoints","likesDivisor","maximumPoints","submissionWindowDays")
+VALUES ('fixture_video',repeat('a',64),'likes-v1','FIRST_AUTOMATIC_REVIEW',200,500,50,10,1000,7);
+INSERT INTO "RankingPeriod" (id,type,"periodStart","periodEnd","updatedAt") VALUES ('fixture_period','WEEK','2026-01-01','2026-01-08',now());
+INSERT INTO "RankingAward" (id,"periodId","userId",rank,value) VALUES ('fixture_award','fixture_period','fixture_user_a',1,100);
+INSERT INTO "RankingAwardAdjustment" (id,"awardId","videoId",kind,source,"videoSnapshot","awardSnapshot",reason,"createdById")
+VALUES ('fixture_pending','fixture_award','fixture_video','FREEZE_UNPAID','SNAPSHOT','{"private":"SENSITIVE_SENTINEL_VIDEO"}','{"private":"SENSITIVE_SENTINEL_AWARD"}','SENSITIVE_SENTINEL_REASON','fixture_user_a');
+INSERT INTO "RankingAwardAdjustment" (id,"awardId","videoId",kind,status,source,"videoSnapshot","awardSnapshot",reason,"createdById",resolution,"resolutionNote","resolvedById","resolvedAt")
+VALUES ('fixture_resolved','fixture_award','fixture_old_video','REVIEW_PAID','RESOLVED','LEGACY_WINDOW','{}','{}','SENSITIVE_SENTINEL_REASON','fixture_user_a','NO_CHANGE','SENSITIVE_SENTINEL_RESOLUTION','fixture_user_a',now());
 SQL
 if sql < scripts/sanitize-rehearsal.sql > "$fixture/guard.log" 2>&1; then echo 'Missing guard was accepted' >&2; exit 1; fi
 [[ "$(printf 'SELECT count(*) FROM "Session";\n' | sql)" == 1 ]]
@@ -45,4 +55,6 @@ jq -e '.users==1 and .accounts==1 and .balanceTotal==100 and .ledgerTotal==100 a
 docker exec "$container" pg_dump --data-only -U rehearsal -d miaomiao_rehearsal > "$fixture/sanitized.sql"
 if grep -q SENSITIVE_SENTINEL "$fixture/sanitized.sql"; then echo 'Sensitive fixture survived sanitization' >&2; exit 1; fi
 [[ "$(printf 'SELECT count(*) FROM "Session";\n' | sql)" == 0 ]]
+[[ "$(printf 'SELECT revision FROM "VideoPointRuleSnapshot";\n' | sql)" == "$(printf 'a%.0s' {1..64})" ]]
+[[ "$(printf 'SELECT count(*) FROM "RankingAwardAdjustment" WHERE status IN ('\''PENDING'\'','\''RESOLVED'\'');\n' | sql)" == 2 ]]
 echo 'Rehearsal guard, PII/token/JSON removal, full schema constraints and financial aggregate preservation passed.'

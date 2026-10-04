@@ -10,7 +10,8 @@ flowchart LR
   B --> C[保护分支 squash 合并]
   C --> D[显式触发 main CI]
   D --> E[原镜像验收 / 签名]
-  E --> I[有数据库变更时自动副本演练]
+  E --> J[空间检查 / 按保留策略自动清理旧镜像]
+  J --> I[有数据库变更时自动副本演练]
   I --> F[自动版本 / 串行部署]
   F --> G[入口开放 / 发布记录]
   G --> H[独立 30 分钟观察 / 前后对账]
@@ -25,6 +26,8 @@ GitHub 对 `GITHUB_TOKEN` 产生的事件有递归限制，不能假设机器人
 `Deploy Production` 接收成功 main CI 的 workflow_run，用已认证 API 重新验证 run/attempt、仓库、workflow 和 SHA。过时 main 候选会在计划阶段及取得部署并发锁后跳过。自动分配最大规范 SemVer 的下一个 patch；同 SHA 重试复用已有唯一 tag，标签竞争时核对目标，不重写标签。主机仍按签名 digest 拉取，执行已有预检、排空、备份、迁移和健康门禁。
 
 ## 发布后观察
+
+签名验证后先运行[镜像保留与容量检查](PRODUCTION-IMAGE-RETENTION.md)。可用空间达到 6 GiB 就直接继续；不足时仅清理超过 14 天、远程 digest 已验证可恢复且未受保留规则保护的项目镜像。无法恢复足够空间时停止，不删除数据库卷或备份，不需要所有者逐次审核。
 
 签名和 migration 校验通过后，自动检查候选 schema 与健康线上版本。完全相同则记录跳过重复副本演练；有任何差异时自动恢复现有校验备份，在隔离容器内脱敏、迁移两次、检查 schema 与汇总守恒。失败阻止分配版本和后续服务切换，成功证据写入 release artifact，具体边界见 [生产副本演练](PRODUCTION-COPY-REHEARSAL.md)。
 

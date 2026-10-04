@@ -96,7 +96,7 @@ jobs:
       deployed: ${{ steps.record.outputs.deployed }}
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 50
+    timeout-minutes: 65
     steps:
       - name: Validate release commit
         env:
@@ -237,6 +237,30 @@ jobs:
             output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" release-source
           cp output/release/candidate/release-candidate.json output/release/deploy-candidate.json
           cp output/release/candidate/release-candidate.sigstore.json output/release/deploy-candidate.sigstore.json
+
+      - name: Automatically recover release capacity from verified retired images
+        if: steps.fresh.outputs.eligible == 'true'
+        timeout-minutes: 13
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$PRODUCTION_PATH"
+          test -n "$PRODUCTION_USER"
+          payload="$(mktemp -d "$RUNNER_TEMP/miaomiao-retention.XXXXXX")"
+          trap '[[ "$payload" == "$RUNNER_TEMP"/miaomiao-retention.* ]] && rm -rf -- "$payload"' EXIT
+          cp scripts/production-image-retention.sh scripts/select-retired-images.jq scripts/image-retention-metadata.jq "$payload/"
+          jq -n '{actor:env.GITHUB_ACTOR,token:env.GH_TOKEN}' > "$payload/registry.json"
+          receiver='set -euo pipefail; umask 077; payload=$(mktemp -d /tmp/miaomiao-image-payload.XXXXXX); trap '\''[[ "$payload" == /tmp/miaomiao-image-payload.* ]] && rm -rf -- "$payload"'\'' EXIT; tar --no-same-owner --no-same-permissions -xzf - -C "$payload"; timeout --signal=TERM --kill-after=20s 10m bash "$payload/production-image-retention.sh" "$1" "$payload" "$2" clean'
+          remote="$(printf 'bash -c %q -- %q %q' "$receiver" "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN")"
+          tar -C "$payload" -czf - . |
+            timeout --signal=TERM --kill-after=30s 12m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" > output/release/image-retention.json
+          jq -e '.healthy and .protectedResourcesPreserved and .capacityAtLeast6GiB' output/release/image-retention.json >/dev/null
 
       - name: Automatically rehearse changed migrations on an isolated sanitized copy
         if: steps.fresh.outputs.eligible == 'true'

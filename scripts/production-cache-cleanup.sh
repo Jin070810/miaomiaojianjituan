@@ -36,16 +36,19 @@ inventory() {
 }
 health
 inventory "$private/before"
-timeout 30 docker buildx du --builder default --filter until=168h --filter inuse=false --filter shared=false --format=json |
+# BuildKit exposes private/shared/inuse as presence fields with empty values,
+# not literal boolean strings. Prune itself always protects in-use records.
+timeout 30 docker buildx du --builder default --filter 'private=""' --format=json |
   jq -s '[.[] | select(.Reclaimable==true and .Shared==false and (.Type=="regular" or .Type=="exec.cachemount")) |
     {id:.ID,size:.Size,type:.Type}]' > "$private/selected.json"
 jq -e 'length<=500 and all(.[]; .id | test("^[a-z0-9]{10,64}$"))' "$private/selected.json" >/dev/null
 prune_exit=0
 if [[ "$mode" == clean && "$(jq length "$private/selected.json")" != 0 ]]; then
   selector="$(jq -r 'map(.id) | join("|") | "id~=^("+.+")$"' "$private/selected.json")"
-  # Re-check age, active use and sharing inside BuildKit itself at deletion time.
+  # KeepDuration is applied by prune, not by the du API. Age and private status
+  # are rechecked at deletion; active records are inherently non-reclaimable.
   timeout --kill-after=10s 180s docker buildx prune --builder default --force \
-    --filter "$selector" --filter until=168h --filter inuse=false --filter shared=false > "$private/prune.log" 2>&1 || prune_exit=$?
+    --filter "$selector" --filter until=168h --filter 'private=""' > "$private/prune.log" 2>&1 || prune_exit=$?
 fi
 inventory "$private/after"
 preserved=true

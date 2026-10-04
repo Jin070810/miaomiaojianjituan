@@ -83,6 +83,7 @@ timeout 180 docker exec -i "$name-db" pg_restore --exit-on-error --no-owner --no
   -U rehearsal -d miaomiao_rehearsal < "$backup" > "$private/restore.log" 2>&1
 phase=sanitize
 psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/restored.json" 2> "$private/sql.log"
+jq -e '.accountBalanceMismatches==0' "$private/restored.json" >/dev/null
 psql_copy < "$payload/sanitize-rehearsal.sql" > "$private/sanitize.log" 2>&1
 psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/sanitized.json" 2> "$private/sql.log"
 cmp -s "$private/restored.json" "$private/sanitized.json"
@@ -114,6 +115,7 @@ prisma_copy migrate diff --from-url postgresql://rehearsal@127.0.0.1:5432/miaomi
   --to-schema-datamodel /rehearsal/prisma/schema.prisma --exit-code > "$private/drift.log" 2>&1
 psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/after.json" 2> "$private/sql.log"
 cmp -s "$private/sanitized.json" "$private/after.json"
+jq -e '.accountBalanceMismatches==0' "$private/after.json" >/dev/null
 printf 'SELECT json_agg(json_build_object('\''name'\'',migration_name,'\''checksum'\'',checksum,'\''finished'\'',finished_at IS NOT NULL,'\''rolledBack'\'',rolled_back_at IS NOT NULL) ORDER BY migration_name) FROM "_prisma_migrations";\n' |
   psql_copy > "$private/migrations.json" 2> "$private/sql.log"
 jq -e 'all(.[]; .finished==true or .rolledBack==true)' "$private/migrations.json" >/dev/null

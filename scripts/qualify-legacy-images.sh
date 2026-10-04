@@ -76,7 +76,10 @@ timeout --kill-after=10s 60s docker run --rm --name "$prefix-seed" --network "$p
 checkpoint original_startup
 docker run -d --name "$prefix-worker" --network "$prefix" --env-file "$private/app.env" \
   --label com.docker.compose.project=miaomiao-points --label com.docker.compose.service=worker "$worker_ref" >/dev/null
-docker run -d --name "$prefix-app" --network "$prefix" --network-alias app --env-file "$private/app.env" "$app_ref" >/dev/null
+docker run -d --name "$prefix-app" --network "$prefix" --network-alias app --env-file "$private/app.env" \
+  --label com.docker.compose.project=miaomiao-points --label com.docker.compose.service=app \
+  --health-cmd='wget -qO- -T 4 -t 1 http://127.0.0.1:3000/api/health' \
+  --health-interval=15s --health-timeout=5s --health-retries=5 --health-start-period=30s "$app_ref" >/dev/null
 for _ in {1..40}; do
   if timeout 8 docker exec "$prefix-app" node -e '(async()=>{const r=await fetch("http://127.0.0.1:3000/api/health",{signal:AbortSignal.timeout(5000)});process.stdout.write(await r.text());process.exitCode=r.ok?0:1})().catch(()=>process.exit(1))' > "$private/health.json" &&
     jq -e --arg sha "$legacy_sha" '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' "$private/health.json" >/dev/null; then break; fi
@@ -84,6 +87,30 @@ for _ in {1..40}; do
 done
 jq -e --arg sha "$legacy_sha" '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' "$private/health.json" >/dev/null
 jq '{ok,database,redis,worker,appCommit:.app.commit,workerCommit:.workerVersion.commit}' "$private/health.json" > "$evidence/initial-health.json"
+
+# The actual failed release drained Web first, with its healthcheck enabled.
+# Exercise a fully loaded page before shutdown, not only an untouched server.
+checkpoint production_order_web_drain
+internal_private="/tmp/$(basename "$private")"
+docker run --rm --name "$prefix-request" --network "container:$prefix-app" -e CI=true -e RUNNER_TEMP=/tmp \
+  -e LEGACY_INTERNAL_NETWORK=true --mount "type=bind,source=$private,target=$internal_private" \
+  --mount "type=bind,source=$(pwd)/scripts/test-legacy-web-runtime.mjs,target=/app/test-legacy-web-runtime.mjs,readonly" \
+  "$worker_ref" node /app/test-legacy-web-runtime.mjs "$internal_private"
+cp "$private/web-runtime.json" "$evidence/web-runtime.json"
+for _ in {1..40}; do
+  [[ "$(docker inspect --format '{{.State.Health.Status}}' "$prefix-app")" != healthy ]] || break
+  sleep 1
+done
+[[ "$(docker inspect --format '{{.State.Health.Status}}' "$prefix-app")" == healthy ]]
+app_container="$(docker inspect --format '{{.Id}}' "$prefix-app")"
+release_drain_container "$app_container" app "$evidence/production-order-app.json"
+[[ "$(docker inspect --format '{{.State.Running}}' "$prefix-worker")" == true ]]
+docker start "$prefix-app" >/dev/null
+for _ in {1..40}; do
+  if timeout 8 docker exec "$prefix-app" node -e '(async()=>{const r=await fetch("http://127.0.0.1:3000/api/health",{signal:AbortSignal.timeout(5000)});process.stdout.write(await r.text());process.exitCode=r.ok?0:1})().catch(()=>process.exit(1))' > "$private/health.json"; then break; fi
+  sleep 1
+done
+jq -e --arg sha "$legacy_sha" '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' "$private/health.json" >/dev/null
 
 # A real job waits on a real isolated PostgreSQL lock. It references no member
 # and cannot fetch a platform URL or award points because the video does not exist.

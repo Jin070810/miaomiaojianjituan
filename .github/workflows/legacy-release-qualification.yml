@@ -6,6 +6,7 @@ on:
       - .github/workflows/legacy-release-qualification.yml
       - scripts/qualify-legacy-images.sh
       - scripts/test-legacy-pending-request.mjs
+      - scripts/test-legacy-web-runtime.mjs
       - scripts/legacy-queue-drain.cjs
       - scripts/release-lifecycle.sh
       - scripts/pull-release-images.sh

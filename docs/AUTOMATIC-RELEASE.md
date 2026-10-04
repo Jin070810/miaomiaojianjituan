@@ -23,7 +23,9 @@ flowchart LR
 
 GitHub 对 `GITHUB_TOKEN` 产生的事件有递归限制，不能假设机器人合并会自然触发 push CI。控制器显式 dispatch main CI；对 token 产生的待批准 PR CI，则 dispatch 精确 PR 分支，并验证 PR 编号、当前 SHA 和来源。每小时 17/47 分的轻量调度只弥补漏触发，不定时重建相同成功版本。main 的显式 CI 与 main push 适用同一签名和发布规则，PR dispatch 不能发布镜像。
 
-`Deploy Production` 接收成功 main CI 的 workflow_run，用已认证 API 重新验证 run/attempt、仓库、workflow 和 SHA。过时 main 候选会在计划阶段及取得部署并发锁后跳过。自动分配最大规范 SemVer 的下一个 patch；同 SHA 重试复用已有唯一 tag，标签竞争时核对目标，不重写标签。主机仍按签名 digest 拉取，执行已有预检、排空、备份、迁移和健康门禁。
+main CI 在验签、候选 artifact 留存之后显式 dispatch `Deploy Production`，传入自身 SHA、run/attempt 和 `automatic=true`。这是唯一自动部署触发路径，移除并行的 workflow_run 监听以避免重复部署。实际机器人 CI `37187764652` 完成后未产生该监听事件，因此不能依赖它自然衔接。
+
+发布端允许 CI 做最后清理，最多补读十次完成状态，再用已认证 API 验证 CI 必须 completed/success、精确 attempt、仓库、workflow 和 SHA；不能仅凭发布 job 自己成功就切换。只有 main publish 获得交接所需 actions:write，PR 不获得该权限。过时 main 候选会在计划阶段及取得部署并发锁后跳过。自动分配最大规范 SemVer 的下一个 patch；同 SHA 重试复用已有唯一 tag，标签竞争时核对目标，不重写标签。主机仍按签名 digest 拉取，执行已有预检、排空、备份、迁移和健康门禁。
 
 ## 发布后观察
 
@@ -43,7 +45,7 @@ GitHub Release 包含 commit、CI run/attempt、App/Worker digest、migration �
 
 - main：PR 必需、批准数 0、core/staging 必需且绑定 GitHub Actions、strict、管理员同样受约束、只允许 squash、禁止强推和删除。
 - production Environment：只允许精确 main，无 required reviewers，无人工等待计时器；保留现有密钥。
-- workflow_dispatch 仅用于有明确版本依据的故障恢复/归档重发。没有日常人工确认项；重置管理员、放宽失败前置健康或延期告警仍是有技术含义的显式参数，不是审查按钮。
+- workflow_dispatch 同时承接 CI 自动交接和有明确版本依据的故障恢复/归档重发；默认 automatic=false 保留恢复语义。没有日常人工确认项；重置管理员、放宽失败前置健康或延期告警仍是有技术含义的显式参数，不是审查按钮。
 - 迁移开始前失败按旧容器和健康证据恢复；迁移后失败保留维护入口与证据，采用兼容的前向修复。自动化不能使不兼容的历史镜像安全回滚。
 - 首次全量整改仍要完成脱敏生产副本 migration 演练和原 v1.11 镜像资格验证。平台爬取沿用生产实现，新增 UID 绑定已移出本次范围，不再要求其真实样本作为本次发布门槛。它们是技术证据，不再要求所有者审核；缺证据的整合 PR 保持 Draft。
 

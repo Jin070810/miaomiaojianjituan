@@ -34,12 +34,22 @@ export function planAutomaticRelease(run, { repository, mainSha }) {
   if (mainSha !== run.head_sha) return { eligible: false, reason: 'superseded' };
   return { eligible: true, commit: run.head_sha, runId: String(run.id), attempt: Number(run.run_attempt) };
 }
-export async function resolveReleasePlan(api, { repository, automatic, runId, commit, source, attempt }) {
+export async function resolveReleasePlan(api, { repository, automatic, runId, commit, source, attempt, waitForCompletion = false }, { wait = sleep } = {}) {
   requireValue(/^[1-9][0-9]*$/.test(String(runId)), 'Invalid source CI run');
   const archived = !automatic && source === 'server-archive';
   if (archived) requireValue(/^[1-9][0-9]*$/.test(String(attempt)), 'Invalid archived CI attempt');
   const base = `repos/${repository}`;
-  const run = await api(`${base}/actions/runs/${runId}${archived ? `/attempts/${attempt}` : ''}`);
+  const route = `${base}/actions/runs/${runId}${archived ? `/attempts/${attempt}` : ''}`;
+  let run = await api(route);
+  // The final publish step dispatches without waiting for its child. Allow the
+  // parent CI to finish cleanup, but never accept an incomplete/failed CI.
+  if (automatic && waitForCompletion) {
+    requireValue(source === 'ci-artifact' && shaPattern.test(commit) && /^[1-9][0-9]*$/.test(String(attempt)), 'Invalid automatic handoff');
+    for (let poll = 0; run.status !== 'completed' && poll < 10; poll++) {
+      await wait(2000); run = await api(route);
+    }
+    requireValue(run.head_sha === commit && Number(run.run_attempt) === Number(attempt), 'CI handoff changed commit or attempt');
+  }
   if (automatic) {
     const current = await api(`${base}/git/ref/heads/main`);
     return planAutomaticRelease(run, { repository, mainSha: current.object.sha });
@@ -47,6 +57,15 @@ export async function resolveReleasePlan(api, { repository, automatic, runId, co
   validateRun(run, { repository, commit, runId: String(runId) });
   if (archived) requireValue(Number(run.run_attempt) === Number(attempt), 'Wrong archived CI attempt');
   return { eligible: true, commit, runId: String(runId), attempt: run.run_attempt };
+}
+export async function dispatchProduction(api, { repository, ref, sha, event, pullRequestNumber, runId, attempt }) {
+  requireValue(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) && ref === 'refs/heads/main'
+    && shaPattern.test(sha) && ['push', 'workflow_dispatch'].includes(event) && !pullRequestNumber
+    && /^[1-9][0-9]*$/.test(String(runId)) && /^[1-9][0-9]*$/.test(String(attempt)), 'Invalid production dispatch source');
+  await api(`repos/${repository}/actions/workflows/deploy-production.yml/dispatches`, {
+    method: 'POST', body: { ref: 'main', inputs: { automatic: 'true', release_commit: sha,
+      candidate_run_id: String(runId), candidate_attempt: String(attempt), candidate_source: 'ci-artifact' } },
+  });
 }
 export function nextReleaseVersion(tags, commit) {
   requireValue(shaPattern.test(commit), 'Invalid version commit');
@@ -188,11 +207,16 @@ async function main() {
     emit({ purpose: validateDispatch({ repository, number, pr, permission, sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF }) });
   } else if (command === 'plan') {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-    const automatic = process.env.GITHUB_EVENT_NAME === 'workflow_run';
-    const runId = automatic ? event.workflow_run?.id : process.env.CANDIDATE_RUN_ID;
+    const fromCompletionEvent = process.env.GITHUB_EVENT_NAME === 'workflow_run';
+    const automatic = fromCompletionEvent || process.env.AUTOMATIC === 'true';
+    const runId = fromCompletionEvent ? event.workflow_run?.id : process.env.CANDIDATE_RUN_ID;
     const plan = await resolveReleasePlan(api, { repository, automatic, runId, commit: process.env.RELEASE_COMMIT,
-      source: process.env.CANDIDATE_SOURCE, attempt: process.env.CANDIDATE_ATTEMPT });
+      source: process.env.CANDIDATE_SOURCE, attempt: process.env.CANDIDATE_ATTEMPT, waitForCompletion: automatic && !fromCompletionEvent });
     emit({ eligible: plan.eligible, reason: plan.reason ?? '', commit: plan.commit ?? '', run_id: plan.runId ?? '', attempt: plan.attempt ?? '', automatic });
+  } else if (command === 'dispatch-deploy') {
+    await dispatchProduction(api, { repository, ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA,
+      event: process.env.GITHUB_EVENT_NAME, pullRequestNumber: process.env.CI_PULL_REQUEST_NUMBER,
+      runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT });
   } else if (command === 'version') {
     emit({ version: await allocateVersion(api, repository, process.env.RELEASE_COMMIT) });
   } else if (command === 'fresh') {

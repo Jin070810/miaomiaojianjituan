@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { eligiblePullRequest, selectCiRun, planAutomaticRelease, nextReleaseVersion, validateDispatch, integrateOne, allocateVersion, resolveReleasePlan, releaseRecord } from './automatic-release.mjs';
+import { eligiblePullRequest, selectCiRun, planAutomaticRelease, nextReleaseVersion, validateDispatch, integrateOne, allocateVersion, resolveReleasePlan, releaseRecord, dispatchProduction } from './automatic-release.mjs';
 import { observeRelease } from './observe-production-release.mjs';
 
 const repository = 'Example/points';
@@ -105,6 +105,36 @@ test('archive recovery validates its original attempt instead of a later failed 
   assert.equal(result.attempt, 1);
   assert.deepEqual(paths, [`repos/${repository}/actions/runs/123/attempts/1`]);
   await assert.rejects(resolveReleasePlan(api, { repository, automatic: false, runId: '123', commit: sha, source: 'server-archive', attempt: '../2' }));
+});
+
+test('main publication explicitly dispatches exactly its own candidate, never PR or invalid identities', async () => {
+  const source = { repository, ref: 'refs/heads/main', sha, event: 'workflow_dispatch', pullRequestNumber: '', runId: '123', attempt: '2' };
+  const calls = [];
+  const api = async (route, options) => { calls.push({ route, ...options }); };
+  await dispatchProduction(api, source);
+  assert.deepEqual(calls, [{ route: `repos/${repository}/actions/workflows/deploy-production.yml/dispatches`, method: 'POST',
+    body: { ref: 'main', inputs: { automatic: 'true', release_commit: sha, candidate_run_id: '123', candidate_attempt: '2', candidate_source: 'ci-artifact' } } }]);
+  for (const change of [{ ref: 'refs/heads/fix/example' }, { event: 'pull_request' }, { pullRequestNumber: '7' }, { sha: 'bad' }, { runId: '../2' }, { attempt: '0' }]) {
+    await assert.rejects(dispatchProduction(api, { ...source, ...change }), /Invalid production dispatch/);
+  }
+  assert.equal(calls.length, 1);
+});
+
+test('automatic handoff waits for complete CI then validates exact attempt and current main', async () => {
+  const options = { repository, automatic: true, runId: '123', commit: sha, source: 'ci-artifact', attempt: '2', waitForCompletion: true };
+  let reads = 0, waits = 0;
+  const api = async route => route.endsWith('/git/ref/heads/main') ? { object: { sha } }
+    : ++reads === 1 ? { ...run, status: 'in_progress', conclusion: null } : run;
+  assert.equal((await resolveReleasePlan(api, options, { wait: async () => { waits++; } })).eligible, true);
+  assert.equal(reads, 2); assert.equal(waits, 1);
+  for (const changed of [{ ...run, conclusion: 'failure' }, { ...run, head_sha: otherSha }, { ...run, run_attempt: 3 }, { ...run, status: 'in_progress', conclusion: null }]) {
+    let polls = 0;
+    const rejectedApi = async route => { polls++; return route.endsWith('/git/ref/heads/main') ? { object: { sha } } : changed; };
+    await assert.rejects(resolveReleasePlan(rejectedApi, options, { wait: async () => {} }), /CI/);
+    assert.ok(polls <= 12);
+  }
+  const stale = async route => route.endsWith('/git/ref/heads/main') ? { object: { sha: otherSha } } : run;
+  assert.equal((await resolveReleasePlan(stale, options)).eligible, false);
 });
 test('tag creation races reuse only the same target and never move another version', async () => {
   for (const target of [sha, otherSha]) {

@@ -91,6 +91,9 @@ jobs:
       - run: bash scripts/test-release-observation.sh
       - run: bash scripts/test-production-release.sh
       - run: bash scripts/test-signed-release.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_REAL_GH_ATTESTATION: "1"
 
   # Full browser matrix now runs against these exact final images, once.
   # This replaces both host "next start" E2E and the second staging build.
@@ -298,6 +301,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -357,3 +361,19 @@ jobs:
           echo '### Verified release candidate' >> "$GITHUB_STEP_SUMMARY"
           echo "Commit: $GITHUB_SHA — run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
           echo 'Production and rollback must use the manifest digests; no rebuild is allowed.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Explicitly hand the signed candidate to automatic deployment
+        # workflow_run did not fire for the bot-dispatched main CI. Dispatch is
+        # the sole automatic deployment trigger, so it cannot duplicate a listener.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+        run: node scripts/automatic-release.mjs dispatch-deploy
+      - name: Preserve failed signing diagnostics without promoting a candidate
+        # Failure evidence never uses a deployable release-candidate name.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unverified-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release/release-candidate*.json
+          if-no-files-found: warn
+          retention-days: 14

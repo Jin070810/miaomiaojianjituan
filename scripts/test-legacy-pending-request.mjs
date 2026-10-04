@@ -3,12 +3,13 @@ import { existsSync, writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 assert.equal(process.env.CI, 'true');
+assert.equal(process.env.LEGACY_INTERNAL_NETWORK, 'true');
 const directory = process.argv[2];
 assert.ok(directory?.startsWith(`${process.env.RUNNER_TEMP}/legacy-qualification.`));
 const body = JSON.stringify({ kuaishouId: '', password: '' });
 let interval;
 const timeout = setTimeout(() => request.destroy(new Error('legacy request drain timed out')), 100_000);
-const request = http.request('http://127.0.0.1:3100/api/auth/login', {
+const request = http.request('http://app:3000/api/auth/login', {
   method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
 }, response => {
   response.resume();

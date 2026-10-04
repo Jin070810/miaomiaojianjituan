@@ -22,10 +22,15 @@ finish() {
   if [[ -s "$private/health.json" ]]; then
     jq '{ok,issues,database,redis,worker,appCommit:.app.commit,workerCommit:.workerVersion.commit}' "$private/health.json" > "$evidence/last-health.json"
   fi
+  if (( code != 0 )); then
+    # Only this disposable stack has synthetic credentials; Actions masks all
+    # four generated values. Raw logs are never included in uploaded artifacts.
+    for service in app worker; do timeout 10 docker logs --tail 20 "$prefix-$service" >&2; done
+  fi
   for pid in "$pending_pid" "$blocker_pid" "$worker_stop_pid" "$app_stop_pid"; do
     [[ -z "$pid" ]] || kill "$pid" 2>/dev/null
   done
-  for service in app worker postgres redis migration seed; do
+  for service in app worker postgres redis migration seed request; do
     timeout 15 docker rm -f "$prefix-$service" >/dev/null 2>&1
   done
   timeout 15 docker network rm "$prefix" >/dev/null 2>&1
@@ -68,9 +73,9 @@ timeout --kill-after=10s 60s docker run --rm --name "$prefix-seed" --network "$p
   "$worker_ref" ./node_modules/.bin/tsx scripts/seed-admin.ts > "$private/seed.log" 2>&1
 checkpoint original_startup
 docker run -d --name "$prefix-worker" --network "$prefix" --env-file "$private/app.env" "$worker_ref" >/dev/null
-docker run -d --name "$prefix-app" --network "$prefix" --env-file "$private/app.env" -p 127.0.0.1:3100:3000 "$app_ref" >/dev/null
+docker run -d --name "$prefix-app" --network "$prefix" --network-alias app --env-file "$private/app.env" "$app_ref" >/dev/null
 for _ in {1..40}; do
-  if curl --fail --silent --connect-timeout 2 --max-time 5 http://127.0.0.1:3100/api/health > "$private/health.json" &&
+  if timeout 8 docker exec "$prefix-app" node -e '(async()=>{const r=await fetch("http://127.0.0.1:3000/api/health",{signal:AbortSignal.timeout(5000)});process.stdout.write(await r.text());process.exitCode=r.ok?0:1})().catch(()=>process.exit(1))' > "$private/health.json" &&
     jq -e --arg sha "$legacy_sha" '.ok == true and .app.commit == $sha and .workerVersion.commit == $sha' "$private/health.json" >/dev/null; then break; fi
   sleep 2
 done
@@ -115,7 +120,11 @@ worker_completed=false
 docker inspect "$prefix-worker" | jq '.[0].State | {Status,ExitCode,OOMKilled}' > "$evidence/worker-exit.json"
 
 checkpoint active_web_drain
-node scripts/test-legacy-pending-request.mjs "$private" &
+internal_private="/tmp/$(basename "$private")"
+docker run --rm --name "$prefix-request" --network "$prefix" -e CI=true -e RUNNER_TEMP=/tmp \
+  -e LEGACY_INTERNAL_NETWORK=true --mount "type=bind,source=$private,target=$internal_private" \
+  --mount "type=bind,source=$(pwd)/scripts/test-legacy-pending-request.mjs,target=/tmp/request.mjs,readonly" \
+  "$worker_ref" node /tmp/request.mjs "$internal_private" &
 pending_pid=$!
 for _ in {1..50}; do [[ ! -f "$private/pending-ready" ]] || break; sleep 0.1; done
 [[ -f "$private/pending-ready" ]]

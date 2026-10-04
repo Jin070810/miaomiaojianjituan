@@ -4,7 +4,7 @@
 
 `Original v1.11 Image Qualification` 只在隔离 GitHub runner 执行。同仓库 PR 可测试资格脚本，main 可手动重验；仅给予当前仓库 packages/actions 读取权限，没有 production Environment、SSH 凭据或镜像写权限。
 
-验证使用内部 Docker 网络、随机合成密码、空 PostgreSQL 16/Redis、原镜像自身的 migrations 和虚构管理员。Web 仅绑定 runner 的 127.0.0.1:3100，Worker 无外网。需要实际证明：
+验证使用内部 Docker 网络、随机合成密码、空 PostgreSQL 16/Redis、原镜像自身的 migrations 和虚构管理员。Web 没有宿主机端口，探针与请求客户端均在同一内部网络，Worker 无外网。需要实际证明：
 
 1. 两个原始 digest 的 OCI revision 符合历史发布 SHA，App/Worker 启动后健康和版本一致。
 2. 在隔离数据库持有有界表锁，让引用不存在视频的真实 BullMQ 任务处于处理中。发送 Worker SIGTERM 后进程必须等待锁释放及任务完成，不能仅以 docker stop 命令成功作为排空依据。任务不会抓取平台、写成员或发积分。

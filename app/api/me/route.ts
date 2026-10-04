@@ -1,7 +1,9 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { currentUser } from "@/lib/auth";
+import { currentUser, memberProfileSelect } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { publicAvatarUrl } from "@/lib/public-images";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse } from "@/lib/security";
 
@@ -24,7 +26,7 @@ function safeUser(user: {
     id: user.id,
     kuaishouId: user.kuaishouId,
     nickname: user.nickname,
-    avatarUrl: user.avatarUrl,
+    avatarUrl: publicAvatarUrl(user),
     role: user.role,
     guildStatus: user.guildStatus,
     invited: user.invited,
@@ -32,8 +34,8 @@ function safeUser(user: {
   };
 }
 
-export async function GET() {
-  const user = await currentUser();
+async function handleGET() {
+  const user = await currentUser({ profile: true });
   if (!user) return NextResponse.json({ user: null }, { status: 401 });
   return NextResponse.json({ user: safeUser(user) });
 }
@@ -41,7 +43,7 @@ export async function GET() {
 export async function PATCH(request: Request) {
   try {
     assertSameOrigin(request);
-    const user = await currentUser();
+    const user = await currentUser({ profile: true });
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     await enforceRateLimit(`profile-update:${user.id}`, 10, 3600);
     const input = updateSchema.parse(await request.json());
@@ -55,7 +57,7 @@ export async function PATCH(request: Request) {
           ...(input.nickname !== undefined ? { nickname: input.nickname } : {}),
           ...(input.guildStatus !== undefined ? { guildStatus: input.guildStatus, invited: true } : {}),
         },
-        include: { account: true },
+        select: memberProfileSelect,
       });
       if (input.guildStatus && input.guildStatus !== user.guildStatus) {
         await tx.guildStatusHistory.create({
@@ -82,3 +84,5 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: error instanceof z.ZodError ? "成员资料格式不正确" : error instanceof Error ? error.message : "更新失败" }, { status: 400 });
   }
 }
+
+export const GET = observeApi("me_get", handleGET);

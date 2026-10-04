@@ -238,6 +238,7 @@ model User {
   rejoinRequests                   RejoinRequest[]
   reviewedRejoinRequests           RejoinRequest[]                    @relation("RejoinReviewer")
   growthProfile                    MemberGrowthProfile?
+  achievementRefresh               MemberAchievementRefresh?
   achievements                     MemberAchievement[]
   monthlyGoals                     MemberMonthlyGoal[]
   monthlyReviews                   MemberMonthlyReview[]
@@ -245,6 +246,8 @@ model User {
   birthdayBenefits                 BirthdayAnnualBenefit[]
   birthdayWishesSent               BirthdayWish[]                     @relation("BirthdayWishSender")
   birthdayWishesReceived           BirthdayWish[]                     @relation("BirthdayWishRecipient")
+  platformBindings                 PlatformAccountBinding[]            @relation("PlatformBindingOwner")
+  platformBindingRequests          PlatformBindingRequest[]            @relation("PlatformBindingRequester")
 }
 
 model MemberClearanceProgram {
@@ -442,6 +445,9 @@ model VideoSubmission {
   metadataFetchedAt      DateTime?
   publishedAt            DateTime?
   fetchedOwner           String?
+  fetchedAuthorUid       String?
+  authorEvidenceVersion  Int?
+  verifiedBindingId      String?
   matchedOwner           Boolean?
   points                 Int                   @default(0)
   birthdayBenefitYear    Int?
@@ -457,11 +463,85 @@ model VideoSubmission {
   user                   User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   appeals                VideoAppeal[]
   secondaryReview        VideoSecondaryReview?
+  processingState        VideoProcessingState?
+  pointRuleSnapshot      VideoPointRuleSnapshot?
 
   @@index([userId, submittedAt])
   @@index([status, submittedAt])
   @@index([photoId, status])
   @@index([userId, birthdayBenefitYear])
+  @@index([userId, status, likes(sort: Desc), views(sort: Desc), submittedAt(sort: Desc)], map: "VideoSubmission_achievement_highlights_idx")
+}
+
+// Durable retry budget and lease survive Redis loss and Worker restarts.
+model VideoProcessingState {
+  videoId        String   @id
+  attempts       Int      @default(0)
+  startedAt      DateTime @default(now())
+  nextAttemptAt  DateTime @default(now())
+  leaseToken     String?
+  leaseExpiresAt DateTime?
+  lastFailure    String?
+  updatedAt      DateTime @updatedAt
+  video          VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([nextAttemptAt])
+}
+
+model VideoPointRuleSnapshot {
+  videoId              String   @id
+  revision             String
+  formulaVersion       String
+  origin               String
+  minimumLikes         Int
+  fixedTierMaxLikes     Int
+  fixedTierPoints       Int
+  likesDivisor          Int
+  maximumPoints         Int
+  submissionWindowDays Int
+  sourceUpdatedAt      DateTime?
+  capturedAt           DateTime @default(now())
+  video                VideoSubmission @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+// Internal platform UID is separate from the immutable, case-insensitive login ID.
+model PlatformAccountBinding {
+  id            String   @id @default(cuid())
+  userId        String
+  platform      String
+  authorUid     String
+  requestId     String   @unique
+  verifiedAt    DateTime @default(now())
+  verifiedById  String
+  revokedAt     DateTime?
+  user          User     @relation("PlatformBindingOwner", fields: [userId], references: [id], onDelete: Cascade)
+  request       PlatformBindingRequest @relation(fields: [requestId], references: [id], onDelete: NoAction)
+
+  @@unique([platform, authorUid])
+  @@index([userId, platform])
+}
+
+model PlatformBindingRequest {
+  id             String   @id @default(cuid())
+  userId         String
+  platform       String
+  authorUid      String
+  videoId        String
+  photoId        String
+  challenge      String   @unique
+  status         String   @default("PENDING")
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  reviewedAt     DateTime?
+  reviewedById   String?
+  proofMethod    String?
+  proofNote      String?
+  rejectionReason String?
+  user           User     @relation("PlatformBindingRequester", fields: [userId], references: [id], onDelete: Cascade)
+  binding        PlatformAccountBinding?
+
+  @@index([status, createdAt])
+  @@index([userId, platform, createdAt])
 }
 
 model VideoSecondaryReview {
@@ -541,6 +621,8 @@ model Gift {
   birthdayPrizes    BirthdayPrize[]
 
   @@index([deletedAt, active, pinned, displayOrder])
+  // Retained by the historical catalog migration; do not implicitly drop it.
+  @@index([deletedAt, active, displayOrder])
   @@index([deletedAt, active, category])
 }
 
@@ -554,6 +636,23 @@ model MemberGrowthProfile {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MemberAchievementRefresh {
+  userId            String    @id
+  generation        BigInt    @default(1)
+  appliedGeneration BigInt    @default(0)
+  pending           Boolean   @default(true)
+  requestedAt       DateTime  @default(now())
+  availableAt       DateTime  @default(now())
+  leaseToken        String?
+  leaseExpiresAt    DateTime?
+  failures          Int       @default(0)
+  lastFailureCode   String?
+  completedAt       DateTime?
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([pending, availableAt, requestedAt])
 }
 
 model MemberAchievement {
@@ -578,6 +677,9 @@ model MemberMonthlyGoal {
   targetVideos       Int
   targetEngagement   Int
   completedAt        DateTime?
+  progressVideos     Int       @default(0)
+  progressEngagement Int       @default(0)
+  calculatedAt       DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -747,10 +849,13 @@ model RankingPeriod {
   periodEnd   DateTime
   status      RankingPeriodStatus @default(OPEN)
   settledAt   DateTime?
+  ruleSnapshot Json?
+  contributionsCapturedAt DateTime?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
   entries     RankingEntry[]
   awards      RankingAward[]
+  contributions RankingContribution[]
 
   @@unique([type, periodStart])
   @@index([type, status, periodStart])
@@ -792,10 +897,49 @@ model RankingAward {
   period              RankingPeriod      @relation(fields: [periodId], references: [id], onDelete: Cascade)
   user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   gift                Gift?              @relation(fields: [giftId], references: [id], onDelete: SetNull)
+  adjustments         RankingAwardAdjustment[]
 
   @@unique([periodId, userId])
   @@unique([periodId, rank])
   @@index([userId, status])
+}
+
+// Immutable settlement evidence: source IDs intentionally remain scalar so a
+// later source deletion cannot silently erase the historical contribution.
+model RankingContribution {
+  periodId    String
+  videoId     String
+  userId      String
+  likes       Int
+  submittedAt DateTime
+  period      RankingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+
+  @@id([periodId, videoId])
+  @@index([videoId, periodId])
+  @@index([periodId, userId])
+}
+
+model RankingAwardAdjustment {
+  id             String       @id @default(cuid())
+  awardId        String
+  videoId        String
+  kind           String
+  status         String       @default("PENDING")
+  source         String
+  videoSnapshot  Json
+  awardSnapshot  Json
+  reason         String
+  createdById    String
+  createdAt      DateTime     @default(now())
+  resolution     String?
+  resolutionNote String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  award          RankingAward @relation(fields: [awardId], references: [id], onDelete: Cascade)
+
+  @@unique([awardId, videoId])
+  @@index([status, createdAt])
+  @@index([awardId, kind, status])
 }
 
 model Announcement {
@@ -875,7 +1019,7 @@ model SystemSetting {
   description String?
   updatedById String?
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime @default(now()) @updatedAt
   updatedBy   User?    @relation("OperationSettingUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([updatedAt])
@@ -970,9 +1114,10 @@ model WeeklyChallengeGenerationAttempt {
   updatedAt       DateTime                        @updatedAt
   period          WeeklyChallengePeriod           @relation(fields: [periodId], references: [id], onDelete: Cascade)
 
-  @@unique([periodId, batchNumber, attemptNumber])
+  // Historical SQL names were truncated by PostgreSQL's 63-byte identifier limit.
+  @@unique([periodId, batchNumber, attemptNumber], map: "WeeklyChallengeGenerationAttempt_periodId_batchNumber_attemptNu")
   @@index([periodId, status, createdAt])
-  @@index([periodId, batchNumber, inputHash, status])
+  @@index([periodId, batchNumber, inputHash, status], map: "WeeklyChallengeGenerationAttempt_periodId_batchNumber_inputHash")
 }
 
 model WeeklyRaceWinner {

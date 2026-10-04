@@ -1,8 +1,10 @@
+import { lockRankingPeriod } from "./ranking-period";
+import { protectRankingsAfterVideoRevocation } from "./ranking-adjustments";
 import { db } from "./db";
+import { requestContext } from "./request-context";
 import { LedgerType, Prisma, PrismaClient, Role } from "@prisma/client";
 import { decryptSensitive, encryptSensitive } from "./security";
-import { calculateVideoPoints } from "./kuaishou";
-import { getVideoPointRule } from "./point-rules";
+import { calculateSnapshotVideoPoints, captureVideoPointRule, snapshotRule, videoRuleEvidence } from "./video-point-rule-snapshots";
 import { createNotification } from "./notifications";
 import { writeAuditLog } from "./audit";
 import { isMemberParticipantRole, memberParticipantRoles } from "./member-roles";
@@ -12,8 +14,10 @@ import {
 } from "./weekly-challenges";
 import { parseMembershipFields, validateMembershipAnswers } from "./gifts";
 import { refreshEligibilityAfterApprovedVideo } from "./member-clearance";
-import { reconcileMemberAchievements } from "./member-achievements";
 import { applyBirthdayVideoBonus, revokeBirthdayVideoBonus } from "./birthdays";
+import { assertAuditRequestReplay, assertTransferReplay, IdempotencyConflictError, requestFingerprint } from "./request-idempotency";
+import { SecondaryReviewRetiredError } from "./video-review-policy";
+import { requireVerifiedVideoAuthor } from "./platform-bindings";
 
 export async function ensureAccount(userId: string, tx: Prisma.TransactionClient | PrismaClient = db) {
   return tx.pointAccount.upsert({
@@ -68,8 +72,8 @@ async function debit(
 }
 
 // 补偿性扣减（撤销视频奖励/冲正）允许把余额扣成负数：奖励可能已被成员花掉，
-// 但撤销必须完整执行。负余额是有意语义，由每日 data:reconcile 的 negativeBalances
-// 检查兜底发现；不要在这里加余额下限条件，否则撤销会静默失败。
+// 但撤销必须完整执行。对账区分有原始奖励/审计证据的业务欠额与未知负余额，
+// 流水合计不一致始终是错误；不要加余额下限，否则撤销会静默失败。
 async function debitCompensating(
   tx: Prisma.TransactionClient,
   userId: string,
@@ -90,45 +94,6 @@ async function debitCompensating(
   return updated;
 }
 
-async function assignVideoSecondaryReview(tx: Prisma.TransactionClient, videoId: string) {
-  const existing = await tx.videoSecondaryReview.findUnique({ where: { videoId } });
-  if (existing) return existing;
-  const reviewers = await tx.user.findMany({
-    where: { active: true, role: "REVIEWER" },
-    select: { id: true },
-    orderBy: { id: "asc" },
-  });
-  let reviewerId: string | null = null;
-  if (reviewers.length > 0) {
-    const reviewerIds = reviewers.map((reviewer) => reviewer.id);
-    const pendingCounts = await tx.videoSecondaryReview.groupBy({
-      by: ["reviewerId"],
-      where: { status: "PENDING", reviewerId: { in: reviewerIds } },
-      _count: { id: true },
-    });
-    const counts = new Map(pendingCounts.map((row) => [row.reviewerId, row._count.id]));
-    reviewerId = reviewerIds
-      .map((id) => ({ id, count: counts.get(id) ?? 0 }))
-      .sort((left, right) => left.count - right.count || left.id.localeCompare(right.id))[0]?.id ?? null;
-  }
-  const review = await tx.videoSecondaryReview.create({
-    data: {
-      videoId,
-      reviewerId,
-      assignedAt: reviewerId ? new Date() : null,
-    },
-  });
-  await tx.auditLog.create({
-    data: {
-      action: "VIDEO_SECONDARY_REVIEW_CREATED",
-      entity: "VideoSecondaryReview",
-      entityId: review.id,
-      afterValue: { videoId, reviewerId, status: review.status },
-    },
-  });
-  return review;
-}
-
 export async function completeTransfer(input: {
   senderId: string;
   receiverId: string;
@@ -142,7 +107,7 @@ export async function completeTransfer(input: {
   try {
     return await db.$transaction(async (tx) => {
     const existing = await tx.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-    if (existing) return existing;
+    if (existing) { assertTransferReplay(existing, input); return existing; }
     const sender = await tx.user.findUnique({ where: { id: input.senderId } });
     const receiver = await tx.user.findUnique({ where: { id: input.receiverId } });
     if (!sender || !receiver || !sender.active || !receiver.active) throw new Error("转出或转入成员不存在或已停用");
@@ -192,7 +157,7 @@ export async function completeTransfer(input: {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-      if (existing) return existing;
+      if (existing) { assertTransferReplay(existing, input); return existing; }
     }
     throw error;
   }
@@ -211,14 +176,32 @@ export async function adminAdjustPoints(input: {
   }
   const reason = input.reason.trim();
   if (reason.length < 2 || reason.length > 500) throw new Error("请填写 2 至 500 字的调整原因");
+  const validateReplay = async (
+    tx: Pick<Prisma.TransactionClient, "auditLog">,
+    ledger: { type: string; referenceId: string | null; amount: number; note: string | null; accountId: string; account: { userId: string } },
+  ) => {
+    if (ledger.type !== "ADMIN_ADJUSTMENT" || ledger.referenceId !== input.idempotencyKey
+      || ledger.account.userId !== input.userId || ledger.amount !== input.amount || ledger.note !== reason) {
+      throw new IdempotencyConflictError();
+    }
+    const audit = await tx.auditLog.findFirst({ where: {
+      requestId: input.idempotencyKey, actorId: input.actorId, entity: "PointAccount", entityId: ledger.accountId,
+      action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED", reason,
+    }, select: { id: true } });
+    if (!audit) throw new IdempotencyConflictError();
+  };
 
   try {
     return await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`admin-adjustment:${input.idempotencyKey}`})::bigint)`;
       const existing = await tx.pointLedger.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing) return { ledger: existing, balance: existing.balanceAfter };
+      if (existing) { await validateReplay(tx, existing); return { ledger: existing, balance: existing.balanceAfter }; }
+      if (await tx.pointLedger.count({ where: { type: "ADMIN_ADJUSTMENT", referenceId: input.idempotencyKey } })) {
+        throw new IdempotencyConflictError();
+      }
 
       const target = await tx.user.findUnique({ where: { id: input.userId }, select: { id: true, active: true } });
       if (!target || !target.active) throw new Error("目标成员不存在或已停用");
@@ -260,7 +243,7 @@ export async function adminAdjustPoints(input: {
         where: { idempotencyKey: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing) return { ledger: existing, balance: existing.balanceAfter };
+      if (existing) { await validateReplay(db, existing); return { ledger: existing, balance: existing.balanceAfter }; }
     }
     throw error;
   }
@@ -305,14 +288,27 @@ export async function adminAdjustPointsBatch(input: {
   if (input.selectionMode !== "ALL_ACTIVE_MEMBERS" && explicitUserIds.length < 1) {
     throw new BulkPointAdjustmentError("批量调整至少需要选择一名成员");
   }
+  const fingerprint = requestFingerprint("admin-adjustment-batch", {
+    actorId: input.actorId, amount: input.amount, reason, idempotencyKey: input.idempotencyKey,
+    selectionMode: input.selectionMode ?? "EXPLICIT",
+    userIds: input.selectionMode === "ALL_ACTIVE_MEMBERS" ? [] : [...new Set(explicitUserIds)].sort(),
+  });
+  const validateReplay = (tx: Pick<Prisma.TransactionClient, "auditLog">, accountId: string) => assertAuditRequestReplay(tx, {
+    requestId: input.idempotencyKey, actorId: input.actorId, entity: "PointAccount", entityId: accountId,
+    action: input.amount > 0 ? "ADMIN_POINTS_GRANTED" : "ADMIN_POINTS_DEDUCTED",
+  }, fingerprint);
 
   try {
     return await db.$transaction(async (tx) => {
+      // Lock the request, not its selected accounts: two payloads may target
+      // disjoint members yet reuse one key. Single adjustments share this lock.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`admin-adjustment:${input.idempotencyKey}`})::bigint)`;
       const completedBatch = await tx.pointLedger.findMany({
-        where: { idempotencyKey: { startsWith: `${input.idempotencyKey}:` } },
+        where: { type: "ADMIN_ADJUSTMENT", referenceId: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (input.selectionMode === "ALL_ACTIVE_MEMBERS" && completedBatch.length > 0) {
+      if (completedBatch.length > 0) {
+        await validateReplay(tx, completedBatch[0].accountId);
         return {
           idempotencyKey: input.idempotencyKey,
           adjustments: completedBatch.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
@@ -330,10 +326,8 @@ export async function adminAdjustPointsBatch(input: {
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
       if (existing.length === userIds.length) {
-        return {
-          idempotencyKey: input.idempotencyKey,
-          adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })),
-        };
+        // A colliding per-member key from another request is not this batch.
+        throw new IdempotencyConflictError();
       }
       if (existing.length > 0) throw new BulkPointAdjustmentError("该批量请求状态不完整，请使用新的请求标识重试");
 
@@ -382,7 +376,7 @@ export async function adminAdjustPointsBatch(input: {
             entity: "PointAccount",
             entityId: account.id,
             beforeValue: { balance: account.balance - input.amount, userId },
-            afterValue: { balance: account.balance, amount: input.amount, userId },
+            afterValue: { balance: account.balance, amount: input.amount, userId, requestFingerprint: fingerprint },
             reason,
             ip: input.ip,
             requestId: input.idempotencyKey,
@@ -405,10 +399,14 @@ export async function adminAdjustPointsBatch(input: {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.pointLedger.findMany({
-        where: { idempotencyKey: { startsWith: `${input.idempotencyKey}:` } },
+        where: { type: "ADMIN_ADJUSTMENT", referenceId: input.idempotencyKey },
         include: { account: { include: { user: { select: { id: true, kuaishouId: true, nickname: true, active: true } } } } },
       });
-      if (existing.length > 0) return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
+      if (existing.length > 0) {
+        await validateReplay(db, existing[0].accountId);
+        return { idempotencyKey: input.idempotencyKey, adjustments: existing.map((ledger) => ({ userId: ledger.account.userId, ledger, balance: ledger.balanceAfter })) };
+      }
+      throw new IdempotencyConflictError();
     }
     throw error;
   }
@@ -430,10 +428,20 @@ export async function redeemGift(input: {
   idempotencyKey: string;
   ip?: string;
 }) {
+  const fingerprint = requestFingerprint("redemption", {
+    userId: input.userId, giftId: input.giftId, quantity: input.quantity,
+    idempotencyKey: input.idempotencyKey,
+    shippingInfo: input.shippingInfo || "", note: input.note || "",
+    recipient: input.recipient ?? {}, membershipAnswers: input.membershipAnswers ?? {},
+  });
+  const validateReplay = async (tx: Pick<Prisma.TransactionClient, "auditLog">, order: { id: string; userId: string }) => {
+    if (order.userId !== input.userId) throw new IdempotencyConflictError();
+    await assertAuditRequestReplay(tx, { action: "REDEMPTION_CREATED", entity: "RedemptionOrder", entityId: order.id, actorId: input.userId }, fingerprint);
+  };
   try {
     return await db.$transaction(async (tx) => {
     const existing = await tx.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-    if (existing) return existing;
+    if (existing) { await validateReplay(tx, existing); return existing; }
     if (!Number.isInteger(input.quantity) || input.quantity < 1 || input.quantity > 20) {
       throw new Error("兑换数量不合法");
     }
@@ -510,6 +518,7 @@ export async function redeemGift(input: {
           quantity: input.quantity,
           totalCost,
           membershipFieldCount: fulfillmentSnapshot?.fields.length ?? 0,
+          requestFingerprint: fingerprint,
         },
         ip: input.ip,
       },
@@ -529,7 +538,7 @@ export async function redeemGift(input: {
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.redemptionOrder.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-      if (existing) return existing;
+      if (existing) { await validateReplay(db, existing); return existing; }
     }
     throw error;
   }
@@ -542,6 +551,8 @@ async function revokeApprovedVideoInTransaction(
   const video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: input.videoId } });
   if (video.status === "REVOKED") return video;
   if (video.status !== "APPROVED") throw new Error("只有已到账视频可以撤销");
+  await lockRankingPeriod(tx, "week", video.submittedAt);
+  await lockRankingPeriod(tx, "month", video.submittedAt);
   const claimed = await tx.videoSubmission.updateMany({
     where: { id: video.id, status: "APPROVED" },
     data: { status: "REVOKED", reviewReason: input.reason, reviewedAt: new Date() },
@@ -550,6 +561,7 @@ async function revokeApprovedVideoInTransaction(
   if (video.points > 0) {
     await debitCompensating(tx, video.userId, video.points, "REVERSAL", video.id, `撤销视频奖励：${input.reason}`);
   }
+  await protectRankingsAfterVideoRevocation(tx, { video, actorId: input.actorId, reason: input.reason, ip: input.ip });
   const birthdayBonusReversed = await revokeBirthdayVideoBonus(tx, {
     userId: video.userId,
     videoId: video.id,
@@ -585,32 +597,7 @@ async function revokeApprovedVideoInTransaction(
     videoId: video.id,
     reason: input.reason,
   });
-  await reconcileMemberAchievements(tx, video.userId);
-  return updated;
-}
-
-async function closePendingSecondaryReviewAfterRevocation(
-  tx: Prisma.TransactionClient,
-  input: { videoId: string; actorId: string; reason: string; ip?: string },
-) {
-  const review = await tx.videoSecondaryReview.findUnique({ where: { videoId: input.videoId } });
-  if (!review || review.status !== "PENDING") return review;
-  const updated = await tx.videoSecondaryReview.update({
-    where: { id: review.id },
-    data: { status: "REJECTED", reviewReason: input.reason, reviewedAt: new Date() },
-  });
-  await tx.auditLog.create({
-    data: {
-      actorId: input.actorId,
-      action: "VIDEO_SECONDARY_REJECTED",
-      entity: "VideoSecondaryReview",
-      entityId: review.id,
-      beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
-      afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
-      reason: input.reason,
-      ip: input.ip,
-    },
-  });
+  // Source triggers persist achievement refresh intent in this same transaction.
   return updated;
 }
 
@@ -620,10 +607,17 @@ export async function creditVideoReward(input: {
   points: number;
   actorId?: string;
   ip?: string;
-}) {
-  return db.$transaction(async (tx) => {
-    const video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
+}, transaction?: Prisma.TransactionClient) {
+  if (!Number.isSafeInteger(input.points) || input.points < 0) throw new Error("视频积分必须是非负整数");
+  const apply = async (tx: Prisma.TransactionClient) => {
+    let video = await tx.videoSubmission.findUnique({ where: { id: input.videoId } });
     if (!video) throw new Error("视频记录不存在");
+    const initialPhotoId = video.photoId;
+    if (initialPhotoId) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`video-photo:${initialPhotoId}`})::bigint)`;
+    await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${video.id} FOR UPDATE`;
+    video = await tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
+    if (video.photoId !== initialPhotoId) throw new Error("视频作品证据已变化，请重新处理");
+    if (video.userId !== input.userId) throw new Error("视频与积分账户不匹配");
     if (video.status === "APPROVED" && (!input.actorId || video.points === input.points)) return video;
     if (video.status === "APPROVED" && input.actorId && video.points !== input.points) {
       const delta = input.points - video.points;
@@ -656,6 +650,13 @@ export async function creditVideoReward(input: {
     if (!["PROCESSING", "PENDING_REVIEW", "FAILED"].includes(video.status)) {
       throw new Error("只有处理中视频可以自动入账");
     }
+    const pointRuleSnapshot = await tx.videoPointRuleSnapshot.findUnique({ where: { videoId: video.id } });
+    // An old in-flight caller without a snapshot retains its trusted input, explicitly recorded as
+    // unavailable evidence. Every current fetch path captures before network access.
+    if (pointRuleSnapshot && (video.likes === null || input.points !== calculateSnapshotVideoPoints(video.likes, pointRuleSnapshot))) {
+      throw new Error("自动入账积分与视频锁定规则不一致");
+    }
+    const authorBinding = await requireVerifiedVideoAuthor(tx, video);
     const canApprove = await refreshEligibilityAfterApprovedVideo(tx, input.userId, new Date());
     if (!canApprove) {
       const rejected = await tx.videoSubmission.update({
@@ -671,11 +672,11 @@ export async function creditVideoReward(input: {
     const claimedAt = new Date();
     const claimed = await tx.videoSubmission.updateMany({
       where: { id: video.id, status: { in: ["PROCESSING", "PENDING_REVIEW", "FAILED"] } },
-      data: { status: "APPROVED", points: input.points, processedAt: claimedAt, reviewedAt: claimedAt },
+      data: { status: "APPROVED", points: input.points, processedAt: claimedAt, reviewedAt: claimedAt, verifiedBindingId: authorBinding.id },
     });
     if (claimed.count !== 1) return tx.videoSubmission.findUniqueOrThrow({ where: { id: video.id } });
     // updateMany 已写入状态、积分和时间戳，这里直接推导 updated，避免对同一行的第二次冗余 UPDATE。
-    const updated = { ...video, status: "APPROVED" as const, points: input.points, processedAt: claimedAt, reviewedAt: claimedAt };
+    const updated = { ...video, status: "APPROVED" as const, points: input.points, processedAt: claimedAt, reviewedAt: claimedAt, verifiedBindingId: authorBinding.id };
     if (input.points > 0) {
       await credit(tx, input.userId, input.points, "VIDEO_REWARD", video.id, "视频审核通过");
     }
@@ -690,16 +691,14 @@ export async function creditVideoReward(input: {
       data: {
         actorId: input.actorId,
         action: "VIDEO_APPROVED",
+        requestId: requestContext.getStore()?.id,
         entity: "VideoSubmission",
         entityId: video.id,
         beforeValue: { status: video.status, points: video.points },
-        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus },
+        afterValue: { status: updated.status, points: updated.points, birthdayBonusPoints: birthdayBonus, calculation: videoRuleEvidence(pointRuleSnapshot, video.likes, input.points), verifiedBindingId: authorBinding.id, authorUid: authorBinding.authorUid, platform: authorBinding.platform, authorEvidenceVersion: video.authorEvidenceVersion },
         ip: input.ip,
       },
     });
-    if (!input.actorId) {
-      await assignVideoSecondaryReview(tx, video.id);
-    }
     await createNotification(tx, {
       userId: input.userId,
       type: "VIDEO_RESULT",
@@ -715,9 +714,10 @@ export async function creditVideoReward(input: {
       submittedAt: video.submittedAt,
       completedAt: updated.reviewedAt ?? new Date(),
     });
-    await reconcileMemberAchievements(tx, input.userId);
+    // Growth display is rebuilt from the transactional refresh outbox.
     return updated;
-  });
+  };
+  return transaction ? apply(transaction) : db.$transaction(apply);
 }
 
 export async function rejectVideo(input: { videoId: string; reason: string; actorId: string; ip?: string }) {
@@ -762,10 +762,12 @@ export async function resolveVideoAppeal(input: {
   actorId: string;
   reason?: string;
   points?: number;
+  expectedRuleRevision?: string;
+  expectedCalculatedPoints?: number;
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
-    const appeal = await tx.videoAppeal.findUnique({
+    let appeal = await tx.videoAppeal.findUnique({
       where: { id: input.appealId },
       include: { video: true },
     });
@@ -806,6 +808,7 @@ export async function resolveVideoAppeal(input: {
     }
 
     if (appeal.video.status !== "REJECTED") throw new Error("只有已自动驳回的视频可以通过申诉");
+    const observedPhotoId = appeal.video.photoId;
     if (appeal.video.photoId) {
       // 与视频入账路径共用同一把 photoId 事务锁：两条并发申诉（或申诉与提交）
       // 各自判重后再写入会双双入账，必须在锁内串行化后重新判重。
@@ -819,8 +822,25 @@ export async function resolveVideoAppeal(input: {
         });
       if (duplicate) throw new Error("该视频已被其他记录结算，不能通过申诉");
     }
-    const rule = await getVideoPointRule(tx);
-    const points = input.points ?? calculateVideoPoints(appeal.video.likes ?? 0, rule);
+    // Photo lock -> video row lock matches the automatic approval order. Re-read after waiting:
+    // a concurrent reprocess must not be overwritten using metadata from before the wait.
+    await tx.$queryRaw`SELECT "id" FROM "VideoSubmission" WHERE "id" = ${appeal.video.id} FOR UPDATE`;
+    const currentAppeal = await tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
+    if (currentAppeal.status !== "PENDING") return currentAppeal;
+    const currentVideo = await tx.videoSubmission.findUniqueOrThrow({ where: { id: appeal.video.id } });
+    if (currentVideo.status !== "REJECTED" || currentVideo.photoId !== observedPhotoId) {
+      throw new Error("视频状态已变化，请刷新申诉列表后重新确认");
+    }
+    appeal.video = currentVideo;
+    const authorBinding = await requireVerifiedVideoAuthor(tx, appeal.video);
+    const pointRuleSnapshot = await captureVideoPointRule(appeal.video.id, "LEGACY_APPEAL", tx);
+    const rule = snapshotRule(pointRuleSnapshot);
+    const calculatedPoints = calculateSnapshotVideoPoints(appeal.video.likes ?? 0, pointRuleSnapshot);
+    if ((input.expectedRuleRevision !== undefined && input.expectedRuleRevision !== pointRuleSnapshot.revision)
+      || (input.points === undefined && input.expectedCalculatedPoints !== undefined && input.expectedCalculatedPoints !== calculatedPoints)) {
+      throw new Error("视频计算依据已变化，请刷新申诉列表后重新确认");
+    }
+    const points = input.points ?? calculatedPoints;
     if (!Number.isInteger(points) || points < 0 || points > rule.maximumPoints) {
       throw new Error(`申诉积分必须是 0 至 ${rule.maximumPoints} 的整数`);
     }
@@ -840,7 +860,7 @@ export async function resolveVideoAppeal(input: {
     if (claimed.count !== 1) return tx.videoAppeal.findUniqueOrThrow({ where: { id: appeal.id } });
     const video = await tx.videoSubmission.update({
       where: { id: appeal.video.id },
-      data: { status: "APPROVED", points, reviewedAt: new Date(), reviewReason: input.reason?.trim() || "申诉复查通过" },
+      data: { status: "APPROVED", points, reviewedAt: new Date(), reviewReason: input.reason?.trim() || "申诉复查通过", verifiedBindingId: authorBinding.id },
     });
     if (points > 0) {
       await credit(tx, appeal.video.userId, points, "VIDEO_REWARD", appeal.video.id, "视频申诉通过");
@@ -860,7 +880,7 @@ export async function resolveVideoAppeal(input: {
         entity: "VideoAppeal",
         entityId: appeal.id,
         beforeValue: { appealStatus: appeal.status, videoStatus: appeal.video.status, points: appeal.video.points },
-        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus },
+        afterValue: { appealStatus: updated.status, videoStatus: video.status, points, birthdayBonusPoints: birthdayBonus, calculation: videoRuleEvidence(pointRuleSnapshot, appeal.video.likes, points), verifiedBindingId: authorBinding.id, authorUid: authorBinding.authorUid, platform: authorBinding.platform, authorEvidenceVersion: appeal.video.authorEvidenceVersion },
         reason: input.reason,
         ip: input.ip,
       },
@@ -880,7 +900,7 @@ export async function resolveVideoAppeal(input: {
       submittedAt: video.submittedAt,
       completedAt: video.reviewedAt ?? new Date(),
     });
-    await reconcileMemberAchievements(tx, appeal.video.userId);
+    // Growth display is rebuilt from the transactional refresh outbox.
     return updated;
   });
 }
@@ -888,7 +908,6 @@ export async function resolveVideoAppeal(input: {
 export async function revokeVideoReward(input: { videoId: string; actorId: string; reason: string; ip?: string }) {
   return db.$transaction(async (tx) => {
     const updated = await revokeApprovedVideoInTransaction(tx, input);
-    await closePendingSecondaryReviewAfterRevocation(tx, input);
     return updated;
   });
 }
@@ -901,75 +920,8 @@ export async function resolveVideoSecondaryReview(input: {
   reason?: string;
   ip?: string;
 }) {
-  return db.$transaction(async (tx) => {
-    const review = await tx.videoSecondaryReview.findUnique({
-      where: { id: input.reviewId },
-      include: { video: true },
-    });
-    if (!review) throw new Error("二次审核任务不存在");
-    if (input.actorRole === "REVIEWER" && review.reviewerId !== input.actorId) {
-      throw new Error("无权处理该二次审核任务");
-    }
-    if (review.status !== "PENDING") return review;
-
-    if (input.action === "approve") {
-      const claimed = await tx.videoSecondaryReview.updateMany({
-        where: { id: review.id, status: "PENDING" },
-        data: {
-          status: "APPROVED",
-          reviewerId: review.reviewerId ?? input.actorId,
-          reviewedAt: new Date(),
-        },
-      });
-      if (claimed.count !== 1) return tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
-      const updated = await tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
-      await tx.auditLog.create({
-        data: {
-          actorId: input.actorId,
-          action: "VIDEO_SECONDARY_APPROVED",
-          entity: "VideoSecondaryReview",
-          entityId: review.id,
-          beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
-          afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
-          ip: input.ip,
-        },
-      });
-      return updated;
-    }
-
-    const reason = input.reason?.trim();
-    if (!reason) throw new Error("二次审核驳回必须填写原因");
-    const claimed = await tx.videoSecondaryReview.updateMany({
-      where: { id: review.id, status: "PENDING" },
-      data: {
-        status: "REJECTED",
-        reviewerId: review.reviewerId ?? input.actorId,
-        reviewReason: reason,
-        reviewedAt: new Date(),
-      },
-    });
-    if (claimed.count !== 1) return tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
-    const updated = await tx.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } });
-    await tx.auditLog.create({
-      data: {
-        actorId: input.actorId,
-        action: "VIDEO_SECONDARY_REJECTED",
-        entity: "VideoSecondaryReview",
-        entityId: review.id,
-        beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
-        afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
-        reason,
-        ip: input.ip,
-      },
-    });
-    await revokeApprovedVideoInTransaction(tx, {
-      videoId: review.videoId,
-      actorId: input.actorId,
-      reason,
-      ip: input.ip,
-    });
-    return updated;
-  });
+  void input;
+  throw new SecondaryReviewRetiredError();
 }
 
 export async function updateRedemptionOrder(input: {
@@ -981,94 +933,153 @@ export async function updateRedemptionOrder(input: {
   ip?: string;
 }) {
   return db.$transaction(async (tx) => {
-    const order = await tx.redemptionOrder.findUnique({
-      where: { id: input.orderId },
-      include: { gift: true, user: { select: { nickname: true, kuaishouId: true } } },
-    });
-    if (!order) throw new Error("兑换订单不存在");
-    if (input.action === "update_tracking") {
-      if (order.gift.kind !== "PHYSICAL") throw new Error("只有实物订单可以填写快递单号");
-      if (order.status !== "FULFILLED") throw new Error("只有已发货的实物订单可以修改快递单号");
-      const trackingNumber = input.trackingNumber?.trim() || null;
-      if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
-      if (trackingNumber === order.trackingNumber) return order;
-      const updated = await tx.redemptionOrder.update({
-        where: { id: order.id },
-        data: { trackingNumber },
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const order = await tx.redemptionOrder.findUnique({
+        where: { id: input.orderId },
+        include: { gift: true, user: { select: { nickname: true, kuaishouId: true } } },
       });
-      await writeAuditLog(tx, {
-          actorId: input.actorId,
-          action: "REDEMPTION_TRACKING_UPDATED",
-          entity: "RedemptionOrder",
+      if (!order) throw new Error("兑换订单不存在");
+      if (input.action === "update_tracking") {
+        if (order.gift.kind !== "PHYSICAL") throw new Error("只有实物订单可以填写快递单号");
+        if (order.status !== "FULFILLED") throw new Error("只有已发货的实物订单可以修改快递单号");
+        const trackingNumber = input.trackingNumber?.trim() || null;
+        if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
+        if (trackingNumber === order.trackingNumber) return order;
+        const changed = await tx.redemptionOrder.updateMany({
+          where: { id: order.id, status: "FULFILLED", trackingNumber: order.trackingNumber },
+          data: { trackingNumber },
+        });
+        if (changed.count !== 1) continue;
+        const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+        await writeAuditLog(tx, {
+            actorId: input.actorId,
+            action: "REDEMPTION_TRACKING_UPDATED",
+            entity: "RedemptionOrder",
+            entityId: order.id,
+            beforeValue: { trackingNumber: order.trackingNumber },
+            afterValue: { trackingNumber },
+            reason: input.reason,
+            ip: input.ip,
+        });
+        await createNotification(tx, {
+          userId: order.userId,
+          type: "REDEMPTION",
+          title: "物流信息已更新",
+          body: trackingNumber ? `${order.gift.name} 的快递单号已更新为 ${trackingNumber}` : `${order.gift.name} 的快递单号已清除`,
+          entityType: "RedemptionOrder",
           entityId: order.id,
-          beforeValue: { trackingNumber: order.trackingNumber },
-          afterValue: { trackingNumber },
-          reason: input.reason,
-          ip: input.ip,
-      });
-      await createNotification(tx, {
-        userId: order.userId,
-        type: "REDEMPTION",
-        title: "物流信息已更新",
-        body: trackingNumber ? `${order.gift.name} 的快递单号已更新为 ${trackingNumber}` : `${order.gift.name} 的快递单号已清除`,
-        entityType: "RedemptionOrder",
-        entityId: order.id,
-        metadata: { status: "FULFILLED", trackingNumber },
-        dedupeKey: `redemption:${order.id}:tracking:${trackingNumber ?? "empty"}`,
-      });
-      return updated;
-    }
-    if (input.action === "approve") {
-      if (order.status !== "PENDING") return order;
-      const updated = await tx.redemptionOrder.update({ where: { id: order.id }, data: { status: "APPROVED", reviewedAt: new Date() } });
-      await tx.auditLog.create({
-        data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
-      });
-      await createNotification(tx, {
-        userId: order.userId,
-        type: "REDEMPTION",
-        title: "兑换订单已确认",
-        body: `${order.gift.name} 已确认，等待发放`,
-        entityType: "RedemptionOrder",
-        entityId: order.id,
-        metadata: { status: "APPROVED" },
-        dedupeKey: `redemption:${order.id}:approved`,
-      });
-      return updated;
-    }
-    if (input.action === "fulfill") {
-      if (!["APPROVED", "PENDING"].includes(order.status)) return order;
-      if (order.gift.kind === "CASH" && !order.cashQrCodeUrl) {
-        throw new Error("现金订单缺少收款码，补齐后才能完成");
+          metadata: { status: "FULFILLED", trackingNumber },
+          dedupeKey: `redemption:${order.id}:tracking:${trackingNumber ?? "empty"}`,
+        });
+        return updated;
       }
-      if (order.gift.kind === "PHYSICAL" && (!order.recipientName || !order.recipientPhoneEnc || !order.recipientAddressEnc)) {
-        throw new Error("实物订单缺少完整收货资料，补齐后才能发货");
+      if (input.action === "approve") {
+        if (order.status !== "PENDING") return order;
+        const changed = await tx.redemptionOrder.updateMany({ where: { id: order.id, status: "PENDING" }, data: { status: "APPROVED", reviewedAt: new Date() } });
+        if (changed.count !== 1) continue;
+        const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+        await tx.auditLog.create({
+          data: { actorId: input.actorId, action: "REDEMPTION_APPROVED", entity: "RedemptionOrder", entityId: order.id, beforeValue: { status: order.status }, afterValue: { status: updated.status }, reason: input.reason, ip: input.ip },
+        });
+        await createNotification(tx, {
+          userId: order.userId,
+          type: "REDEMPTION",
+          title: "兑换订单已确认",
+          body: `${order.gift.name} 已确认，等待发放`,
+          entityType: "RedemptionOrder",
+          entityId: order.id,
+          metadata: { status: "APPROVED" },
+          dedupeKey: `redemption:${order.id}:approved`,
+        });
+        return updated;
       }
-      const requiredMembershipFields = order.gift.kind === "MEMBERSHIP"
-        ? parseMembershipFields(order.gift.fulfillmentFields).some((field) => field.required)
-        : false;
-      if (requiredMembershipFields && !order.fulfillmentDataEnc) {
-        throw new Error("会员权益订单缺少开通资料，补齐后才能完成");
+      if (input.action === "fulfill") {
+        if (!["APPROVED", "PENDING"].includes(order.status)) return order;
+        if (order.gift.kind === "CASH" && !order.cashQrCodeUrl) {
+          throw new Error("现金订单缺少收款码，补齐后才能完成");
+        }
+        if (order.gift.kind === "PHYSICAL" && (!order.recipientName || !order.recipientPhoneEnc || !order.recipientAddressEnc)) {
+          throw new Error("实物订单缺少完整收货资料，补齐后才能发货");
+        }
+        const requiredMembershipFields = order.gift.kind === "MEMBERSHIP"
+          ? parseMembershipFields(order.gift.fulfillmentFields).some((field) => field.required)
+          : false;
+        if (requiredMembershipFields && !order.fulfillmentDataEnc) {
+          throw new Error("会员权益订单缺少开通资料，补齐后才能完成");
+        }
+        const fulfilledAt = new Date();
+        const trackingNumber = order.gift.kind === "PHYSICAL" ? input.trackingNumber?.trim() || null : null;
+        if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
+        const changed = await tx.redemptionOrder.updateMany({
+          where: { id: order.id, status: order.status },
+          data: { status: "FULFILLED", reviewedAt: fulfilledAt, fulfilledAt, trackingNumber },
+        });
+        if (changed.count !== 1) continue;
+        const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
+        await writeAuditLog(tx, {
+            actorId: input.actorId,
+            action: "REDEMPTION_FULFILLED",
+            entity: "RedemptionOrder",
+            entityId: order.id,
+            beforeValue: { status: order.status },
+            afterValue: {
+              status: updated.status,
+              trackingNumber,
+              giftName: order.gift.name,
+              targetNickname: order.user.nickname,
+              giftKind: order.gift.kind,
+            },
+            reason: input.reason,
+            ip: input.ip,
+        });
+        await createNotification(tx, {
+          userId: order.userId,
+          type: "REDEMPTION",
+          title: order.gift.kind === "PHYSICAL" ? "礼品已发货" : order.gift.kind === "MEMBERSHIP" ? "会员权益已开通" : "兑换已完成",
+          body: `${order.gift.name} 已完成${order.gift.kind === "PHYSICAL" ? "发货" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发放"}${trackingNumber ? `，快递单号：${trackingNumber}` : ""}`,
+          entityType: "RedemptionOrder",
+          entityId: order.id,
+          metadata: { status: "FULFILLED", trackingNumber },
+          dedupeKey: `redemption:${order.id}:fulfilled`,
+        });
+        return updated;
       }
-      const fulfilledAt = new Date();
-      const trackingNumber = order.gift.kind === "PHYSICAL" ? input.trackingNumber?.trim() || null : null;
-      if (trackingNumber && trackingNumber.length > 120) throw new Error("快递单号不能超过 120 个字符");
-      const updated = await tx.redemptionOrder.update({
-        where: { id: order.id },
-        data: { status: "FULFILLED", reviewedAt: fulfilledAt, fulfilledAt, trackingNumber },
+      if (["REJECTED", "REFUNDED", "CLEARANCE_CANCELLED"].includes(order.status)) return order;
+      if (input.action === "reject" && !["PENDING", "APPROVED"].includes(order.status)) {
+        throw new Error("只有待发货订单可以驳回");
+      }
+      if (!Number.isInteger(order.totalCost) || order.totalCost < 0) throw new Error("订单积分金额异常，请先核对订单");
+      const birthdayGift = order.totalCost === 0 && order.birthdayPrizeId
+        ? await tx.birthdayPrize.findUnique({ where: { id: order.birthdayPrizeId }, include: { annualBenefit: { select: { userId: true } } } })
+        : null;
+      if (order.totalCost === 0 && !(birthdayGift?.kind === "GIFT" && birthdayGift.status === "CLAIMED"
+        && birthdayGift.giftId === order.giftId && birthdayGift.annualBenefit.userId === order.userId
+        && order.quantity === 1 && order.unitCost === 0)) {
+        throw new Error("零积分订单缺少有效的生日奖品领取记录，请先核对订单");
+      }
+      const nextStatus = input.action === "refund" ? "REFUNDED" : "REJECTED";
+      const claimed = await tx.redemptionOrder.updateMany({
+        where: { id: order.id, status: order.status },
+        data: { status: nextStatus, reviewedAt: new Date(), note: input.reason ?? order.note },
       });
+      if (claimed.count !== 1) continue;
+      await tx.gift.update({ where: { id: order.giftId }, data: { stock: { increment: order.quantity } } });
+      if (order.totalCost > 0) {
+        await credit(tx, order.userId, order.totalCost, "REDEMPTION_REFUND", order.id, input.reason ?? "兑换订单退款");
+      }
+      const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
       await writeAuditLog(tx, {
           actorId: input.actorId,
-          action: "REDEMPTION_FULFILLED",
+          action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED",
           entity: "RedemptionOrder",
           entityId: order.id,
           beforeValue: { status: order.status },
           afterValue: {
             status: updated.status,
-            trackingNumber,
+            refunded: order.totalCost,
+            birthdayPrizeId: order.birthdayPrizeId,
             giftName: order.gift.name,
             targetNickname: order.user.nickname,
-            giftKind: order.gift.kind,
           },
           reason: input.reason,
           ip: input.ip,
@@ -1076,53 +1087,17 @@ export async function updateRedemptionOrder(input: {
       await createNotification(tx, {
         userId: order.userId,
         type: "REDEMPTION",
-        title: order.gift.kind === "PHYSICAL" ? "礼品已发货" : order.gift.kind === "MEMBERSHIP" ? "会员权益已开通" : "兑换已完成",
-        body: `${order.gift.name} 已完成${order.gift.kind === "PHYSICAL" ? "发货" : order.gift.kind === "MEMBERSHIP" ? "开通" : "发放"}${trackingNumber ? `，快递单号：${trackingNumber}` : ""}`,
+        title: birthdayGift ? "生日奖品订单已取消" : input.action === "refund" ? "兑换订单已退款" : "兑换订单已驳回",
+        body: birthdayGift
+          ? `${order.gift.name} 生日奖品订单已取消，未扣除积分，年度领奖记录保留${input.reason ? `。原因：${input.reason}` : ""}`
+          : `${order.gift.name} 已${input.action === "refund" ? "退款" : "驳回"}，${order.totalCost} 积分已退回${input.reason ? `。原因：${input.reason}` : ""}`,
         entityType: "RedemptionOrder",
         entityId: order.id,
-        metadata: { status: "FULFILLED", trackingNumber },
-        dedupeKey: `redemption:${order.id}:fulfilled`,
+        metadata: { amount: order.totalCost, status: updated.status },
+        dedupeKey: `redemption:${order.id}:${updated.status.toLowerCase()}`,
       });
       return updated;
     }
-    if (input.action === "reject" && !["PENDING", "APPROVED"].includes(order.status)) {
-      throw new Error("只有待发货订单可以驳回");
-    }
-    if (["REJECTED", "REFUNDED"].includes(order.status)) return order;
-    const nextStatus = input.action === "refund" ? "REFUNDED" : "REJECTED";
-    const claimed = await tx.redemptionOrder.updateMany({
-      where: { id: order.id, status: { in: ["PENDING", "APPROVED", "FULFILLED"] } },
-      data: { status: nextStatus, reviewedAt: new Date(), note: input.reason ?? order.note },
-    });
-    if (claimed.count !== 1) return tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
-    await tx.gift.update({ where: { id: order.giftId }, data: { stock: { increment: order.quantity } } });
-    await credit(tx, order.userId, order.totalCost, "REDEMPTION_REFUND", order.id, input.reason ?? "兑换订单退款");
-    const updated = await tx.redemptionOrder.findUniqueOrThrow({ where: { id: order.id } });
-    await writeAuditLog(tx, {
-        actorId: input.actorId,
-        action: input.action === "refund" ? "REDEMPTION_REFUNDED" : "REDEMPTION_REJECTED",
-        entity: "RedemptionOrder",
-        entityId: order.id,
-        beforeValue: { status: order.status },
-        afterValue: {
-          status: updated.status,
-          refunded: order.totalCost,
-          giftName: order.gift.name,
-          targetNickname: order.user.nickname,
-        },
-        reason: input.reason,
-        ip: input.ip,
-    });
-    await createNotification(tx, {
-      userId: order.userId,
-      type: "REDEMPTION",
-      title: input.action === "refund" ? "兑换订单已退款" : "兑换订单已驳回",
-      body: `${order.gift.name} 已${input.action === "refund" ? "退款" : "驳回"}，${order.totalCost} 积分已退回${input.reason ? `。原因：${input.reason}` : ""}`,
-      entityType: "RedemptionOrder",
-      entityId: order.id,
-      metadata: { amount: order.totalCost, status: updated.status },
-      dedupeKey: `redemption:${order.id}:${updated.status.toLowerCase()}`,
-    });
-    return updated;
+    throw new Error("订单状态正在变化，请刷新后重试");
   });
 }

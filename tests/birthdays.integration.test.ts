@@ -1,3 +1,4 @@
+import { seedVerifiedVideoAuthor } from "./helpers/verified-author";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
@@ -148,6 +149,7 @@ describe.skipIf(!enabled)("birthday database integration", () => {
 
   it("grants and reverses a capped integer video bonus in the video transaction", async () => {
     const video = await db.videoSubmission.create({ data: { userId: senderId, sourceUrl: `https://v.kuaishou.com/birthday-${suffix}`, requestUrl: `https://v.kuaishou.com/birthday-${suffix}`, sourceKind: "short-link", submittedNickname: "祝福成员", submittedAt: now, birthdayBenefitYear: 2026, birthdayOccurrenceDate: occurrence, idempotencyKey: `birthday-video-${suffix}` } });
+    await seedVerifiedVideoAuthor(video.id);
     await creditVideoReward({ videoId: video.id, userId: senderId, points: 100 });
     expect(await db.videoSubmission.findUniqueOrThrow({ where: { id: video.id } }).then((row) => row.birthdayBonusPoints)).toBe(20);
     expect(await db.pointLedger.count({ where: { referenceId: video.id, type: "BIRTHDAY_VIDEO_BONUS" } })).toBe(1);
@@ -267,6 +269,7 @@ describe.skipIf(!enabled)("birthday database integration", () => {
         idempotencyKey: `birthday-bonus-${index}-${suffix}`,
       },
     })));
+    await Promise.all(videos.map((video) => seedVerifiedVideoAuthor(video.id)));
     await Promise.all(videos.map((video) => creditVideoReward({ videoId: video.id, userId: bonusMemberId, points: 2_000 })));
     expect(await db.birthdayAnnualBenefit.findUniqueOrThrow({ where: { userId_benefitYear: { userId: bonusMemberId, benefitYear: 2026 } } }).then((benefit) => benefit.bonusGranted)).toBe(500);
     expect(await db.pointLedger.aggregate({ where: { type: "BIRTHDAY_VIDEO_BONUS", referenceId: { in: videos.map((video) => video.id) } }, _sum: { amount: true } }).then((result) => result._sum.amount)).toBe(500);

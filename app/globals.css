@@ -4781,7 +4781,7 @@ a {
 }
 
 /* Admin usability and sensitive-data controls. */
-.secondary-review-cards,
+.appeal-review-cards,
 .mobile-action-label {
   display: none;
 }
@@ -4961,7 +4961,7 @@ a {
 
 .table-actions-inline .table-more,
 .table-actions-inline .mini-button,
-.secondary-review-card-actions button {
+.appeal-review-card-actions button {
   min-width: 44px;
   min-height: 44px;
 }
@@ -4975,17 +4975,17 @@ a {
     overflow-x: hidden;
   }
 
-  .secondary-review-table {
+  .appeal-review-table {
     display: none;
   }
 
-  .secondary-review-cards {
+  .appeal-review-cards {
     padding: 14px;
     display: grid;
     gap: 12px;
   }
 
-  .secondary-review-card {
+  .appeal-review-card {
     min-width: 0;
     padding: 13px;
     border: 1px solid var(--line);
@@ -4995,66 +4995,66 @@ a {
     background: #fff;
   }
 
-  .secondary-review-card-head {
+  .appeal-review-card-head {
     display: grid;
     grid-template-columns: 48px minmax(0, 1fr) auto;
     align-items: start;
     gap: 9px;
   }
 
-  .secondary-review-card-head > img,
-  .secondary-review-card-head > .table-thumb {
+  .appeal-review-card-head > img,
+  .appeal-review-card-head > .table-thumb {
     width: 48px;
     height: 48px;
     border-radius: 6px;
     object-fit: cover;
   }
 
-  .secondary-review-card-head > div,
-  .secondary-review-card-head a {
+  .appeal-review-card-head > div,
+  .appeal-review-card-head a {
     min-width: 0;
   }
 
-  .secondary-review-card-head a {
+  .appeal-review-card-head a {
     display: flex;
     align-items: center;
     gap: 4px;
   }
 
-  .secondary-review-card-head strong {
+  .appeal-review-card-head strong {
     overflow: hidden;
     display: block;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .secondary-review-card-head small {
+  .appeal-review-card-head small {
     margin-top: 5px;
     display: block;
     color: var(--muted);
     font-size: 11px;
   }
 
-  .secondary-review-card dl {
+  .appeal-review-card dl {
     margin: 0;
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 9px;
   }
 
-  .secondary-review-card dl > div {
+  .appeal-review-card dl > div {
     min-width: 0;
     padding: 9px;
     border-radius: 6px;
     background: #f7f7f7;
   }
 
-  .secondary-review-card dt {
+  .appeal-review-card dt {
     color: var(--muted);
     font-size: 10px;
   }
 
-  .secondary-review-card dd {
+  .appeal-review-card dd {
     margin: 3px 0 0;
     overflow: hidden;
     font-size: 12px;
@@ -5063,24 +5063,30 @@ a {
     white-space: nowrap;
   }
 
-  .secondary-review-card > p {
+  .appeal-review-card > p {
     margin: 0;
-    color: var(--danger);
+    color: var(--muted);
     font-size: 12px;
   }
 
-  .secondary-review-card-actions {
+  .appeal-review-card > .appeal-auto-outcome {
+    color: var(--danger);
+  }
+
+  .appeal-review-card-actions {
     position: sticky;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 7px;
     background: white;
   }
 
-  .secondary-review-card-actions button {
+  .appeal-review-card-actions button {
     padding-inline: 8px;
     justify-content: center;
+    white-space: nowrap;
+    font-size: 14px;
   }
 
   .workbench-bars {
@@ -5441,7 +5447,7 @@ a {
     justify-content: center;
   }
 
-  .secondary-review-card-actions .primary-button {
+  .appeal-review-card-actions .primary-button {
     color: white;
     border-color: var(--brand);
     background: var(--brand);
@@ -5493,4 +5499,14 @@ a {
     justify-content: flex-start;
     gap: 7px;
   }
+}
+
+.admin-tabs .admin-history-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 10px;
+  color: #64748b;
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
 }

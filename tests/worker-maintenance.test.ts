@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recoverMock, sessionMock, weeklyMock, clearanceMock, growthMock, birthdayMock, alertMock } = vi.hoisted(() => ({
+const { recoverMock, sessionMock, weeklyMock, clearanceMock, growthMock, birthdayMock, alertMock, repairMock } = vi.hoisted(() => ({
   recoverMock: vi.fn(),
   sessionMock: vi.fn(),
   weeklyMock: vi.fn(),
@@ -8,6 +8,7 @@ const { recoverMock, sessionMock, weeklyMock, clearanceMock, growthMock, birthda
   growthMock: vi.fn(),
   birthdayMock: vi.fn(),
   alertMock: vi.fn(),
+  repairMock: vi.fn(),
 }));
 
 vi.mock("../lib/video-jobs", () => ({ recoverStaleVideoSubmissions: recoverMock }));
@@ -15,6 +16,7 @@ vi.mock("../lib/db", () => ({ db: { session: { deleteMany: sessionMock } } }));
 vi.mock("../lib/weekly-challenge-generation", () => ({ runWeeklyChallengeMaintenance: weeklyMock }));
 vi.mock("../lib/member-clearance", () => ({ runMemberClearanceMaintenance: clearanceMock }));
 vi.mock("../lib/member-achievements", () => ({ runMemberGrowthMonthlyMaintenance: growthMock }));
+vi.mock("../lib/member-achievement-jobs", () => ({ enqueueStaleAchievementProjections: repairMock }));
 vi.mock("../lib/birthdays", () => ({ runBirthdayMaintenance: birthdayMock }));
 vi.mock("../lib/alerts", () => ({ sendOperationalAlert: alertMock }));
 
@@ -28,6 +30,7 @@ describe("runWorkerMaintenanceCycle", () => {
     weeklyMock.mockResolvedValue({ generationDue: false, periodStart: null });
     clearanceMock.mockResolvedValue({ initialized: false, scanned: 0, warned: 0, cleared: 0, failed: 0, failures: [] });
     growthMock.mockResolvedValue({ reviewed: 0 });
+    repairMock.mockResolvedValue({ enqueued: 0 });
     birthdayMock.mockResolvedValue({});
     alertMock.mockResolvedValue({ sent: true, channels: ["webhook"] });
   });
@@ -39,6 +42,7 @@ describe("runWorkerMaintenanceCycle", () => {
     expect(cycle.challengeMaintenance).toEqual({ generationDue: false, periodStart: null });
     expect(recoverMock).toHaveBeenCalledTimes(1);
     expect(birthdayMock).toHaveBeenCalledTimes(1);
+    expect(repairMock).toHaveBeenCalledTimes(1);
     expect(alertMock).not.toHaveBeenCalled();
   });
 

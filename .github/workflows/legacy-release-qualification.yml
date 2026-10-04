@@ -1,0 +1,59 @@
+name: Original v1.11 Image Qualification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/legacy-release-qualification.yml
+      - scripts/qualify-legacy-images.sh
+      - scripts/test-legacy-pending-request.mjs
+      - scripts/legacy-queue-drain.cjs
+      - scripts/release-lifecycle.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy-qualification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    if: (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Verify the original deployment identity from GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p output/legacy-qualification
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/36514915183" | jq -e '
+            select(.head_sha=="752b084ec220ce5c827609611e51ce718b28b92d" and .path==".github/workflows/deploy-production.yml"
+              and .head_branch=="main" and .status=="completed" and .conclusion=="success")
+            | {id,head_sha,head_branch,path,status,conclusion,run_attempt}' > output/legacy-qualification/original-deployment.json
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Qualify original images by draining paused queues before TERM
+        run: bash scripts/qualify-legacy-images.sh
+      - name: Preserve only synthetic qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: original-v111-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/legacy-qualification/*.json
+          if-no-files-found: error
+          retention-days: 90

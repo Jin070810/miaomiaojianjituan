@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { getMemberAchievements } from "@/lib/member-achievements";
 import { getAdminMemberGrowth, getMemberGrowth, growthWindows } from "@/lib/member-growth";
 import { periodBounds } from "@/lib/rankings";
+import { claimMemberAchievementRefresh, processMemberAchievementRefresh } from "@/lib/member-achievement-jobs";
 
 const enabled = process.env.RUN_DB_TESTS === "1";
 
@@ -121,13 +122,18 @@ describe.skipIf(!enabled)("member growth database integration", () => {
     expect(growth.challenge).toEqual({ covered: 2, completed: 2, claimed: 1 });
   });
 
-  it("creates the monthly goal and achievements exactly once under concurrent archive loads", async () => {
+  it("creates projections in the background and serves concurrent archive loads without writes", async () => {
+    for (const userId of [memberAId, memberBId]) {
+      const claim = await claimMemberAchievementRefresh(userId);
+      expect(claim).not.toBeNull();
+      expect((await processMemberAchievementRefresh(claim!, reference)).status).toBe("processed");
+    }
     const results = await Promise.all([
       getMemberAchievements(memberAId, reference),
       getMemberAchievements(memberAId, reference),
       getMemberAchievements(memberBId, reference),
     ]);
-    // 并发补齐（如 dev StrictMode 双请求、多标签页）不得让任一请求撞唯一约束失败。
+    // 并发打开只读取 Worker 已保存的投影，不在请求路径补写目标或成就。
     const goals = await db.memberMonthlyGoal.findMany({ where: { userId: { in: [memberAId, memberBId] } } });
     expect(goals.filter((goal) => goal.userId === memberAId)).toHaveLength(1);
     expect(goals.filter((goal) => goal.userId === memberBId)).toHaveLength(1);

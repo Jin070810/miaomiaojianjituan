@@ -1,0 +1,4 @@
+*.sh text eol=lf
+Dockerfile text eol=lf
+# Keep migration bytes stable across Windows checkouts and Linux release verification.
+prisma/migrations/*/migration.sql text eol=lf

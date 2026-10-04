@@ -234,7 +234,20 @@
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.ranking-adjustment-toolbar, .ranking-adjustment-actions, .ranking-adjustment-title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.ranking-adjustment-toolbar { margin: 16px; }
+.ranking-adjustment-list { display: grid; gap: 12px; margin: 0 16px 16px; }
+.ranking-adjustment-panel > p { margin: 16px; }
+.ranking-adjustment-panel > .admin-panel-head > button { flex: 0 0 auto; white-space: nowrap; }
+.ranking-adjustment-card { min-width: 0; padding: 16px; border: 1px solid var(--line, #e5e7eb); border-radius: 14px; overflow-wrap: anywhere; }
+.ranking-adjustment-card p { margin: 10px 0; }
+.ranking-adjustment-card small { display: block; color: #5e6574; }
+.ranking-adjustment-actions { margin-top: 14px; }
+.ranking-adjustment-panel button { min-height: 44px; }
+
 @media (max-width: 640px) {
+  .ranking-adjustment-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ranking-adjustment-actions button { padding: 10px 8px; white-space: nowrap; }
   .admin-action-impact > div {
     grid-template-columns: 1fr;
     gap: 4px;

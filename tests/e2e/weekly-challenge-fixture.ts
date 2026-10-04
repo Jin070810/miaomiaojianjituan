@@ -2,6 +2,9 @@ import { expect } from "@playwright/test";
 import argon2 from "argon2";
 import { db } from "@/lib/db";
 import { nextShanghaiWeekBounds, shanghaiWeekBounds } from "@/lib/weekly-challenges";
+import { preserveTestSettings } from "./setting-fixture";
+
+let restoreSettings: (() => Promise<void>) | null = null;
 
 export const e2ePassword = "WeeklyE2E-2026";
 export const e2eIds = {
@@ -16,6 +19,7 @@ export async function seedWeeklyChallengeE2E() {
     throw new Error("E2E 必须使用显式指定 schema 的测试数据库");
   }
   await cleanupWeeklyChallengeE2E();
+  restoreSettings = await preserveTestSettings(["WEEKLY_CHALLENGES"]);
   const passwordHash = await argon2.hash(e2ePassword);
   const [member, noTaskMember, admin] = await Promise.all([
     db.user.create({
@@ -150,6 +154,10 @@ export async function seedWeeklyChallengeE2E() {
 }
 
 export async function cleanupWeeklyChallengeE2E() {
+  if (restoreSettings) {
+    await restoreSettings();
+    restoreSettings = null;
+  }
   const gifts = await db.gift.findMany({ where: { name: e2eGiftName }, select: { id: true } });
   const giftIds = gifts.map((gift) => gift.id);
   if (giftIds.length) {
@@ -188,6 +196,10 @@ export async function cleanupWeeklyChallengeE2E() {
 }
 
 export async function login(page: import("@playwright/test").Page, kuaishouId: string) {
+  const expectedUser = await db.user.findFirstOrThrow({
+    where: { kuaishouId: { equals: kuaishouId, mode: "insensitive" } },
+    select: { role: true },
+  });
   const testIp = `198.51.${100 + Math.floor(Math.random() * 50)}.${1 + Math.floor(Math.random() * 253)}`;
   await page.setExtraHTTPHeaders({ "x-real-ip": testIp });
   await page.goto("/login");
@@ -200,9 +212,11 @@ export async function login(page: import("@playwright/test").Page, kuaishouId: s
   const loginResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST");
   await page.getByRole("button", { name: "进入剪辑团" }).click();
   const response = await loginResponse;
-  const result = await response.json();
-  if (!response.ok()) throw new Error(`E2E 登录失败：${result.error ?? response.status()}`);
-  await page.waitForURL(result.user?.role === "ADMIN" ? "**/admin" : "**/");
+  // Successful login immediately navigates, so CDP may already have discarded
+  // its response body. Assert HTTP success and the fixture's expected role path
+  // without reading a response belonging to the page that was left behind.
+  if (!response.ok()) throw new Error(`E2E 登录失败：HTTP ${response.status()}`);
+  await page.waitForURL(expectedUser.role === "ADMIN" ? "**/admin" : "**/");
 }
 
 export async function expectNoHorizontalOverflow(page: import("@playwright/test").Page) {

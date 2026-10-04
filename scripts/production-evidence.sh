@@ -35,6 +35,7 @@ for service in app worker postgres redis nginx; do
     registryDigests:[.RepoDigests[]? | select(test("^(ghcr.io/jin070810/miaomiaojianjituan-(app|worker)|postgres|redis|nginx)@sha256:[a-f0-9]{64}$"))]}' > "$private/image.json"
   jq -s '.[0] + [ (.[1] + .[2]) ]' "$private/containers.json" "$private/container.json" "$private/image.json" > "$private/next.json"
   mv "$private/next.json" "$private/containers.json"
+  [[ "$service" != app ]] || app_container="$id"
   [[ "$service" != postgres ]] || postgres="$id"
 done
 [[ -n "${postgres:-}" ]]
@@ -116,6 +117,24 @@ if [[ -f releases/active.json ]]; then
     jq -s '.[0] + {snapshots:(.[0].snapshots + [.[1]])}' "$private/release.json" "$private/snapshot.json" > "$private/next.json"
     mv "$private/next.json" "$private/release.json"
   done
+  # Only fixed error counts and framework stack locations leave the host.
+  # Bound both the historical interval and bytes; never export raw log lines.
+  log_start="$(jq -r '.startedAt // ""' "$private/release.json")"
+  log_end="$(jq -r '.updatedAt // ""' "$private/release.json")"
+  if [[ "$log_start" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ && "$log_end" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]]; then
+    log_status=0
+    timeout --kill-after=3s 12s docker logs --since "$log_start" --until "$log_end" --tail 200 "$app_container" \
+      2>&1 | head -c 1048576 > "$private/drain-logs.txt" || log_status=$?
+    jq -Rs --argjson status "$log_status" '
+      {available:($status==0 or $status==141),truncated:(length>=1048576),
+       markers:(["EACCES","ENOSPC","ENOMEM","ECONNRESET","ETIMEDOUT","ERR_STREAM_DESTROYED","uncaughtException","unhandledRejection","start-server process cleanup"] |
+         map(. as $marker | {key:$marker,value:0}) | from_entries)} as $report |
+      . as $text | $report | .markers |= with_entries(.key as $marker | .value=([$text|scan($marker)]|length)) |
+      .stackLocations=([$text|scan("/app/(?:node_modules/next/dist|\\.next/server)/[A-Za-z0-9_./-]+:[0-9]+:[0-9]+")]|unique|.[0:20])
+    ' "$private/drain-logs.txt" > "$private/log-summary.json"
+    jq -s '.[0] + {applicationLogSummary:.[1]}' "$private/release.json" "$private/log-summary.json" > "$private/next.json"
+    mv "$private/next.json" "$private/release.json"
+  fi
 fi
 jq -n --slurpfile containers "$private/containers.json" --slurpfile db "$private/database.json" \
   --slurpfile backup "$private/backup.json" --slurpfile health "$private/health.json" \

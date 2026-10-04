@@ -30,6 +30,9 @@ case "${1:-}" in
     printf '{"ID":"cache-fixture","Size":1000,"Reclaimable":true,"Shared":false,"Description":"must-not-be-exported"}\n' ;;
   version) printf '{"Version":"29.0.0","Private":"must-not-be-exported"}\n' ;;
   info) printf '{"Driver":"overlayfs","DockerRootDir":"/var/lib/docker","Private":"must-not-be-exported"}\n' ;;
+  logs)
+    [[ "$*" == *'--since 2026-10-04T00:00:00Z --until 2026-10-04T00:02:00Z --tail 200'* ]]
+    printf 'private=must-not-be-exported EACCES\nuncaughtException private-command\n  at fn (/app/node_modules/next/dist/server/lib/start-server.js:350:42)\n' ;;
   exec)
     [[ "$*" == *'default_transaction_read_only=on'* && "$*" == *'statement_timeout=5000'* && "$*" == *'lock_timeout=500'* ]]
     sql="$(cat)"
@@ -58,11 +61,12 @@ bash scripts/production-evidence.sh "$EVIDENCE_PROJECT" example.test > "$test_ro
 jq -e '.schemaVersion == 1 and .sharedLock == false and .latestBackup.checksumVerified and (.containers|length)==5 and .database.estimatedRows.User == 10' "$test_root/report.json" >/dev/null
 jq -e '.capacity.buildCache.available and .capacity.buildCache.entries[0].ID == "cache-fixture" and (.capacity.projectImages|length)==1 and .capacity.dockerSpace[0].Reclaimable == "10GB"' "$test_root/report.json" >/dev/null
 mkdir -p "$EVIDENCE_PROJECT/releases/attempts/123-1"
-printf '{"id":"123-1","status":"failed","phase":"drain","migrationsStarted":false,"private":"must-not-be-exported"}\n' > "$EVIDENCE_PROJECT/releases/active.json"
+printf '{"id":"123-1","status":"failed","phase":"drain","startedAt":"2026-10-04T00:00:00Z","updatedAt":"2026-10-04T00:02:00Z","migrationsStarted":false,"private":"must-not-be-exported"}\n' > "$EVIDENCE_PROJECT/releases/active.json"
 printf '{"service":"app","state":{"Status":"exited","ExitCode":137,"OOMKilled":false,"secret":"must-not-be-exported"},"Config":{"Env":["must-not-be-exported"]}}\n' > "$EVIDENCE_PROJECT/releases/attempts/123-1/drain-app.json"
 printf '{"Config":{"Env":["must-not-be-exported"]}}\n' > "$EVIDENCE_PROJECT/releases/attempts/123-1/previous-app.json"
 bash scripts/production-evidence.sh "$EVIDENCE_PROJECT" example.test > "$test_root/report.json"
 jq -e '.latestRelease.available and (.latestRelease.migrationsStarted|not) and .latestRelease.snapshots[0].state.ExitCode==137 and (.containers[0].manualSignalHandler|not)' "$test_root/report.json" >/dev/null
+jq -e '.latestRelease.applicationLogSummary.available and .latestRelease.applicationLogSummary.markers.EACCES==1 and .latestRelease.applicationLogSummary.markers.uncaughtException==1 and .latestRelease.applicationLogSummary.markers.ENOSPC==0 and .latestRelease.applicationLogSummary.stackLocations==["/app/node_modules/next/dist/server/lib/start-server.js:350:42"]' "$test_root/report.json" >/dev/null
 if grep -Eq 'must-not-be-exported|private-command|Config|Env|Cmd' "$test_root/report.json"; then echo 'Private data escaped' >&2; exit 1; fi
 touch "$EVIDENCE_PROJECT/.production.lock"
 bash scripts/production-evidence.sh "$EVIDENCE_PROJECT" example.test | jq -e '.sharedLock == true' >/dev/null

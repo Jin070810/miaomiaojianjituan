@@ -1,0 +1,89 @@
+name: Isolated Production Copy Rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact same-repository candidate SHA with successful complete CI
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Verify candidate provenance and complete CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE" =~ ^[a-f0-9]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$CANDIDATE&status=success&per_page=20" |
+            jq -e --arg sha "$CANDIDATE" --arg repo "$GITHUB_REPOSITORY" \
+              'any(.workflow_runs[]; .head_sha==$sha and .conclusion=="success" and .head_repository.full_name==$repo)' >/dev/null
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          sparse-checkout: prisma
+          persist-credentials: false
+      - name: Prepare schema-only payload
+        run: |
+          set -euo pipefail
+          test -z "$(find candidate/prisma -type l -print -quit)"
+          mkdir -p output/copy-payload output/copy-result
+          cp -R candidate/prisma output/copy-payload/prisma
+          # Seed scripts/application code are not needed or executed.
+          find output/copy-payload/prisma -maxdepth 1 -type f ! -name schema.prisma -delete
+          cp scripts/production-copy-rehearsal.sh scripts/sanitize-rehearsal.sql scripts/rehearsal-aggregate.sql output/copy-payload/
+          tar -C output/copy-payload -czf output/copy-payload.tar.gz .
+      - name: Configure existing production connection
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          timeout 20 ssh-keyscan -T 10 -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+          printf '%s\n' 'Host *' '  BatchMode yes' '  ConnectTimeout 10' '  ServerAliveInterval 15' '  ServerAliveCountMax 3' > "$HOME/.ssh/config"
+      - name: Restore, sanitize and migrate only the isolated copy
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          CANDIDATE: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_PATH"
+          test -n "$PRODUCTION_USER"
+          receiver='set -euo pipefail; umask 077; payload=$(mktemp -d /tmp/miaomiao-copy-payload.XXXXXX); trap '\''rm -rf -- "$payload"'\'' EXIT; tar --no-same-owner --no-same-permissions -xzf - -C "$payload"; timeout --signal=TERM --kill-after=20s 12m bash "$payload/production-copy-rehearsal.sh" "$1" "$payload" "$2" "$3" "$4"'
+          remote="$(printf 'bash -c %q -- %q %q %q %q' "$receiver" "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN" "$CANDIDATE" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
+          timeout --signal=TERM --kill-after=30s 14m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" \
+            < output/copy-payload.tar.gz > output/copy-result/report.json
+          jq -e --arg sha "$CANDIDATE" '.qualified==true and .candidateCommit==$sha and .rawDataExported==false' output/copy-result/report.json >/dev/null
+      - name: Retain only aggregate evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-copy-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/copy-result/report.json
+          if-no-files-found: error
+          retention-days: 90

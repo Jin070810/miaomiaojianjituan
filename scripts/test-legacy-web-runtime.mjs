@@ -16,7 +16,9 @@ try {
     let responses = 0, failedRequests = 0, serverErrors = 0;
     page.on('response', response => { responses++; if (response.status() >= 500) serverErrors++; });
     page.on('requestfailed', () => failedRequests++);
-    const response = await page.goto('http://app:3000/login', { waitUntil: 'networkidle', timeout: 30_000 });
+    // Shares the isolated App network namespace. Loopback avoids Chromium's
+    // HTTPS upgrade of the single-label Docker alias "app" (.app HSTS).
+    const response = await page.goto('http://127.0.0.1:3000/login', { waitUntil: 'networkidle', timeout: 30_000 });
     assert.equal(response.status(), 200);
     results.push({ viewport, status: response.status(), responses, failedRequests, serverErrors });
     await context.close();

@@ -92,7 +92,7 @@ jq '{ok,database,redis,worker,appCommit:.app.commit,workerCommit:.workerVersion.
 # Exercise a fully loaded page before shutdown, not only an untouched server.
 checkpoint production_order_web_drain
 internal_private="/tmp/$(basename "$private")"
-docker run --rm --name "$prefix-request" --network "$prefix" -e CI=true -e RUNNER_TEMP=/tmp \
+docker run --rm --name "$prefix-request" --network "container:$prefix-app" -e CI=true -e RUNNER_TEMP=/tmp \
   -e LEGACY_INTERNAL_NETWORK=true --mount "type=bind,source=$private,target=$internal_private" \
   --mount "type=bind,source=$(pwd)/scripts/test-legacy-web-runtime.mjs,target=/app/test-legacy-web-runtime.mjs,readonly" \
   "$worker_ref" node /app/test-legacy-web-runtime.mjs "$internal_private"

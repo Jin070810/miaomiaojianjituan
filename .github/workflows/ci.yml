@@ -85,6 +85,7 @@ jobs:
           cache-to: type=gha,mode=max
       - run: docker run --rm --entrypoint sh miaomiao-points-worker:ci -c "test -f scripts/seed-admin.ts && test -f scripts/reconcile-data.ts && test -f scripts/ops-daily-check.ts && test -f scripts/upload-oss-backup.ts && test -f scripts/download-oss-backup.ts"
       - run: bash scripts/test-pull-release-images.sh
+      - run: bash scripts/test-production-evidence.sh
 
   e2e:
     needs: core

@@ -1,0 +1,59 @@
+name: Production Readiness Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-readiness-evidence
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Configure existing deployment connection
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          timeout 20 ssh-keyscan -T 10 -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+          printf '%s\n' 'Host *' '  BatchMode yes' '  ConnectTimeout 10' '  ServerAliveInterval 15' '  ServerAliveCountMax 3' > "$HOME/.ssh/config"
+          chmod 600 "$HOME/.ssh/config"
+      - name: Read bounded sanitized production evidence
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_PATH"
+          test -n "$PRODUCTION_USER"
+          mkdir -p output/production-evidence
+          remote="$(printf 'timeout --signal=TERM --kill-after=10s 5m bash -s -- %q %q' "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN")"
+          # Private SSH key stays in the runner. Remote stdout is whitelisted
+          # metadata; never transfer DB dumps, .env files or account records.
+          timeout --signal=TERM --kill-after=10s 6m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" \
+            < scripts/production-evidence.sh > output/production-evidence/report.json
+          jq -e '.schemaVersion == 1 and .latestBackup.checksumVerified == true' output/production-evidence/report.json >/dev/null
+      - name: Retain only the successful sanitized report
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-readiness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/production-evidence/report.json
+          if-no-files-found: error
+          retention-days: 30

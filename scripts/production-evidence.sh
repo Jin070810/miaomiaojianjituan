@@ -22,7 +22,11 @@ for service in app worker postgres redis nginx; do
   timeout 10 docker inspect "$id" | jq --arg service "$service" \
     '.[0] | {service:$service,imageId:.Image,revision:.Config.Labels["org.opencontainers.image.revision"],
       state:.State.Status,health:(.State.Health.Status // null),oom:.State.OOMKilled,
-      memoryLimitBytes:.HostConfig.Memory,startedAt:.State.StartedAt}' > "$private/container.json"
+      memoryLimitBytes:.HostConfig.Memory,startedAt:.State.StartedAt,restartCount:.RestartCount,
+      initEnabled:(.HostConfig.Init // false),
+      stopSignal:(.Config.StopSignal // "SIGTERM" | if test("^(SIG[A-Z0-9]+|[0-9]+)$") then . else "custom" end),
+      manualSignalHandler:any(.Config.Env[]?; startswith("NEXT_MANUAL_SIG_HANDLE=") and (ltrimstr("NEXT_MANUAL_SIG_HANDLE=")|length>0)),
+      customNodeOptions:any(.Config.Env[]?; startswith("NODE_OPTIONS=") and (ltrimstr("NODE_OPTIONS=")|length>0))}' > "$private/container.json"
   image_id="$(jq -r .imageId "$private/container.json")"
   timeout 10 docker image inspect "$image_id" | jq '.[0] | {sizeBytes:.Size,
     registryDigests:[.RepoDigests[]? | select(test("^(ghcr.io/jin070810/miaomiaojianjituan-(app|worker)|postgres|redis|nginx)@sha256:[a-f0-9]{64}$"))]}' > "$private/image.json"
@@ -90,15 +94,36 @@ curl --fail --silent --connect-timeout 3 --max-time 15 "https://$domain/api/heal
   '{ok,database,redis,worker,appCommit:.app.commit,workerCommit:.workerVersion.commit}' > "$private/health.json"
 available_memory="$(awk '/^MemAvailable:/ {print $2 * 1024}' /proc/meminfo)"
 disk_available="$(df -B1 --output=avail . | tail -n 1 | tr -d ' ')"
+# Capture only the already-whitelisted lifecycle snapshots of the latest attempt.
+# Never copy previous-*.json: those contain full Docker configuration and secrets.
+printf '{"available":false}\n' > "$private/release.json"
+if [[ -f releases/active.json ]]; then
+  [[ ! -L releases/active.json && "$(stat -c %s releases/active.json)" -le 16384 ]]
+  release_id="$(jq -er '.id | select(test("^[1-9][0-9]*-[1-9][0-9]*$"))' releases/active.json)"
+  attempt_dir="$(realpath -e "releases/attempts/$release_id")"
+  [[ "$attempt_dir" == "$root/releases/attempts/$release_id" ]]
+  jq '{available:true,id,commit,previousCommit,status,phase,startedAt,updatedAt,exitCode,migrationsStarted,maintenanceEngaged,snapshots:[]}' \
+    releases/active.json > "$private/release.json"
+  for name in drain-app.json.before drain-app.json drain-worker.json.before drain-worker.json recovery-app.json recovery-worker.json; do
+    file="$attempt_dir/$name"
+    [[ -e "$file" ]] || continue
+    [[ -f "$file" && ! -L "$file" && "$(stat -c %s "$file")" -le 16384 ]]
+    jq --arg name "$name" '{name:$name,id,image,service,revision,state:(.state|{Status,Running,Restarting,Paused,OOMKilled,ExitCode,StartedAt,FinishedAt})}' \
+      "$file" > "$private/snapshot.json"
+    jq -s '.[0] + {snapshots:(.[0].snapshots + [.[1]])}' "$private/release.json" "$private/snapshot.json" > "$private/next.json"
+    mv "$private/next.json" "$private/release.json"
+  done
+fi
 jq -n --slurpfile containers "$private/containers.json" --slurpfile db "$private/database.json" \
   --slurpfile backup "$private/backup.json" --slurpfile health "$private/health.json" \
   --slurpfile dockerSpace "$private/docker-space.json" --slurpfile dockerVersion "$private/docker-version.json" \
   --slurpfile dockerStorage "$private/docker-storage.json" --slurpfile projectImages "$private/project-images.json" \
   --slurpfile buildCache "$private/build-cache.json" --slurpfile directories "$private/directories.json" --slurpfile filesystem "$private/filesystem.json" \
+  --slurpfile release "$private/release.json" \
   --arg at "$(date -u +%FT%TZ)" --arg source "$(git rev-parse HEAD)" --argjson locked "$locked" \
   --argjson availableMemoryBytes "$available_memory" --argjson availableDiskBytes "$disk_available" \
   '{schemaVersion:1,checkedAt:$at,sourceCommit:$source,sharedLock:$locked,
     resources:{availableMemoryBytes:$availableMemoryBytes,availableDiskBytes:$availableDiskBytes},
-    containers:$containers[0],database:$db[0],latestBackup:$backup[0],health:$health[0],
+    containers:$containers[0],database:$db[0],latestBackup:$backup[0],health:$health[0],latestRelease:$release[0],
     capacity:{filesystem:$filesystem[0],dockerSpace:$dockerSpace[0],dockerVersion:$dockerVersion[0],dockerStorage:$dockerStorage[0],
       projectImages:$projectImages[0],buildCache:$buildCache[0],directories:$directories[0]}}'

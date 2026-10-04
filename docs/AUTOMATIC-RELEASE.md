@@ -27,6 +27,12 @@ main CI 在验签、候选 artifact 留存之后显式 dispatch `Deploy Producti
 
 发布端允许 CI 做最后清理，最多补读十次完成状态，再用已认证 API 验证 CI 必须 completed/success、精确 attempt、仓库、workflow 和 SHA；不能仅凭发布 job 自己成功就切换。只有 main publish 获得交接所需 actions:write，PR 不获得该权限。过时 main 候选会在计划阶段及取得部署并发锁后跳过。自动分配最大规范 SemVer 的下一个 patch；同 SHA 重试复用已有唯一 tag，标签竞争时核对目标，不重写标签。主机仍按签名 digest 拉取，执行已有预检、排空、备份、迁移和健康门禁。
 
+## 浏览器验收的后台任务隔离
+
+完整 E2E 保持候选 Web/Worker 运行，但在全局 setup 中暂停独立测试 Redis 的 `weekly-challenges` 队列，并最多等待 15 秒让已有任务结束；整个浏览器矩阵完成后恢复原暂停状态。视频队列、Worker 心跳及其他维护继续运行，生产代码和周日 18 点生成、周一补跑规则不变。仅允许显式 `PLAYWRIGHT_ISOLATED_SERVICES=1`、本机测试数据库（必须指定 schema）与独立本机 Redis；本地执行 E2E 也须配置这些测试服务。不得指向生产转发端口或共享 Redis。
+
+实际 main CI `37193998034` 在周日 18 点后被此竞态拦住：后台重试把 E2E 的下周 FAILED 周期改为 READY 并改写 model，原清理条件遗漏该行，后续 fixture 创建相同 periodStart 触发唯一约束。真实 BullMQ/PostgreSQL 回归同时复现旧失败和验证暂停期间样例不变、恢复后任务正常执行；未删除唯一约束、关闭 Worker 或跳过浏览器验收。队列隔离只服务于人工构造的 UI 状态，生成和恢复业务仍由集成测试及 staging 生命周期验收覆盖。
+
 ## 发布后观察
 
 签名验证后先运行[镜像保留与容量检查](PRODUCTION-IMAGE-RETENTION.md)。可用空间达到 6 GiB 就直接继续；不足时仅清理超过 14 天、远程 digest 已验证可恢复且未受保留规则保护的项目镜像。无法恢复足够空间时停止，不删除数据库卷或备份，不需要所有者逐次审核。

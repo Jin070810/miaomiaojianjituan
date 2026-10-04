@@ -24,7 +24,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     const updated = await prepareVideoReprocess({ videoId: id, actorId: admin.id, ip: getClientIp(request) });
     try {
-      await enqueueVideo(id);
+      await enqueueVideo(id, { retryFailed: true });
     } catch (error) {
       await db.$transaction(async (tx) => {
         await tx.videoSubmission.updateMany({

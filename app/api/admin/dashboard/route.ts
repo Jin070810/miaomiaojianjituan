@@ -1,3 +1,4 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -24,14 +25,13 @@ function shanghaiDayLabel(value: Date) {
   return `${parts.find((part) => part.type === "month")?.value ?? ""}/${parts.find((part) => part.type === "day")?.value ?? ""}`;
 }
 
-export async function GET() {
+async function handleGET() {
   try {
     await requireAdmin();
     const trendStart = new Date(Date.now() - 6 * 86_400_000);
-    const [users, pendingAppeals, pendingSecondaryReviews, gifts, pendingOrders, recentAudit, accounts, recentVideos, memberGrowth] = await Promise.all([
+    const [users, pendingAppeals, gifts, pendingOrders, recentAudit, accounts, recentVideos, memberGrowth] = await Promise.all([
       db.user.count(),
       db.videoAppeal.count({ where: { status: "PENDING" } }),
-      db.videoSecondaryReview.count({ where: { status: "PENDING" } }),
       db.gift.count({ where: { active: true } }),
       db.redemptionOrder.count({ where: { status: { in: ["PENDING", "APPROVED"] } } }),
       db.auditLog.findMany({
@@ -67,9 +67,9 @@ export async function GET() {
     return NextResponse.json({
       metrics: {
         users,
-        pendingVideos: pendingAppeals + pendingSecondaryReviews,
+        pendingVideos: pendingAppeals,
         pendingAppeals,
-        pendingSecondaryReviews,
+        pendingSecondaryReviews: 0, // Compatibility for older dashboards; archived rows are not work items.
         activeGifts: gifts,
         pendingOrders,
         totalBalance: accounts._sum.balance ?? 0,
@@ -83,3 +83,5 @@ export async function GET() {
     return NextResponse.json({ error: error instanceof Error ? error.message : "无权访问" }, { status: 403 });
   }
 }
+
+export const GET = observeApi("admin_dashboard_get", handleGET);

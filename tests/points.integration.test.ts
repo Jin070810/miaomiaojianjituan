@@ -86,125 +86,53 @@ describe.skipIf(!enabled)("积分事务并发", () => {
     ]);
     expect(await db.pointLedger.count({ where: { referenceId: video.id } })).toBe(1);
     const review = await db.videoSecondaryReview.findUnique({ where: { videoId: video.id } });
-    expect(review?.status).toBe("PENDING");
-    expect([reviewerAId, reviewerBId]).toContain(review?.reviewerId);
+    expect(review).toBeNull();
     expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(50);
   });
 
-  it("balances new secondary reviews across active reviewers", async () => {
-    await db.videoSecondaryReview.deleteMany({ where: { video: { userId: senderId } } });
-    await db.user.updateMany({ where: { id: { in: [reviewerAId, reviewerBId] } }, data: { active: true } });
-    const videos = await Promise.all(Array.from({ length: 3 }, (_, index) => db.videoSubmission.create({
-      data: {
-        userId: senderId,
-        sourceUrl: `https://v.kuaishou.com/secondary-balance-${index}`,
-        requestUrl: `https://v.kuaishou.com/secondary-balance-${index}`,
-        sourceKind: "short-link",
-        submittedNickname: "测试转出",
-        idempotencyKey: `integration-secondary-balance-${Date.now()}-${index}`,
-      },
-    })));
-    for (const video of videos) {
-      await creditVideoReward({ videoId: video.id, userId: senderId, points: 50 });
-    }
-    const reviews = await db.videoSecondaryReview.findMany({ where: { videoId: { in: videos.map((video) => video.id) } }, orderBy: { createdAt: "asc" } });
-    const counts = reviews.reduce((map, review) => map.set(review.reviewerId ?? "", (map.get(review.reviewerId ?? "") ?? 0) + 1), new Map<string, number>());
-    expect(reviews).toHaveLength(3);
-    expect(reviews[0].reviewerId).not.toBeNull();
-    expect(reviews[1].reviewerId).not.toBe(reviews[0].reviewerId);
-    expect(Math.abs((counts.get(reviewerAId) ?? 0) - (counts.get(reviewerBId) ?? 0))).toBeLessThanOrEqual(1);
+  it("automatically credits reviewer submissions without creating self-review tasks", async () => {
+    const video = await db.videoSubmission.create({ data: {
+      userId: reviewerAId, sourceUrl: "https://v.kuaishou.com/auto-only", requestUrl: "https://v.kuaishou.com/auto-only",
+      sourceKind: "short-link", submittedNickname: "审核员甲", idempotencyKey: `auto-only-${Date.now()}`,
+    } });
+    await creditVideoReward({ videoId: video.id, userId: reviewerAId, points: 60 });
+    expect(await db.videoSecondaryReview.count({ where: { videoId: video.id } })).toBe(0);
+    expect(await db.videoSubmission.findUniqueOrThrow({ where: { id: video.id } })).toMatchObject({ status: "APPROVED", points: 60 });
+    expect(await db.pointLedger.count({ where: { referenceId: video.id, type: "VIDEO_REWARD" } })).toBe(1);
   });
 
-  it("leaves secondary reviews unassigned when no reviewer is active and lets admins process them", async () => {
-    const activeReviewers = await db.user.findMany({ where: { role: "REVIEWER", active: true }, select: { id: true } });
-    await db.user.updateMany({ where: { role: "REVIEWER", active: true }, data: { active: false } });
-    try {
-      const video = await db.videoSubmission.create({
-        data: {
-          userId: senderId,
-          sourceUrl: "https://v.kuaishou.com/secondary-unassigned",
-          requestUrl: "https://v.kuaishou.com/secondary-unassigned",
-          sourceKind: "short-link",
-          submittedNickname: "测试转出",
-          idempotencyKey: `integration-secondary-unassigned-${Date.now()}`,
-        },
-      });
-      await creditVideoReward({ videoId: video.id, userId: senderId, points: 60 });
-      const review = await db.videoSecondaryReview.findUniqueOrThrow({ where: { videoId: video.id } });
-      expect(review.reviewerId).toBeNull();
-      const resolved = await resolveVideoSecondaryReview({ reviewId: review.id, action: "approve", actorId: adminId, actorRole: "ADMIN" });
-      expect(resolved.status).toBe("APPROVED");
-    } finally {
-      if (activeReviewers.length > 0) {
-        await db.user.updateMany({ where: { id: { in: activeReviewers.map((reviewer) => reviewer.id) } }, data: { active: true } });
+  it("rejects all legacy secondary-review writes without altering historical tasks, points or audit", async () => {
+    const video = await db.videoSubmission.create({ data: {
+      userId: reviewerAId, sourceUrl: "https://v.kuaishou.com/legacy-review", requestUrl: "https://v.kuaishou.com/legacy-review",
+      sourceKind: "short-link", submittedNickname: "审核员甲", status: "APPROVED", points: 80, idempotencyKey: `legacy-review-${Date.now()}`,
+    } });
+    const review = await db.videoSecondaryReview.create({ data: { videoId: video.id, reviewerId: reviewerAId } });
+    const balance = await db.pointAccount.findUniqueOrThrow({ where: { userId: reviewerAId } });
+    for (const actor of [{ id: adminId, role: "ADMIN" as const }, { id: reviewerAId, role: "REVIEWER" as const }, { id: reviewerBId, role: "REVIEWER" as const }]) {
+      for (const action of ["approve", "reject"] as const) {
+        await expect(resolveVideoSecondaryReview({ reviewId: review.id, actorId: actor.id, actorRole: actor.role, action, reason: "旧入口请求" }))
+          .rejects.toMatchObject({ name: "SecondaryReviewRetiredError" });
       }
     }
+    expect(await db.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } })).toEqual(review);
+    expect(await db.videoSubmission.findUniqueOrThrow({ where: { id: video.id } })).toEqual(video);
+    expect((await db.pointAccount.findUniqueOrThrow({ where: { userId: reviewerAId } })).balance).toBe(balance.balance);
+    expect(await db.auditLog.count({ where: { entityId: review.id } })).toBe(0);
   });
 
-  it("approves secondary reviews without changing points", async () => {
-    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
-    const video = await db.videoSubmission.create({
-      data: {
-        userId: senderId,
-        sourceUrl: "https://v.kuaishou.com/secondary-approve",
-        requestUrl: "https://v.kuaishou.com/secondary-approve",
-        sourceKind: "short-link",
-        submittedNickname: "测试转出",
-        idempotencyKey: `integration-secondary-approve-${Date.now()}`,
-      },
-    });
-    await creditVideoReward({ videoId: video.id, userId: senderId, points: 80 });
-    const review = await db.videoSecondaryReview.findUniqueOrThrow({ where: { videoId: video.id } });
-    const updated = await resolveVideoSecondaryReview({ reviewId: review.id, action: "approve", actorId: review.reviewerId!, actorRole: "REVIEWER" });
-    expect(updated.status).toBe("APPROVED");
-    expect(await db.videoSubmission.findUnique({ where: { id: video.id } }).then((item) => item?.status)).toBe("APPROVED");
-    expect(await db.pointLedger.count({ where: { referenceId: video.id, type: "REVERSAL" } })).toBe(0);
-    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(80);
-  });
-
-  it("rejects secondary reviews transactionally and reverses points only once", async () => {
-    await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
-    const video = await db.videoSubmission.create({
-      data: {
-        userId: senderId,
-        sourceUrl: "https://v.kuaishou.com/secondary-reject",
-        requestUrl: "https://v.kuaishou.com/secondary-reject",
-        sourceKind: "short-link",
-        submittedNickname: "测试转出",
-        idempotencyKey: `integration-secondary-reject-${Date.now()}`,
-      },
-    });
+  it("preserves historical reviews when an administrator revokes an already credited video", async () => {
+    const video = await db.videoSubmission.create({ data: {
+      userId: senderId, sourceUrl: "https://v.kuaishou.com/historical-revoke", requestUrl: "https://v.kuaishou.com/historical-revoke",
+      sourceKind: "short-link", submittedNickname: "测试转出", idempotencyKey: `historical-revoke-${Date.now()}`,
+    } });
     await creditVideoReward({ videoId: video.id, userId: senderId, points: 90 });
+    const review = await db.videoSecondaryReview.upsert({ where: { videoId: video.id }, create: { videoId: video.id, reviewerId: reviewerAId }, update: {} });
     await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
-    const review = await db.videoSecondaryReview.findUniqueOrThrow({ where: { videoId: video.id } });
-    await Promise.all([
-      resolveVideoSecondaryReview({ reviewId: review.id, action: "reject", actorId: review.reviewerId!, actorRole: "REVIEWER", reason: "二审发现内容不符合规则" }),
-      resolveVideoSecondaryReview({ reviewId: review.id, action: "reject", actorId: review.reviewerId!, actorRole: "REVIEWER", reason: "二审发现内容不符合规则" }),
-    ]);
-    expect(await db.videoSubmission.findUnique({ where: { id: video.id } }).then((item) => item?.status)).toBe("REVOKED");
-    expect(await db.videoSecondaryReview.findUnique({ where: { id: review.id } }).then((item) => item?.status)).toBe("REJECTED");
+    await Promise.all([0, 1].map(() => revokeVideoReward({ videoId: video.id, actorId: adminId, reason: "积分纠错撤销" })));
+    expect(await db.videoSecondaryReview.findUniqueOrThrow({ where: { id: review.id } })).toEqual(review);
     expect(await db.pointLedger.count({ where: { referenceId: video.id, type: "REVERSAL" } })).toBe(1);
-    expect(await db.auditLog.count({ where: { action: "VIDEO_SECONDARY_REJECTED", entityId: review.id } })).toBe(1);
-    expect(await db.pointAccount.findUnique({ where: { userId: senderId } }).then((account) => account?.balance)).toBe(-90);
+    expect((await db.pointAccount.findUniqueOrThrow({ where: { userId: senderId } })).balance).toBe(-90);
   });
-
-  it("blocks reviewers from processing secondary reviews assigned to others", async () => {
-    const video = await db.videoSubmission.create({
-      data: {
-        userId: senderId,
-        sourceUrl: "https://v.kuaishou.com/secondary-forbidden",
-        requestUrl: "https://v.kuaishou.com/secondary-forbidden",
-        sourceKind: "short-link",
-        submittedNickname: "测试转出",
-        idempotencyKey: `integration-secondary-forbidden-${Date.now()}`,
-      },
-    });
-    await creditVideoReward({ videoId: video.id, userId: senderId, points: 70 });
-    const review = await db.videoSecondaryReview.findUniqueOrThrow({ where: { videoId: video.id } });
-    const otherReviewerId = review.reviewerId === reviewerAId ? reviewerBId : reviewerAId;
-    await expect(resolveVideoSecondaryReview({ reviewId: review.id, action: "approve", actorId: otherReviewerId, actorRole: "REVIEWER" })).rejects.toThrow("无权处理该二次审核任务");
-  });
-
   it("reviews an appeal transactionally and credits only once under concurrency", async () => {
     await db.pointAccount.update({ where: { userId: senderId }, data: { balance: 0 } });
     const video = await db.videoSubmission.create({

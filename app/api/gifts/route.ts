@@ -1,18 +1,15 @@
+import { observeApi } from "@/lib/observe-api";
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { z } from "zod";
+import { getPublicGiftCatalog } from "@/lib/gift-catalog";
 
-export async function GET() {
-  const [gifts, sales] = await Promise.all([
-    db.gift.findMany({
-      where: { active: true, deletedAt: null },
-      orderBy: [{ pinned: "desc" }, { displayOrder: "asc" }, { createdAt: "desc" }, { id: "asc" }],
-    }),
-    db.redemptionOrder.groupBy({
-      by: ["giftId"],
-      where: { status: { notIn: ["REJECTED", "REFUNDED"] } },
-      _sum: { quantity: true },
-    }),
-  ]);
-  const salesByGiftId = new Map(sales.map((row) => [row.giftId, row._sum.quantity ?? 0]));
-  return NextResponse.json({ gifts: gifts.map((gift) => ({ ...gift, salesCount: salesByGiftId.get(gift.id) ?? 0 })) });
+async function handleGET(request: Request) {
+  try {
+    return NextResponse.json(await getPublicGiftCatalog(new URL(request.url)), { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    if (error instanceof z.ZodError) return NextResponse.json({ error: "礼品分页或筛选参数不正确" }, { status: 400, headers: { "Cache-Control": "no-store" } });
+    throw error;
+  }
 }
+
+export const GET = observeApi("gifts_get", handleGET);

@@ -45,6 +45,7 @@ services:
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-miaomiao}?schema=public}
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
       SESSION_SECRET: ${SESSION_SECRET}
@@ -73,10 +74,11 @@ services:
       # 正式环境由 Nginx 反向代理，应用端口不直接对公网开放。
       - "127.0.0.1:3000:3000"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      test: ["CMD", "wget", "-qO-", "-T", "4", "-t", "1", "http://127.0.0.1:3000/api/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *default-logging
@@ -134,7 +136,7 @@ services:
     volumes:
       - ./backups:/app/backups
     healthcheck:
-      # 复用 worker 写入 Redis 的心跳 key，假死由 restart 策略自动恢复。
+      # 检查当前实例；独立 supervisor 在事件循环假死时退出，交由 restart 恢复。
       test: ["CMD", "node", "scripts/worker-healthcheck.js"]
       interval: 30s
       timeout: 10s

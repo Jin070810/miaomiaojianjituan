@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
 import { AVATAR_SIZE, compressAvatar, MAX_AVATAR_UPLOAD_BYTES } from "@/lib/avatar";
 import { db } from "@/lib/db";
+import { publicAvatarUrl } from "@/lib/public-images";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { assertSameOrigin, getClientIp, rateLimitResponse } from "@/lib/security";
 
@@ -34,7 +35,7 @@ async function saveAvatar(request: Request, userId: string) {
     });
     return saved;
   });
-  return { avatarUrl: updated.avatarUrl };
+  return { avatarUrl: publicAvatarUrl(updated) };
 }
 
 export async function POST(request: Request) {

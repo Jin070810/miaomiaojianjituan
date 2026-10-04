@@ -1,0 +1,44 @@
+# 自动合并与发版
+
+所有者于 2026-10-04 明确要求继续实施，并将今后发布改为全自动、无需其审核。这是持续授权，替代原先每次 PR 自审确认和部署批准要求；不需要机器人伪造人的审查记录。业务中的成员申诉、账号核验和破坏性数据库恢复不因此变成自动批准。
+
+## 日常路径
+
+```mermaid
+flowchart LR
+  A[可信写入者的就绪 PR] --> B[最新 core / staging 成功]
+  B --> C[保护分支 squash 合并]
+  C --> D[显式触发 main CI]
+  D --> E[原镜像验收 / 签名]
+  E --> F[自动版本 / 串行部署]
+  F --> G[入口开放 / 发布记录]
+  G --> H[独立 30 分钟观察 / 前后对账]
+```
+
+`Automatic Integration` 只处理当前仓库、main 目标、规定分支前缀、非 Draft、作者具有 write/maintain/admin 权限的 PR。Draft 是尚未完成开发或验收的状态，由开发代理在完成后设为就绪，不要求所有者点击。来自 fork 或只读贡献者的 PR 不进入这个具有写权限的自动化入口。
+
+控制器从可信 workflow commit 检出，不运行 PR 内容。合并使用精确 head SHA 与服务端保护规则；遇到分支落后时先更新分支，再验证新 SHA。机器人不绕过 core/staging、不添加虚构 approval、不强推 main。失败 CI 不自动反复重跑；应修复后再产生新提交。
+
+GitHub 对 `GITHUB_TOKEN` 产生的事件有递归限制，不能假设机器人合并会自然触发 push CI。控制器显式 dispatch main CI；对 token 产生的待批准 PR CI，则 dispatch 精确 PR 分支，并验证 PR 编号、当前 SHA 和来源。每小时 17/47 分的轻量调度只弥补漏触发，不定时重建相同成功版本。main 的显式 CI 与 main push 适用同一签名和发布规则，PR dispatch 不能发布镜像。
+
+`Deploy Production` 接收成功 main CI 的 workflow_run，用已认证 API 重新验证 run/attempt、仓库、workflow 和 SHA。过时 main 候选会在计划阶段及取得部署并发锁后跳过。自动分配最大规范 SemVer 的下一个 patch；同 SHA 重试复用已有唯一 tag，标签竞争时核对目标，不重写标签。主机仍按签名 digest 拉取，执行已有预检、排空、备份、迁移和健康门禁。
+
+## 发布后观察
+
+部署 job 完成并记录 GitHub Release 后，观察 job 独立运行，不占用 production 部署并发组。每 30 秒在主机共享锁内检查本地/TLS 健康、App/Worker 精确版本、登录页 200；开始和结束各执行一次只读积分对账。对账原始行仅进入主机临时私有文件，结束即删除，artifact 只有状态和时间，不上传账户、备份、密钥或原始日志。
+
+观察要求连续健康至少 30 分钟；短暂故障或维护锁会重置健康时窗，3 次连续失败即失败，总时长上限 65 分钟。另一个受主机锁保护的部署接替后，旧观察标记 superseded，不干预新版本、不宣称旧版完成观察。观察失败使 Actions 失败并保留证据，现有运维告警继续工作；不凭健康探针失败自动回退数据库。
+
+GitHub Release 包含 commit、CI run/attempt、App/Worker digest、migration 数量、执行者、时间、原版本和证据链接。观察只更新属于同部署 ID 的记录，不覆盖同版本较新重发的结论。发布仍在观察中、观察失败或被接替都不算完整验收通过。RUM/API p95、队列与资源趋势另见性能观测面板，不能把合成探针当成真实用户性能数据。
+
+## 平台设置与失败处理
+
+- main：PR 必需、批准数 0、core/staging 必需且绑定 GitHub Actions、strict、管理员同样受约束、只允许 squash、禁止强推和删除。
+- production Environment：只允许精确 main，无 required reviewers，无人工等待计时器；保留现有密钥。
+- workflow_dispatch 仅用于有明确版本依据的故障恢复/归档重发。没有日常人工确认项；重置管理员、放宽失败前置健康或延期告警仍是有技术含义的显式参数，不是审查按钮。
+- 迁移开始前失败按旧容器和健康证据恢复；迁移后失败保留维护入口与证据，采用兼容的前向修复。自动化不能使不兼容的历史镜像安全回滚。
+- 首次全量整改仍要完成脱敏生产副本 migration 演练和原 v1.11 镜像资格验证。平台爬取沿用生产实现，新增 UID 绑定已移出本次范围，不再要求其真实样本作为本次发布门槛。它们是技术证据，不再要求所有者审核；缺证据的整合 PR 保持 Draft。
+
+当前实现验证结果写入 PR。合并前只表示候选代码完成，不能宣称此工作流已经在生产运行。
+
+依据：[GitHub 事件触发与 GITHUB_TOKEN 限制](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)、[受保护分支合并 API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request)、[workflow_run 信任边界](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)。

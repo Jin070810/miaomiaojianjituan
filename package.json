@@ -10,6 +10,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
+    "db:check-drift": "prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code",
     "feishu:inspect": "tsx scripts/inspect-feishu.ts",
     "feishu:migrate": "tsx scripts/migrate-feishu.ts",
     "feishu:gifts": "tsx scripts/migrate-feishu-gift-assets.ts",
@@ -17,9 +18,10 @@
     "video:audit-approved": "tsx scripts/audit-approved-videos.ts",
     "video:probe-recovery": "tsx scripts/probe-fetch-recovery.ts",
     "data:reconcile": "tsx scripts/reconcile-data.ts",
+    "growth:rebuild": "tsx scripts/rebuild-member-achievements.ts",
     "smoke:concurrency": "tsx scripts/smoke-concurrency.ts",
     "seed:admin": "tsx scripts/seed-admin.ts",
-    "worker": "tsx worker.ts",
+    "worker": "node scripts/worker-supervisor.js",
     "weekly:shadow": "tsx scripts/weekly-challenge-shadow.ts",
     "redemption:reconcile": "tsx scripts/reconcile-redemption-orders.ts",
     "ops:daily-check": "tsx scripts/ops-daily-check.ts",
@@ -31,8 +33,6 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@fontsource-variable/noto-sans-sc": "^5.3.0",
-    "@fontsource/noto-serif-sc": "^5.3.0",
     "@phosphor-icons/react": "^2.1.10",
     "@prisma/client": "^6.8.2",
     "ali-oss": "^6.23.0",
@@ -60,7 +60,8 @@
     "prisma": "^6.8.2",
     "tsx": "^4.19.4",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.4"
+    "vitest": "4.1.11",
+    "vite": "7.3.6"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.0",

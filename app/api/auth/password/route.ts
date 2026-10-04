@@ -17,7 +17,9 @@ export async function POST(request: Request) {
     if (!user) return NextResponse.json({ error: "请先登录" }, { status: 401 });
     await enforceRateLimit(`password-change:${user.id}`, 5, 3600);
     const input = schema.parse(await request.json());
-    if (!(await verifyPassword(user.passwordHash, input.currentPassword))) {
+    const credential = await db.user.findFirst({ where: { id: user.id, active: true }, select: { passwordHash: true } });
+    if (!credential) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    if (!(await verifyPassword(credential.passwordHash, input.currentPassword))) {
       return NextResponse.json({ error: "当前密码不正确" }, { status: 400 });
     }
     if (input.currentPassword === input.newPassword) {

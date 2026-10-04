@@ -3,6 +3,7 @@ import { db } from "./db";
 import { memberParticipantRoles } from "./member-roles";
 import { createNotification } from "./notifications";
 import { periodBounds } from "./rankings";
+import { consecutiveMonthKeys, readAchievementMetrics } from "./member-achievement-metrics";
 
 type Transaction = Prisma.TransactionClient;
 type ApprovedVideo = { id: string; submittedAt: Date; likes: number | null; views: number | null; commentCount: number | null };
@@ -50,18 +51,7 @@ function shanghaiMonthKey(value: Date) {
 }
 
 export function countConsecutiveActiveMonths(videos: ApprovedVideo[]) {
-  const keys = [...new Set(videos.map((video) => shanghaiMonthKey(video.submittedAt)))].sort();
-  let best = 0;
-  let current = 0;
-  let previous: Date | null = null;
-  for (const key of keys) {
-    const [year, month] = key.split("-").map(Number);
-    const value = new Date(Date.UTC(year, month - 1, 1));
-    current = previous && value.getUTCFullYear() * 12 + value.getUTCMonth() === previous.getUTCFullYear() * 12 + previous.getUTCMonth() + 1 ? current + 1 : 1;
-    best = Math.max(best, current);
-    previous = value;
-  }
-  return best;
+  return consecutiveMonthKeys(videos.map((video) => shanghaiMonthKey(video.submittedAt)));
 }
 
 export function calculateMonthlyGoalTargets(videos: ApprovedVideo[], monthStart: Date) {
@@ -85,32 +75,27 @@ async function approvedVideosFor(tx: Transaction, userId: string) {
   });
 }
 
-async function ensureMonthlyGoal(tx: Transaction, userId: string, videos: ApprovedVideo[], reference: Date) {
-  const monthStart = periodBounds("month", reference).start;
-  // 并发补齐（dev StrictMode 双请求、多标签页）会同时走到创建；原生 upsert 是
-  // 单条 ON CONFLICT 语句，竞态安全，且不会像 catch-then-replay 那样把事务置于
-  // 25P02 aborted 状态。
+async function ensureMonthlyGoal(tx: Transaction, userId: string, metrics: Awaited<ReturnType<typeof readAchievementMetrics>>) {
+  const { monthStart, targets } = metrics;
+  // 后台重试复用原有月份目标，不因视频撤销或重新计算而改写已锁定的基线。
   return tx.memberMonthlyGoal.upsert({
     where: { userId_monthStart: { userId, monthStart } },
-    create: { userId, monthStart, ...calculateMonthlyGoalTargets(videos, monthStart) },
+    create: { userId, monthStart, ...targets },
     update: {},
   });
 }
 
-async function syncAchievements(tx: Transaction, userId: string, videos: ApprovedVideo[], reference: Date) {
+async function syncAchievements(tx: Transaction, userId: string, computed: Awaited<ReturnType<typeof readAchievementMetrics>>, reference: Date) {
   const [profile, completedChallenges, existing] = await Promise.all([
     tx.memberGrowthProfile.findUnique({ where: { userId } }),
     tx.weeklyChallengeAssignment.count({ where: { userId, status: { in: [WeeklyChallengeAssignmentStatus.COMPLETED, WeeklyChallengeAssignmentStatus.CLAIMED] } } }),
     tx.memberAchievement.findMany({ where: { userId }, select: { code: true } }),
   ]);
   const metrics: Record<(typeof ACHIEVEMENT_CATALOG)[number]["kind"], number> = {
-    videos: videos.length,
-    likes: videos.reduce((total, video) => total + (video.likes ?? 0), 0),
-    views: videos.reduce((total, video) => total + (video.views ?? 0), 0),
-    months: countConsecutiveActiveMonths(videos),
+    ...computed.metrics,
     challenges: completedChallenges,
   };
-  const experience = videos.reduce((total, video) => total + calculateGrowthExperience(video), 0);
+  const experience = computed.experience;
   const level = levelFor(experience);
   const beforeLevel = profile?.level ?? 1;
   await tx.memberGrowthProfile.upsert({
@@ -150,14 +135,15 @@ async function syncAchievements(tx: Transaction, userId: string, videos: Approve
 }
 
 export async function reconcileMemberAchievements(tx: Transaction, userId: string, reference = new Date()) {
-  const videos = await approvedVideosFor(tx, userId);
-  // 同一个交互式事务客户端上不要并发执行两条写语句流：并发管线会把唯一约束
-  // 冲突错误归因到错误的请求上（实测 P2002 被抛给并发的 profile upsert）。
-  // 补齐本身是幂等读多写少的路径，串行的额外开销可以忽略。
-  const growth = await syncAchievements(tx, userId, videos, reference);
-  const goal = await ensureMonthlyGoal(tx, userId, videos, reference);
-  const monthVideos = videos.filter((video) => video.submittedAt >= goal.monthStart && video.submittedAt <= reference);
-  const progress = { videos: monthVideos.length, engagement: monthVideos.reduce((total, video) => total + calculateGoalEngagement(video), 0) };
+  // Only called by the fenced background projection transaction, never by GET
+  // or a points transaction. Aggregate in PostgreSQL rather than transfer history.
+  const computed = await readAchievementMetrics(tx, userId, reference);
+  const growth = await syncAchievements(tx, userId, computed, reference);
+  const initialGoal = await ensureMonthlyGoal(tx, userId, computed);
+  const progress = computed.progress;
+  const goal = await tx.memberMonthlyGoal.update({ where: { id: initialGoal.id }, data: {
+    progressVideos: progress.videos, progressEngagement: progress.engagement, calculatedAt: reference,
+  } });
   if (!goal.completedAt && progress.videos >= goal.targetVideos && progress.engagement >= goal.targetEngagement) {
     const completedAt = reference;
     await tx.memberMonthlyGoal.update({ where: { id: goal.id }, data: { completedAt } });
@@ -177,9 +163,10 @@ export async function reconcileMemberAchievements(tx: Transaction, userId: strin
 
 export async function getMemberAchievements(userId: string, reference = new Date()) {
   return db.$transaction(async (tx) => {
-    const reconciled = await reconcileMemberAchievements(tx, userId, reference);
-    const [profile, achievements, highlights, reviews] = await Promise.all([
-      tx.memberGrowthProfile.findUniqueOrThrow({ where: { userId } }),
+    await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+    const monthStart = periodBounds("month", reference).start;
+    const [profile, achievements, highlights, reviews, goal, refresh] = await Promise.all([
+      tx.memberGrowthProfile.findUnique({ where: { userId } }),
       tx.memberAchievement.findMany({ where: { userId }, orderBy: { earnedAt: "desc" } }),
       tx.videoSubmission.findMany({
         where: { userId, status: "APPROVED" },
@@ -187,19 +174,28 @@ export async function getMemberAchievements(userId: string, reference = new Date
         orderBy: [{ likes: "desc" }, { views: "desc" }, { submittedAt: "desc" }], take: 3,
       }),
       tx.memberMonthlyReview.findMany({ where: { userId }, orderBy: { monthStart: "desc" }, take: 6 }),
+      tx.memberMonthlyGoal.findUnique({ where: { userId_monthStart: { userId, monthStart } } }),
+      tx.memberAchievementRefresh.findUnique({ where: { userId }, select: { pending: true, requestedAt: true, failures: true } }),
     ]);
+    const fallbackProfile = { userId, experience: 0, level: 1, calculatedAt: null };
+    const selectedProfile = profile ?? fallbackProfile;
+    const pending = !profile || !goal?.calculatedAt || !refresh || refresh.pending;
+    const selectedGoal = goal ?? { userId, monthStart, baselineVideos: 0, baselineEngagement: 0,
+      targetVideos: 1, targetEngagement: 100, completedAt: null, progressVideos: 0, progressEngagement: 0 };
     return {
       generatedAt: reference,
-      profile: { ...profile, name: levelFor(profile.experience).name, nextLevel: GROWTH_LEVELS.find((row) => row.minimumExperience > profile.experience) ?? null },
+      projection: { state: pending ? "pending" as const : "ready" as const, initialized: Boolean(profile && goal?.calculatedAt), calculatedAt: profile?.calculatedAt ?? null,
+        requestedAt: refresh?.requestedAt ?? null, delayed: (refresh?.failures ?? 0) > 0 },
+      profile: { ...selectedProfile, name: levelFor(selectedProfile.experience).name, nextLevel: GROWTH_LEVELS.find((row) => row.minimumExperience > selectedProfile.experience) ?? null },
       achievements: [
         ...ACHIEVEMENT_CATALOG.map((item) => ({ ...item, earnedAt: achievements.find((achievement) => achievement.code === item.code)?.earnedAt ?? null })),
         { ...BIRTHDAY_ACHIEVEMENT, earnedAt: achievements.find((achievement) => achievement.code === BIRTHDAY_ACHIEVEMENT.code)?.earnedAt ?? null },
       ],
-      goal: { ...reconciled.goal, progress: reconciled.progress },
+      goal: { ...selectedGoal, progress: { videos: selectedGoal.progressVideos, engagement: selectedGoal.progressEngagement } },
       highlights,
       reviews,
     };
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 5_000 });
 }
 
 export async function runMemberGrowthMonthlyMaintenance(reference = new Date()) {

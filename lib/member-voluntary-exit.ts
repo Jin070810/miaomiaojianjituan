@@ -132,27 +132,7 @@ export async function voluntarilyExitMember(input: {
     }
 
     const now = new Date();
-    const pendingSecondaryReviews = await tx.videoSecondaryReview.findMany({
-      where: { video: { userId: input.userId }, status: "PENDING" },
-      select: { id: true, videoId: true, reviewerId: true, status: true },
-    });
-    for (const review of pendingSecondaryReviews) {
-      const updated = await tx.videoSecondaryReview.update({
-        where: { id: review.id },
-        data: { status: "REJECTED", reviewReason: "成员主动退团，审核终止", reviewedAt: now },
-      });
-      await writeAuditLog(tx, {
-        actorId: input.userId,
-        action: "VIDEO_SECONDARY_REJECTED",
-        entity: "VideoSecondaryReview",
-        entityId: review.id,
-        beforeValue: { status: review.status, videoId: review.videoId, reviewerId: review.reviewerId },
-        afterValue: { status: updated.status, videoId: updated.videoId, reviewerId: updated.reviewerId },
-        reason: "成员主动退团，审核终止",
-        ip: input.ip,
-        requestId: input.requestId,
-      });
-    }
+    // Retired secondary-review records remain immutable history.
     await tx.redemptionOrder.deleteMany({ where: { userId: input.userId } });
     await tx.videoSubmission.updateMany({
       where: { userId: input.userId, status: { in: [...activeVideoStatuses] } },

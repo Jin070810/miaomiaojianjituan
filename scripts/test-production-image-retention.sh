@@ -16,7 +16,7 @@ for label in invalid bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; do
   jq -n --arg label "$label" '[{Config:{Labels:{"org.opencontainers.image.revision":$label},Env:["APP_COMMIT_SHA="+("a"*40)]}}]' |
     jq -f scripts/image-retention-metadata.jq | jq -e '.revision==null' >/dev/null
 done
-printf '{"actor":"fixture","token":"synthetic-only"}\n' > "$fixture/payload/registry.json"
+printf '{"actor":"github-actions[bot]","token":"synthetic-only"}\n' > "$fixture/payload/registry.json"
 # Three recent version pairs, one retired pair, and a stopped-container pair.
 jq -n '[range(1;6) as $v | ["app","worker"][] as $kind |
   ($v|tostring) as $n | (if $kind=="app" then $n else ($v+5|tostring) end) as $i |
@@ -74,7 +74,7 @@ case "$1 $2" in
     mv "$RETENTION_FIXTURE/next" "$RETENTION_FIXTURE/images.json"
     touch "$RETENTION_FIXTURE/removed" ;;
   'volume ls') printf 'keep-volume\n' ;;
-  'login ghcr.io') read -r token; [[ "$token" == synthetic-only ]] ;;
+  'login ghcr.io') [[ "$3" == --username && "$4" == 'github-actions[bot]' ]]; read -r token; [[ "$token" == synthetic-only ]] ;;
   'manifest inspect') [[ "${RETENTION_REMOTE_FAIL:-false}" != true ]]; printf '{"schemaVersion":2,"config":{"digest":"sha256:synthetic"}}\n' ;;
   *) echo "Forbidden operation: $1 $2" >&2; exit 99 ;;
 esac
@@ -104,6 +104,10 @@ if RETENTION_AVAILABLE=8000000000 RETENTION_HEALTH=false run clean >/dev/null; t
 run inspect > "$fixture/inspect.json"
 [[ ! -f "$fixture/removed" ]]
 jq -e '(.recoverableCandidates|length)==2 and .protectedResourcesPreserved' "$fixture/inspect.json" >/dev/null
+cp "$fixture/payload/registry.json" "$fixture/valid-registry.json"
+jq '.actor="github-actions[bot];invalid"' "$fixture/valid-registry.json" > "$fixture/payload/registry.json"
+if run inspect >/dev/null; then echo 'Malformed registry actor was accepted' >&2; exit 1; fi
+cp "$fixture/valid-registry.json" "$fixture/payload/registry.json"
 RETENTION_REMOTE_FAIL=true run inspect > "$fixture/unavailable.json"
 jq -e '.unavailableImagesPreserved==2 and (.recoverableCandidates|length)==0' "$fixture/unavailable.json" >/dev/null
 if RETENTION_HEALTH=false run clean >/dev/null; then exit 1; fi

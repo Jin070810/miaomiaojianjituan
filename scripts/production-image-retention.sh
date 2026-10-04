@@ -54,7 +54,7 @@ jq --arg cutoff "$(date -u -d '14 days ago' +%FT%TZ)" --slurpfile used "$private
 jq -e '.selected|length<=100 and all(.[]; (.id|test("^sha256:[a-f0-9]{64}$")) and (.immutableRefs|length)>0)' "$private/selection.json" >/dev/null
 export DOCKER_CONFIG="$private/docker"
 mkdir -m 700 "$DOCKER_CONFIG"
-actor="$(jq -er '.actor|select(test("^[A-Za-z0-9_-]+$"))' "$payload/registry.json")"
+actor="$(jq -er '.actor|select(test("^[A-Za-z0-9_-]+(\\[bot\\])?$"))' "$payload/registry.json")"
 jq -er '.token|select(type=="string" and length>0)' "$payload/registry.json" |
   timeout 30 docker login ghcr.io --username "$actor" --password-stdin > "$private/auth.log" 2>&1
 printf '[]\n' > "$private/verified.json"

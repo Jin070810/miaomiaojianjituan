@@ -15,7 +15,7 @@ manifest="$payload/manifest.json"
 attestation="$payload/attestation.json"
 [[ -s "$attestation" ]]
 jq -e '.schemaVersion == 1 and (.id | test("^[1-9][0-9]*-[1-9][0-9]*$"))
-  and (.commit | test("^[a-f0-9]{40}$")) and (.actor | test("^[a-zA-Z0-9_-]+$"))
+  and (.commit | test("^[a-f0-9]{40}$")) and (.actor | test("^[a-zA-Z0-9_-]+(\\[bot\\])?$"))
   and (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
   and (.domain | test("^[a-zA-Z0-9][a-zA-Z0-9.-]*$"))
   and (.recover | type == "boolean") and (.bootstrap | type == "boolean")

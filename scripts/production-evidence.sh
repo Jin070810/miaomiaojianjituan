@@ -31,6 +31,38 @@ for service in app worker postgres redis nginx; do
   [[ "$service" != postgres ]] || postgres="$id"
 done
 [[ -n "${postgres:-}" ]]
+# Capacity triage is metadata only; never run prune/rm or touch database volumes.
+timeout 30 docker system df --format '{{json .}}' | jq -s 'map({Type,TotalCount,Active,Size,Reclaimable})' > "$private/docker-space.json"
+timeout 15 docker version --format '{{json .Server}}' | jq '{Version,ApiVersion,Os,Arch}' > "$private/docker-version.json"
+timeout 15 docker info --format '{{json .}}' | jq '{Driver,DriverStatus,DockerRootDir}' > "$private/docker-storage.json"
+timeout 30 docker image ls --all --no-trunc --digests --format '{{json .}}' | jq -s \
+  '[.[] | select(.Repository | test("^(ghcr.io/jin070810/miaomiaojianjituan-(app|worker)|miaomiao-points-(app|worker))$"))
+    | {repository:.Repository,id:.ID,tag:.Tag,digest:.Digest,size:.Size,createdAt:.CreatedAt}]' > "$private/project-images.json"
+if timeout 30 docker buildx du --format=json > "$private/cache-raw.json" 2>/dev/null; then
+  jq -s '{available:true,entries:map({ID,Size,Reclaimable,Shared,LastUsedAt,Type})}' "$private/cache-raw.json" > "$private/build-cache.json"
+else
+  printf '{"available":false,"entries":[]}\n' > "$private/build-cache.json"
+fi
+printf '[]\n' > "$private/directories.json"
+for label in project backups sourceDependencies sourceBuild docker systemLogs aptCache; do
+  case "$label" in
+    project) directory="$root" ;;
+    backups) directory="$root/backups" ;;
+    sourceDependencies) directory="$root/node_modules" ;;
+    sourceBuild) directory="$root/.next" ;;
+    docker) directory=/var/lib/docker ;;
+    systemLogs) directory=/var/log ;;
+    aptCache) directory=/var/cache/apt/archives ;;
+  esac
+  size=null
+  if [[ -d "$directory" ]] && timeout 25 du -x -B1 -s "$directory" > "$private/du.txt" 2>/dev/null; then
+    size="$(awk '{print $1}' "$private/du.txt")"
+    [[ "$size" =~ ^[0-9]+$ ]] || exit 1
+  fi
+  jq --arg label "$label" --argjson bytes "$size" '. + [{category:$label,bytes:$bytes}]' "$private/directories.json" > "$private/next.json"
+  mv "$private/next.json" "$private/directories.json"
+done
+df -B1 --output=size,used,avail . | tail -n 1 | awk '{printf "{\"totalBytes\":%s,\"usedBytes\":%s,\"availableBytes\":%s}\n",$1,$2,$3}' > "$private/filesystem.json"
 # Only aggregate sizing and migration identifiers/checksums leave the server.
 # shellcheck disable=SC2016 # These variables belong to the PostgreSQL container.
 timeout --kill-after=5s 25s docker exec -i \
@@ -60,8 +92,13 @@ available_memory="$(awk '/^MemAvailable:/ {print $2 * 1024}' /proc/meminfo)"
 disk_available="$(df -B1 --output=avail . | tail -n 1 | tr -d ' ')"
 jq -n --slurpfile containers "$private/containers.json" --slurpfile db "$private/database.json" \
   --slurpfile backup "$private/backup.json" --slurpfile health "$private/health.json" \
+  --slurpfile dockerSpace "$private/docker-space.json" --slurpfile dockerVersion "$private/docker-version.json" \
+  --slurpfile dockerStorage "$private/docker-storage.json" --slurpfile projectImages "$private/project-images.json" \
+  --slurpfile buildCache "$private/build-cache.json" --slurpfile directories "$private/directories.json" --slurpfile filesystem "$private/filesystem.json" \
   --arg at "$(date -u +%FT%TZ)" --arg source "$(git rev-parse HEAD)" --argjson locked "$locked" \
   --argjson availableMemoryBytes "$available_memory" --argjson availableDiskBytes "$disk_available" \
   '{schemaVersion:1,checkedAt:$at,sourceCommit:$source,sharedLock:$locked,
     resources:{availableMemoryBytes:$availableMemoryBytes,availableDiskBytes:$availableDiskBytes},
-    containers:$containers[0],database:$db[0],latestBackup:$backup[0],health:$health[0]}'
+    containers:$containers[0],database:$db[0],latestBackup:$backup[0],health:$health[0],
+    capacity:{filesystem:$filesystem[0],dockerSpace:$dockerSpace[0],dockerVersion:$dockerVersion[0],dockerStorage:$dockerStorage[0],
+      projectImages:$projectImages[0],buildCache:$buildCache[0],directories:$directories[0]}}'

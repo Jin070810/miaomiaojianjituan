@@ -15,8 +15,21 @@ case "${1:-}" in
   inspect)
     jq -n '[{Image:("sha256:"+("a"*64)),Config:{Env:["SECRET=must-not-be-exported"],Cmd:["private-command"],Labels:{"org.opencontainers.image.revision":("b"*40)}},State:{Status:"running",Health:{Status:"healthy"},OOMKilled:false,StartedAt:"2026-10-04T00:00:00Z"},HostConfig:{Memory:0}}]' ;;
   image)
+    if [[ "${2:-}" == ls ]]; then
+      printf '{"Repository":"other/private-project","ID":"must-not-be-exported"}\n'
+      printf '{"Repository":"miaomiao-points-app","ID":"sha256:fixture","Tag":"production","Size":"1GB"}\n'
+      exit 0
+    fi
     [[ "${2:-}" == inspect ]]
     jq -n '[{Size:123,RepoDigests:[("ghcr.io/jin070810/miaomiaojianjituan-app@sha256:"+("a"*64))],Config:{Env:["IMAGE_SECRET=must-not-be-exported"]}}]' ;;
+  system)
+    [[ "${2:-}" == df ]]
+    printf '{"Type":"Build Cache","Reclaimable":"10GB","Secret":"must-not-be-exported"}\n' ;;
+  buildx)
+    [[ "${2:-}" == du ]]
+    printf '{"ID":"cache-fixture","Size":1000,"Reclaimable":true,"Shared":false,"Description":"must-not-be-exported"}\n' ;;
+  version) printf '{"Version":"29.0.0","Private":"must-not-be-exported"}\n' ;;
+  info) printf '{"Driver":"overlayfs","DockerRootDir":"/var/lib/docker","Private":"must-not-be-exported"}\n' ;;
   exec)
     [[ "$*" == *'default_transaction_read_only=on'* && "$*" == *'statement_timeout=5000'* && "$*" == *'lock_timeout=500'* ]]
     sql="$(cat)"
@@ -35,10 +48,15 @@ cat > "$test_root/bin/git" <<'FAKE'
 [[ "$*" == 'rev-parse HEAD' ]]
 printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
 FAKE
+cat > "$test_root/bin/du" <<'FAKE'
+#!/usr/bin/env bash
+printf '1234\t%s\n' "${@: -1}"
+FAKE
 chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
 bash scripts/production-evidence.sh "$EVIDENCE_PROJECT" example.test > "$test_root/report.json"
 jq -e '.schemaVersion == 1 and .sharedLock == false and .latestBackup.checksumVerified and (.containers|length)==5 and .database.estimatedRows.User == 10' "$test_root/report.json" >/dev/null
+jq -e '.capacity.buildCache.available and .capacity.buildCache.entries[0].ID == "cache-fixture" and (.capacity.projectImages|length)==1 and .capacity.dockerSpace[0].Reclaimable == "10GB"' "$test_root/report.json" >/dev/null
 if grep -Eq 'must-not-be-exported|private-command|Config|Env|Cmd' "$test_root/report.json"; then echo 'Private data escaped' >&2; exit 1; fi
 touch "$EVIDENCE_PROJECT/.production.lock"
 bash scripts/production-evidence.sh "$EVIDENCE_PROJECT" example.test | jq -e '.sharedLock == true' >/dev/null

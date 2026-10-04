@@ -8,26 +8,57 @@ release_container_snapshot() {
     jq -e --arg id "$id" --arg service "$service" '
       select(.Id==$id and .Config.Labels["com.docker.compose.project"]=="miaomiao-points"
         and .Config.Labels["com.docker.compose.service"]==$service) |
-      {id:.Id,image:.Image,service:$service,state:(.State |
+      {id:.Id,image:.Image,service:$service,revision:.Config.Labels["org.opencontainers.image.revision"],state:(.State |
         {Status,Running,Restarting,Paused,OOMKilled,ExitCode,StartedAt,FinishedAt})}
     ' > "$destination" || return 1
 }
 
+release_restore_legacy_queues() {
+  local id="$1" script="$2" previous="$3" evidence="$4"
+  [[ "$id" =~ ^[a-f0-9]{64}$ && -f "$script" && ! -L "$script" && -f "$previous" && ! -L "$previous" ]] || return 1
+  release_container_snapshot "$id" worker "${evidence}.container" || return 1
+  timeout --kill-after=5s 85s docker exec -i -e LEGACY_QUEUE_ACTION=resume \
+    -e "LEGACY_QUEUE_PREVIOUS=$(cat "$previous")" "$id" node < "$script" > "$evidence" || return 1
+  jq -s -e '([.[0].queues[].paused] == [.[1].queues[].paused])' "$previous" "$evidence" >/dev/null || return 1
+  rm -- "$previous" || return 1
+}
+
 release_drain_container() {
-  local id="$1" service="$2" destination="$3" before
+  local id="$1" service="$2" destination="$3" script="${4:-}" previous="${5:-}" before legacy=false image
   before="${destination}.before"
   release_container_snapshot "$id" "$service" "$before" || return 1
   # docker stop may succeed after SIGKILL; its exit status is not a drain result.
   if jq -e '.state.Running==true' "$before" >/dev/null; then
+    if [[ "$service" == worker && "$(jq -r .revision "$before")" == 752b084ec220ce5c827609611e51ce718b28b92d ]]; then
+      # Only the actual historical image qualifies for pause-before-stop. Its
+      # tsx signal handler was proven to interrupt active jobs in isolated CI.
+      [[ -f "$script" && ! -L "$script" && "$previous" == /* && ! -L "$previous" ]] || return 1
+      image="$(jq -r .image "$before")"
+      timeout 15 docker image inspect "$image" | jq -e '.[0] |
+        .Config.Labels["org.opencontainers.image.revision"]=="752b084ec220ce5c827609611e51ce718b28b92d" and
+        (.RepoDigests | index("ghcr.io/jin070810/miaomiaojianjituan-worker@sha256:21ae3d56522cf9cd02e249b9804c747b2288195b4bd66bcc2b63a8a9c8ceda71") != null)' >/dev/null || return 1
+      if [[ ! -e "$previous" ]]; then
+        timeout --kill-after=5s 85s docker exec -i -e LEGACY_QUEUE_ACTION=inspect "$id" node \
+          < "$script" > "${previous}.tmp" || return 1
+        jq -e '.queues | length==2 and all(.[]; (.paused | type=="boolean"))' "${previous}.tmp" >/dev/null || return 1
+        mv "${previous}.tmp" "$previous" || return 1
+      fi
+      timeout --kill-after=5s 85s docker exec -i -e LEGACY_QUEUE_ACTION=pause "$id" node \
+        < "$script" > "${destination}.queues-drained" || return 1
+      jq -e '(.queues | map(.name))==["kuaishou-video","weekly-challenges"] and
+        all(.queues[]; .paused==true and .active==0)' "${destination}.queues-drained" >/dev/null || return 1
+      legacy=true
+    fi
     timeout --kill-after=10s 90s docker stop --time 75 "$id" >/dev/null || return 1
   fi
   release_container_snapshot "$id" "$service" "$destination" || return 1
   # The pinned Next server explicitly exits 143 after awaiting server.close()
-  # on SIGTERM. Worker must return its supervisor's explicit clean exit 0.
+  # on SIGTERM. New Worker must return its supervisor's explicit clean exit 0.
+  # The pinned original image may return 143 only after the above queue drain.
   # Neither status alone proves quiescence: the controller also checks DB clients.
-  jq -e --arg service "$service" '.state.Status=="exited" and .state.Running==false and .state.Restarting==false
+  jq -e --arg service "$service" --argjson legacy "$legacy" '.state.Status=="exited" and .state.Running==false and .state.Restarting==false
     and .state.Paused==false and .state.OOMKilled==false
-    and (.state.ExitCode==0 or ($service=="app" and .state.ExitCode==143))' "$destination" >/dev/null || {
+    and (.state.ExitCode==0 or (($service=="app" or $legacy) and .state.ExitCode==143))' "$destination" >/dev/null || {
     printf '服务未正常排空：%s；禁止执行 migration。\n' "$service" >&2
     return 1
   }

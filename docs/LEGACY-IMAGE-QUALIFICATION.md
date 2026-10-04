@@ -15,4 +15,8 @@
 
 实际运行结果见 PR/Actions；脚本存在不等于资格通过。若原镜像不满足排空标准，应按实际失败行为设计首次切换，不能放宽所有后续发布门禁。通过本验证也不使旧版成为新签名入口可直接回滚的候选，数据库兼容性和生产副本迁移仍须另行验证。
 
-实证：run `37175301016` 的原 `docker stop` 使 Worker 退出143，`workerWaitedForActiveJob=false`、`workerJobCompleted=false`；Web 等待请求并返回400，退出143。run `37175976033` 直接向真实 Worker 子进程发 TERM 同样失败。旧 tsx 信号路径不能视为合格排空。当前暂停队列方案待原镜像 CI 验证，还没有接入生产控制器；不放宽后续新版 Worker 的规则。
+实证：run `37175301016` 的原 `docker stop` 使 Worker 退出143，`workerWaitedForActiveJob=false`、`workerJobCompleted=false`；Web 等待请求并返回400，退出143。run `37175976033` 直接向真实 Worker 子进程发 TERM 同样失败。旧 tsx 信号路径不能视为合格排空。
+
+run `37176291958` 的暂停队列方案通过：在途任务等待并完成，停机后数据库客户端为0，恢复时视频队列回到运行状态、原已暂停的周挑战队列仍暂停。当前已将相同流程接入 `release-lifecycle.sh`，原镜像资格脚本直接调用该控制器函数继续复验。
+
+生产入口只对固定旧 SHA 且 RepoDigest 精确匹配的 Worker 使用此路径。新 Worker 退出143仍拒绝。队列原状态在暂停前原子保存到 `.release-runtime/legacy-queues-before.json`；迁移前失败恢复原容器时还原，迁移后失败保留，后续显式恢复成功时再还原。恢复只作用于本次暂停的队列并检查结果，不擅自启动原先暂停的队列。控制器接入后的新 HEAD 仍须通过原镜像和完整 staging CI。

@@ -9,12 +9,27 @@ cat > "$root/bin/docker" <<'FAKE'
 set -euo pipefail
 printf '%s\n' "$*" >> "$LIFECYCLE_TEST_ROOT/commands"
 if [[ "$1" == stop ]]; then touch "$LIFECYCLE_TEST_ROOT/stopped"; exit 0; fi
+if [[ "$1" == image ]]; then
+  jq -n --arg revision "${LIFECYCLE_REVISION:-}" --arg digest "${LIFECYCLE_DIGEST:-21ae3d56522cf9cd02e249b9804c747b2288195b4bd66bcc2b63a8a9c8ceda71}" \
+    '[{Config:{Labels:{"org.opencontainers.image.revision":$revision}},RepoDigests:[("ghcr.io/jin070810/miaomiaojianjituan-worker@sha256:"+$digest)]}]'
+  exit 0
+fi
+if [[ "$1" == exec ]]; then
+  cat >/dev/null
+  if [[ "$*" == *LEGACY_QUEUE_ACTION=pause* ]]; then
+    printf '{"queues":[{"name":"kuaishou-video","paused":true,"active":%s},{"name":"weekly-challenges","paused":true,"active":0}]}\n' "${LIFECYCLE_ACTIVE:-0}"
+  else
+    printf '{"queues":[{"name":"kuaishou-video","paused":false,"active":0},{"name":"weekly-challenges","paused":true,"active":0}]}\n'
+  fi
+  exit 0
+fi
 [[ "$1" == inspect ]]
 running=true
 [[ ! -f "$LIFECYCLE_TEST_ROOT/stopped" ]] || running=false
 jq -n --arg id "${@: -1}" --arg project "$LIFECYCLE_PROJECT" --arg service "$LIFECYCLE_SERVICE" \
   --argjson running "$running" --argjson code "$LIFECYCLE_EXIT" --argjson oom "$LIFECYCLE_OOM" \
-  '{Id:$id,Image:"sha256:synthetic",Config:{Env:["PRIVATE=never-record"],Labels:{"com.docker.compose.project":$project,"com.docker.compose.service":$service}},
+  --arg revision "${LIFECYCLE_REVISION:-}" \
+  '{Id:$id,Image:"sha256:synthetic",Config:{Env:["PRIVATE=never-record"],Labels:{"com.docker.compose.project":$project,"com.docker.compose.service":$service,"org.opencontainers.image.revision":$revision}},
     State:{Status:(if $running then "running" else "exited" end),Running:$running,Restarting:false,Paused:false,OOMKilled:$oom,ExitCode:$code,FinishedAt:"2026-10-04T00:00:00Z"}}'
 FAKE
 chmod +x "$root/bin/docker"
@@ -46,6 +61,25 @@ LIFECYCLE_OOM=false LIFECYCLE_PROJECT=unrelated
 if release_drain_container "$container_id" worker "$root/wrong.json"; then exit 1; fi
 if grep -q '^stop ' "$root/commands"; then exit 1; fi
 if release_drain_container 'invalid-container-id' worker "$root/invalid.json"; then exit 1; fi
+LIFECYCLE_PROJECT=miaomiao-points LIFECYCLE_EXIT=143
+export LIFECYCLE_REVISION=752b084ec220ce5c827609611e51ce718b28b92d
+rm -f "$root/stopped"
+release_drain_container "$container_id" worker "$root/legacy.json" scripts/legacy-queue-drain.cjs "$root/queues-before.json"
+jq -e '.state.ExitCode==143' "$root/legacy.json" >/dev/null
+jq -e 'all(.queues[]; .paused and .active==0)' "$root/legacy.json.queues-drained" >/dev/null
+release_restore_legacy_queues "$container_id" scripts/legacy-queue-drain.cjs "$root/queues-before.json" "$root/recovered.json"
+[[ ! -f "$root/queues-before.json" ]]
+jq -e '.queues[0].paused==false and .queues[1].paused==true' "$root/recovered.json" >/dev/null
+for failure in image active; do
+  rm -f "$root/stopped" "$root/commands"
+  export LIFECYCLE_DIGEST=21ae3d56522cf9cd02e249b9804c747b2288195b4bd66bcc2b63a8a9c8ceda71 LIFECYCLE_ACTIVE=0
+  if [[ "$failure" == image ]]; then LIFECYCLE_DIGEST=wrong; else LIFECYCLE_ACTIVE=1; fi
+  if release_drain_container "$container_id" worker "$root/bad-legacy.json" scripts/legacy-queue-drain.cjs "$root/queues-before.json"; then
+    echo "Accepted unqualified legacy drain: $failure" >&2; exit 1
+  fi
+  if grep -q '^stop ' "$root/commands"; then echo 'Stopped legacy Worker before qualification' >&2; exit 1; fi
+done
+unset LIFECYCLE_REVISION LIFECYCLE_DIGEST LIFECYCLE_ACTIVE
 release_prepare_ingress "$root/runtime" scripts/nginx-release.conf 123-1
 cmp "$root/runtime/nginx.conf" scripts/nginx-release.conf
 [[ "$(cat "$root/runtime/maintenance")" == 123-1 ]]

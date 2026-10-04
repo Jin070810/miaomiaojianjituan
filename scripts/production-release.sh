@@ -63,6 +63,7 @@ gate_engaged=false
 writers_touched=false
 previous_healthy_sha=""
 runtime="$project_dir/.release-runtime"
+legacy_queue_state="$runtime/legacy-queues-before.json"
 previous_commit="$(timeout 15 git rev-parse HEAD)"
 cp "$manifest" "$record/manifest.json"
 cp "$attestation" "$record/attestation.json"
@@ -127,7 +128,12 @@ finish() {
       # Recover only a version that was healthy at entry. In an acknowledged
       # already-failed release there may be no safe prior version to reopen.
       if [[ "$gate_engaged" == true && "$recovered" == true && -n "$previous_healthy_sha" ]]; then
-        if timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" \
+        if [[ -f "$legacy_queue_state" ]]; then
+          id="$(jq -r .Id "$record/previous-worker.json")"
+          release_restore_legacy_queues "$id" "$payload/legacy-queue-drain.cjs" "$legacy_queue_state" \
+            "$record/recovery-queues.json" || recovered=false
+        fi
+        if [[ "$recovered" == true ]] && timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" \
           http://127.0.0.1:3000 "$previous_healthy_sha" > "$record/recovery-health.json" &&
           timeout 15 "${compose[@]}" --profile production exec -T nginx nginx -c /etc/nginx/release/nginx.conf -s reload &&
           timeout --kill-after=5s 250s bash "$payload/verify-release-health.sh" \
@@ -276,7 +282,8 @@ checkpoint drain
 writers_touched=true
 persist running
 for service in app worker; do
-  release_drain_container "$(jq -r .Id "$record/previous-$service.json")" "$service" "$record/drain-$service.json"
+  release_drain_container "$(jq -r .Id "$record/previous-$service.json")" "$service" "$record/drain-$service.json" \
+    "$payload/legacy-queue-drain.cjs" "$legacy_queue_state"
 done
 checkpoint database_quiescence
 # Fail on any other client, including an idle connection that might start work.
@@ -343,6 +350,11 @@ if jq -e '.config.ALERTS_DEFERRED == "true"' "$request" >/dev/null; then
 fi
 
 checkpoint reopen
+if [[ -f "$legacy_queue_state" ]]; then
+  id="$(timeout 15 docker ps --no-trunc --filter label=com.docker.compose.project=miaomiao-points \
+    --filter label=com.docker.compose.service=worker --filter label=com.docker.compose.oneoff=False --format '{{.ID}}')"
+  release_restore_legacy_queues "$id" "$payload/legacy-queue-drain.cjs" "$legacy_queue_state" "$record/restored-queues.json"
+fi
 release_verify_gate "$domain" "$record/maintenance-final-headers.txt"
 release_set_gate "$runtime" open "$release_id"
 # Keep the flag true until the complete release record commits, so any later

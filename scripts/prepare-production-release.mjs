@@ -50,7 +50,7 @@ copyFileSync("output/release/deploy-candidate.json", path.join(destination, "man
 copyFileSync("output/release/deploy-candidate.sigstore.json", path.join(destination, "attestation.json"));
 for (const file of ["production-lock.sh", "production-release.sh", "production-preflight.sh",
   "pull-release-images.sh", "backup-db.sh", "verify-release-health.sh", "release-lifecycle.sh",
-  "nginx-release.conf", "verify-web-candidate.mjs"]) {
+  "nginx-release.conf", "verify-web-candidate.mjs", "legacy-queue-drain.cjs"]) {
   const target = path.join(destination, file);
   copyFileSync(path.join("scripts", file), target);
   chmodSync(target, 0o600);

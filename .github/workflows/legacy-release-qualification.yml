@@ -7,6 +7,7 @@ on:
       - scripts/qualify-legacy-images.sh
       - scripts/test-legacy-pending-request.mjs
       - scripts/legacy-queue-drain.cjs
+      - scripts/release-lifecycle.sh
   workflow_dispatch:
 
 permissions:

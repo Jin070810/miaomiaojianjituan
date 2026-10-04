@@ -2,6 +2,8 @@
 # Disposable runner only: original v1.11 images, synthetic data, no production access.
 set -euo pipefail
 [[ "${CI:-}" == true && "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ && -n "${RUNNER_TEMP:-}" ]]
+# shellcheck source=scripts/release-lifecycle.sh
+source scripts/release-lifecycle.sh
 legacy_sha=752b084ec220ce5c827609611e51ce718b28b92d
 app_ref=ghcr.io/jin070810/miaomiaojianjituan-app@sha256:609d72450c2dfec9105302b2368979cac4853c9ab7c55b8af69021307385eca6
 worker_ref=ghcr.io/jin070810/miaomiaojianjituan-worker@sha256:21ae3d56522cf9cd02e249b9804c747b2288195b4bd66bcc2b63a8a9c8ceda71
@@ -72,7 +74,8 @@ timeout --kill-after=10s 120s docker run --rm --name "$prefix-migration" --netwo
 timeout --kill-after=10s 60s docker run --rm --name "$prefix-seed" --network "$prefix" --env-file "$private/app.env" \
   "$worker_ref" ./node_modules/.bin/tsx scripts/seed-admin.ts > "$private/seed.log" 2>&1
 checkpoint original_startup
-docker run -d --name "$prefix-worker" --network "$prefix" --env-file "$private/app.env" "$worker_ref" >/dev/null
+docker run -d --name "$prefix-worker" --network "$prefix" --env-file "$private/app.env" \
+  --label com.docker.compose.project=miaomiao-points --label com.docker.compose.service=worker "$worker_ref" >/dev/null
 docker run -d --name "$prefix-app" --network "$prefix" --network-alias app --env-file "$private/app.env" "$app_ref" >/dev/null
 for _ in {1..40}; do
   if timeout 8 docker exec "$prefix-app" node -e '(async()=>{const r=await fetch("http://127.0.0.1:3000/api/health",{signal:AbortSignal.timeout(5000)});process.stdout.write(await r.text());process.exitCode=r.ok?0:1})().catch(()=>process.exit(1))' > "$private/health.json" &&
@@ -110,21 +113,20 @@ done
 [[ "${active:-}" == legacy-drain-check ]]
 # Both wrapper and direct-child TERM interrupted work in the original tsx image.
 # Pause consumption first; an active task must finish before any stop is sent.
-docker exec -i -e LEGACY_QUEUE_ACTION=inspect "$prefix-worker" node \
-  < scripts/legacy-queue-drain.cjs > "$evidence/queues-before.json"
-timeout --kill-after=5s 85s docker exec -i -e LEGACY_QUEUE_ACTION=pause "$prefix-worker" node \
-  < scripts/legacy-queue-drain.cjs > "$evidence/queues-drained.json" &
+worker_container="$(docker inspect --format '{{.Id}}' "$prefix-worker")"
+release_drain_container "$worker_container" worker "$evidence/controller-worker.json" \
+  "$(pwd)/scripts/legacy-queue-drain.cjs" "$private/queues-before.json" &
 worker_stop_pid=$!
 sleep 1
 worker_waited="$(docker inspect --format '{{.State.Running}}' "$prefix-worker")"
 [[ "$(docker exec "$prefix-redis" redis-cli --raw LRANGE bull:kuaishou-video:active 0 -1)" == legacy-drain-check ]]
-[[ ! -s "$evidence/queues-drained.json" ]]
+[[ ! -s "$evidence/controller-worker.json.queues-drained" ]]
 wait "$blocker_pid"
 blocker_pid=""
 wait "$worker_stop_pid"
 worker_stop_pid=""
-jq -e 'all(.queues[]; .paused and .active==0)' "$evidence/queues-drained.json" >/dev/null
-docker stop --time 75 "$prefix-worker" >/dev/null
+cp "$private/queues-before.json" "$evidence/queues-before.json"
+cp "$evidence/controller-worker.json.queues-drained" "$evidence/queues-drained.json"
 completed="$(docker exec "$prefix-redis" redis-cli --raw ZSCORE bull:kuaishou-video:completed legacy-drain-check)"
 worker_completed=false
 [[ -z "$completed" ]] || worker_completed=true
@@ -172,8 +174,9 @@ for _ in {1..30}; do
   sleep 1
 done
 jq -e 'all(.queues[]; .paused and .active==0)' "$private/paused.json" >/dev/null
-docker exec -i -e LEGACY_QUEUE_ACTION=resume -e "LEGACY_QUEUE_PREVIOUS=$(cat "$evidence/queues-before.json")" \
-  "$prefix-worker" node < scripts/legacy-queue-drain.cjs > "$evidence/queues-recovered.json"
+release_restore_legacy_queues "$worker_container" "$(pwd)/scripts/legacy-queue-drain.cjs" \
+  "$private/queues-before.json" "$evidence/queues-recovered.json"
+[[ ! -e "$private/queues-before.json" ]]
 jq -s -e '([.[0].queues[].paused] == [.[1].queues[].paused])' \
   "$evidence/queues-before.json" "$evidence/queues-recovered.json" >/dev/null
 docker stop --time 75 "$prefix-worker" >/dev/null

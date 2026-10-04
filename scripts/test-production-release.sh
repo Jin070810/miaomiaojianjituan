@@ -97,7 +97,7 @@ fixture() {
   mkdir -p "$TEST_PROJECT/certs" "$test_root/payload-$scenario"
   payload="$test_root/payload-$scenario"
   cp scripts/{production-lock,production-release,production-preflight,pull-release-images,backup-db,verify-release-health,release-lifecycle}.sh "$payload/"
-  cp scripts/nginx-release.conf scripts/verify-web-candidate.mjs "$payload/"
+  cp scripts/nginx-release.conf scripts/verify-web-candidate.mjs scripts/legacy-queue-drain.cjs "$payload/"
   printf '{"syntheticHostFixture":true}\n' > "$payload/attestation.json"
   printf 'test\n' > "$TEST_PROJECT/certs/fullchain.pem"
   printf 'test\n' > "$TEST_PROJECT/certs/privkey.pem"

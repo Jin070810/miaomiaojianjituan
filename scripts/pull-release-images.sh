@@ -57,10 +57,32 @@ worker_revision="$(timeout 15 docker image inspect \
   || fail "App OCI revision 与 release commit 不一致"
 [[ "$worker_revision" == "$release_commit" ]] \
   || fail "Worker OCI revision 与 release commit 不一致"
-[[ "$(timeout 15 docker image inspect --format '{{.Id}}' "$app_ref")" == "$app_config_id" ]] \
-  || fail "App 镜像不是 staging 验收的镜像"
-[[ "$(timeout 15 docker image inspect --format '{{.Id}}' "$worker_ref")" == "$worker_config_id" ]] \
-  || fail "Worker 镜像不是 staging 验收的镜像"
+verify_image_identity() {
+  local ref="$1" digest="$2" expected="$3" actual config descriptor platform_digest
+  actual="$(timeout 15 docker image inspect --format '{{.Id}}' "$ref")" || return 1
+  [[ "$(timeout 15 docker image inspect --format '{{.Os}}/{{.Architecture}}' "$ref")" == linux/amd64 ]] || return 1
+  [[ "$actual" != "$expected" ]] || return 0
+  # Docker's classic store uses the config digest as .Id; containerd can use
+  # the manifest digest. Normalize only via the immutable registry manifest,
+  # never accept an arbitrary mismatch or rely on the mutable production tag.
+  descriptor="$(timeout 30 docker manifest inspect "$ref")" || return 1
+  platform_digest="$digest"
+  if jq -e '.mediaType=="application/vnd.oci.image.index.v1+json" or
+    .mediaType=="application/vnd.docker.distribution.manifest.list.v2+json"' <<< "$descriptor" >/dev/null; then
+    platform_digest="$(jq -er 'select(.schemaVersion==2) | [.manifests[] |
+      select(.platform.os=="linux" and .platform.architecture=="amd64")] |
+      select(length==1) | .[0].digest | select(test("^sha256:[a-f0-9]{64}$"))' <<< "$descriptor")" || return 1
+    descriptor="$(timeout 30 docker manifest inspect "${ref%@*}@$platform_digest")" || return 1
+  fi
+  config="$(jq -er '
+    select(.schemaVersion==2 and (.mediaType=="application/vnd.oci.image.manifest.v1+json"
+      or .mediaType=="application/vnd.docker.distribution.manifest.v2+json")) |
+    .config.digest | select(test("^sha256:[a-f0-9]{64}$"))' <<< "$descriptor")" || return 1
+  [[ "$actual" == "$digest" || "$actual" == "$platform_digest" || "$actual" == "$config" ]] &&
+    [[ "$expected" == "$digest" || "$expected" == "$platform_digest" || "$expected" == "$config" ]]
+}
+verify_image_identity "$app_ref" "$app_digest" "$app_config_id" || fail "App 镜像不是 staging 验收的镜像"
+verify_image_identity "$worker_ref" "$worker_digest" "$worker_config_id" || fail "Worker 镜像不是 staging 验收的镜像"
 
 if [[ "${PULL_RELEASE_NO_TAG:-0}" != 1 ]]; then
   timeout 15 docker tag "$app_ref" miaomiao-points-app:production

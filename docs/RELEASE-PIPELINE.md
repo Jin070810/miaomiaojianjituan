@@ -1,6 +1,6 @@
 # 发布流水线
 
-关联 #105。当前变更建立“一次构建、同一镜像验收、按摘要晋级”的发布契约。合并和部署仍需要维护者明确确认，CI 通过不表示已上线。
+关联 #105。当前变更建立“一次构建、同一镜像验收、按摘要晋级”的发布契约。按所有者 2026-10-04 要求，日常合并和部署全自动，无需维护者审核；CI 通过不表示已上线，仍须实际部署及观察证据。详见 [自动发版](AUTOMATIC-RELEASE.md)。
 
 ## 候选与生产链路
 
@@ -9,13 +9,13 @@ flowchart LR
   A[PR 或 main commit] --> B[core: 类型/单测/数据库/依赖审计]
   B --> C[构建一对 App 与 Worker]
   C --> D[staging: 迁移/健康/完整浏览器矩阵/对账]
-  D --> E{main push?}
+  D --> E{main CI?}
   E -->|否| F[PR 验收证据]
   E -->|是| G[原镜像归档转交 publish]
   G --> H[校验 image ID / 推送 GHCR / 保存 manifest]
-  H --> I[人工批准 SHA + CI run ID]
+  H --> I[成功 main CI 自动触发 / 分配版本]
   I --> J[校验来源/摘要/迁移/当前生产健康]
-  J --> K[拉取原摘要/备份/迁移/切换/健康]
+  J --> K[原摘要预检/维护/排空/备份/迁移/健康/开放]
 ```
 
 1. PR 仅触发一次 CI，旧 PR run 自动取消。main 合并后校验实际合并 SHA，不能用 PR 临时 merge SHA 的证据替代。
@@ -25,17 +25,17 @@ flowchart LR
 5. PR 不导出发布镜像，也没有 registry 写入权限。main 将验收后原镜像压缩归档交给独立 publish job；这是 Actions runner 之间的传输，不是向生产主机发送完整镜像。
 6. publish 校验原 image ID、OCI revision 和验收记录后推送 GHCR，不执行 Docker build。App/Worker 每个标签包含 SHA、run ID 和 attempt；部署只用 digest。
 7. 成功的 main CI 产生 `release-candidate-<runId>-<attempt>` artifact。manifest 记录 commit、构建时间、App/Worker registry digest 与 image config ID、CI 来源、验收项、schema 和每个 migration 文件 SHA-256。
-8. Deploy Production 输入 `release_commit`、`candidate_run_id` 和既有明确确认项。任何生产配置注入、拉取或切换前，先验证候选来源及文件内容。
+8. Deploy Production 从成功 main CI 自动取得精确 SHA、run ID 和 attempt，自动分配或复用版本 tag。任何生产配置注入、拉取或切换前，先验证候选来源及文件内容；等待部署锁后再次跳过已过时 main 候选。workflow_dispatch 保留给恢复与归档重发，没有人工审核确认项。
 9. 生产按 manifest digest 拉取，先校验两个 OCI revision 和两个 image ID，全部一致才进入迁移和切换，最终健康通过后才更新兼容的本地 production 标签。登录最多 30 秒，每个 pull 最多 300 秒。禁止用“同 SHA 重新构建”的镜像替换已验收镜像。
-10. 继续执行既有生产前置检查、备份校验、migration、Web/Worker 切换和 HTTPS 健康检查。最终健康通过才保存 current manifest；前一 current 单独保留作为回滚参考。
+10. 候选预检后先验证 HTTPS 维护入口，排空旧 Web/Worker 并确认数据库客户端已退出，随后备份、migration、同版本启动与 HTTPS 健康检查，最后恢复入口。最终健康通过才保存 current manifest；前一 current 单独保留作为恢复参考，不豁免数据库兼容性评估。
 
 ## 来源与失败门禁
 
-候选 run 必须来自当前仓库的 `.github/workflows/ci.yml`，事件为 main push，head SHA 与批准 SHA 完全一致，整体 completed/success。拒绝 fork、PR、其他 workflow、失败/取消/运行中 run、不同 attempt 的 manifest，以及未合并 SHA。
+候选 run 必须来自当前仓库的 `.github/workflows/ci.yml`，事件为 main push 或显式 main workflow_dispatch，head SHA 与发布 SHA 完全一致，整体 completed/success。拒绝 fork、PR、其他 workflow、失败/取消/运行中 run、不同 attempt 的 manifest，以及未合并 SHA。
 
 run 元数据通过 GitHub API 单独读取，与下载的 artifact 分目录存放。镜像路径必须是当前仓库的 `ghcr.io/<owner>/<repository>-app|worker`，摘要与 config ID 必须是完整 SHA-256。schema/migration 清单与单独检出的 release source 逐个比较，不能只信任清单中的声明。
 
-缺少任何产物或验证失败立即终止，不降级为 tag 拉取，不静默重建，不跳过 staging。生产 workflow 只有 registry 读取权限。GitHub environment 的维护者批准、自审和 release tag 记录仍须按工程流程执行。
+缺少任何产物或验证失败立即终止，不降级为 tag 拉取，不静默重建，不跳过 staging。生产 workflow 只有 registry 读取权限；contents 写权限仅用于自动 tag 和 Release 记录。production Environment 限制精确 main，无人工审查暂停点。
 
 ## 缓存与运行时
 
@@ -55,7 +55,7 @@ Actions 原镜像归档留存 2 天，仅用于传递同一镜像；验收截图
 
 默认从原 CI artifact 取清单；超过 90 天或删除后，可显式选择已部署候选的 server-archive 签名留存。仍需验证精确 main CI 身份、原成功 CI attempt、源码和 migration；原 CI 历史被删除、缺签名或旧版不兼容时拒绝恢复。详见 [签名留存与恢复](SIGNED-RELEASE-ARCHIVE.md)。主机互斥与阶段记录见下文，不能据此宣称任意历史版本都可一键回滚。首次采用新链路前应演练候选失败、同版本启动和旧兼容候选回滚；过去未生成 manifest 的发布不伪装成新链路已验收候选。
 
-完整主机发布已改为一次 SSH、同一把主机锁、分阶段 journal、私有配置预检与原子替换、显式迁移和有界执行；Nginx 改为配置验证后 reload。参见 [生产主机发布控制器](SERIALIZED-PRODUCTION-RELEASE.md)。候选预热、流量切换、旧无签名发布基线及 Worker 运行依赖瘦身仍需独立验证；目前不承诺零停机。
+完整主机发布已改为一次 SSH、同一把主机锁、分阶段 journal、私有配置预检与原子替换、维护入口与任务排空、显式迁移和有界执行。参见 [生产主机发布控制器](SERIALIZED-PRODUCTION-RELEASE.md)。候选预检容器不复用于正式进程，首次旧 Nginx 切换可能重建，不能承诺零停机；旧无签名原镜像基线仍待验证。Worker 依赖精简已在整合 CI 验证，见 [Worker 运行依赖](WORKER-RUNTIME-DEPENDENCIES.md)。各项生产门禁以 [当前上线准备](../PRODUCTION-READINESS.md) 为准。
 
 ## 验收与时间目标
 

@@ -22,7 +22,22 @@ FAKE
 cat > "$test_root/bin/curl" <<'FAKE'
 #!/usr/bin/env bash
 phase="$(jq -r .phase "$TEST_PROJECT/releases/active.json" 2>/dev/null || true)"
-[[ "$phase" != "${FAIL_PHASE:-none}" ]] || exit 42
+[[ "$phase" != "${FAIL_PHASE:-none}" || -f "$TEST_PROJECT/recovering" ]] || exit 42
+if [[ -f "$TEST_PROJECT/recovering" && "${FAIL_RECOVERY:-0}" == 1 ]]; then exit 42; fi
+url="${@: -1}"
+if [[ "$url" != */api/health ]]; then
+  code=200
+  [[ ! -f "$TEST_PROJECT/.release-runtime/maintenance" ]] || code=503
+  while (( $# )); do
+    if [[ "$1" == --dump-header ]]; then
+      shift
+      printf 'HTTP/2 %s\r\nX-Miaomiao-Maintenance: 1\r\nCache-Control: no-store\r\n\r\n' "$code" > "$1"
+    fi
+    shift
+  done
+  printf '%s' "$code"
+  exit 0
+fi
 jq -n --arg sha "$TEST_SHA" '{ok:true,database:"ok",redis:"ok",worker:"ok",app:{commit:$sha},workerVersion:{commit:$sha},weeklyChallenges:{enabled:false}}'
 FAKE
 cat > "$test_root/bin/docker" <<'FAKE'
@@ -30,28 +45,58 @@ cat > "$test_root/bin/docker" <<'FAKE'
 set -euo pipefail
 printf '%s\n' "$*" >> "$TEST_PROJECT/docker.log"
 phase="$(jq -r .phase "$TEST_PROJECT/releases/active.json" 2>/dev/null || true)"
-[[ "$phase" != "${FAIL_PHASE:-none}" ]] || exit 42
-if [[ "$*" == *'pg_dump --format'* ]]; then
+if [[ "$*" == 'rm -f miaomiao-release-'*'-migrate '* ]]; then touch "$TEST_PROJECT/recovering"; fi
+[[ "$phase" != "${FAIL_PHASE:-none}" || -f "$TEST_PROJECT/recovering" ]] || exit 42
+if [[ "${1:-}" == exec && "$*" == *'df -Pi'* ]]; then
+  printf 'Filesystem Inodes Used Available Capacity Mounted\nfixture 2000000 0 2000000 0%% /\n'
+elif [[ "${1:-}" == exec && "$*" == *'df -Pk'* ]]; then
+  printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nfixture 200000000 0 200000000 0%% /var/lib/postgresql/data\n'
+elif [[ "$*" == *'SELECT pg_database_size(current_database())'* ]]; then
+  printf '65000000\n'
+elif [[ "$*" == *'pg_dump --format'* ]]; then
   printf 'PGDMPsynthetic-test-backup'
 elif [[ "$*" == *'pg_restore --list'* ]]; then
   [[ "$(cat)" == PGDMPsynthetic-test-backup ]]
 elif [[ "$*" == *'psql -v ON_ERROR_STOP'* ]]; then
   sql="$(cat)"
-  if [[ "$sql" == *to_regclass* ]]; then printf 't\n'; else printf '%s\n' "${TEST_MIGRATIONS:-[]}"; fi
+  if [[ "$sql" == *to_regclass* ]]; then printf 't\n'
+  elif [[ "$sql" == *otherClients* ]]; then printf '{"otherClients":%s}\n' "${TEST_CLIENTS:-0}"
+  else printf '%s\n' "${TEST_MIGRATIONS:-[]}"; fi
 elif [[ "${1:-}" == login ]]; then
   [[ "$(cat)" == fixture-secret-token ]]
 elif [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
-  if [[ "$*" == *'{{.Id}}'* ]]; then printf '%s\n' "$TEST_IMAGE_ID"; else printf '%s\n' "$TEST_SHA"; fi
+  if [[ "$*" == *'{{.Id}}'* ]]; then printf '%s\n' "$TEST_IMAGE_ID"
+  elif [[ "$*" == *'{{.Os}}/{{.Architecture}}'* ]]; then printf 'linux/amd64\n'
+  else printf '%s\n' "$TEST_SHA"; fi
 elif [[ "${1:-}" == ps ]]; then
-  printf 'old-container\n'
+  letter=c
+  if [[ "$*" == *service=app* ]]; then letter=a; fi
+  if [[ "$*" == *service=worker* ]]; then letter=b; fi
+  printf "$letter%.0s" {1..64}; printf '\n'
+elif [[ "${1:-}" == stop ]]; then
+  touch "$TEST_PROJECT/stopped-${@: -1}"
+elif [[ "${1:-}" == start ]]; then
+  rm -f "$TEST_PROJECT/stopped-${@: -1}"
+elif [[ "${1:-}" == exec && "$*" == *-preflight* ]]; then
+  cat >/dev/null
+  printf '{"ok":true}\n'
 elif [[ "${1:-}" == inspect ]]; then
   # Verify the journal strips everything except the intended image metadata.
-  jq -n --arg id "$TEST_IMAGE_ID" '{Id:"old",Image:$id,State:{Status:"running"},Config:{Env:["SECRET=must-never-reach-journal"],Labels:{}}}'
+  id="${@: -1}"
+  service=nginx
+  [[ "$id" != a* ]] || service=app
+  [[ "$id" != b* ]] || service=worker
+  running=true
+  [[ ! -f "$TEST_PROJECT/stopped-$id" ]] || running=false
+  jq -n --arg id "$id" --arg image "$TEST_IMAGE_ID" --arg service "$service" --arg sha "$TEST_SHA" \
+    --argjson running "$running" --argjson exitCode "${TEST_DRAIN_EXIT:-0}" \
+    '{Id:$id,Image:$image,State:{Status:(if $running then "running" else "exited" end),Running:$running,Restarting:false,Paused:false,OOMKilled:false,ExitCode:$exitCode},
+      Config:{Env:["SECRET=must-never-reach-journal"],Labels:{"com.docker.compose.project":"miaomiao-points","com.docker.compose.service":$service,"org.opencontainers.image.revision":$sha}}}'
 fi
 FAKE
 chmod +x "$test_root/bin/"*
 export PATH="$test_root/bin:$PATH"
-export TEST_SHA TEST_PROJECT TEST_IMAGE_ID FAIL_PHASE TEST_MIGRATIONS
+export TEST_SHA TEST_PROJECT TEST_IMAGE_ID FAIL_PHASE TEST_MIGRATIONS TEST_CLIENTS TEST_DRAIN_EXIT FAIL_RECOVERY
 TEST_IMAGE_ID="sha256:$(printf 'a%.0s' {1..64})"
 scenario=0
 fixture() {
@@ -59,7 +104,8 @@ fixture() {
   TEST_PROJECT="$test_root/project-$scenario"
   mkdir -p "$TEST_PROJECT/certs" "$test_root/payload-$scenario"
   payload="$test_root/payload-$scenario"
-  cp scripts/{production-lock,production-release,production-preflight,pull-release-images,backup-db,verify-release-health}.sh "$payload/"
+  cp scripts/{production-lock,production-release,production-preflight,pull-release-images,backup-db,verify-release-health,release-lifecycle}.sh "$payload/"
+  cp scripts/nginx-release.conf scripts/verify-web-candidate.mjs scripts/legacy-queue-drain.cjs scripts/release-capacity.sh "$payload/"
   printf '{"syntheticHostFixture":true}\n' > "$payload/attestation.json"
   printf 'test\n' > "$TEST_PROJECT/certs/fullchain.pem"
   printf 'test\n' > "$TEST_PROJECT/certs/privkey.pem"
@@ -104,6 +150,7 @@ ENV
       | .config.LOCAL_BACKUP_RETENTION_DAYS="7"' > "$payload/request.json"
   FAIL_PHASE=none
   TEST_MIGRATIONS='[]'
+  TEST_CLIENTS=0 TEST_DRAIN_EXIT=0 FAIL_RECOVERY=0
 }
 run_release() {
   (cd "$TEST_PROJECT" && bash "$payload/production-release.sh" "$TEST_PROJECT" "$payload") > "$test_root/run.log" 2>&1
@@ -127,24 +174,37 @@ cp "$TEST_PROJECT/releases/active.json" "$test_root/last-record"
 if run_release; then echo 'duplicate attempt was accepted' >&2; exit 1; fi
 cmp "$TEST_PROJECT/releases/active.json" "$test_root/last-record"
 
-for failure in images backup migration_check migrate application local_health ingress public_health; do
+for failure in capacity_before_pull images capacity_after_pull migration_check candidate_preflight maintenance drain database_quiescence backup migrate application local_health ingress public_health reopen; do
   fixture
   FAIL_PHASE="$failure"
   if run_release; then echo "failure not detected: $failure" >&2; exit 1; fi
   jq -e --arg phase "$failure" '.status=="failed" and .phase==$phase' "$TEST_PROJECT/releases/active.json" >/dev/null
   [[ ! -e "$TEST_PROJECT/releases/current.json" ]]
-  if [[ "$failure" == images || "$failure" == backup || "$failure" == migration_check ]]; then
+  if [[ "$failure" =~ ^(capacity_before_pull|capacity_after_pull|images|backup|migration_check|candidate_preflight|maintenance|drain|database_quiescence)$ ]]; then
     cmp "$TEST_PROJECT/.env.production" "$test_root/old-env"
     [[ "$("$REAL_GIT" -C "$TEST_PROJECT" rev-parse HEAD)" == "$(cat "$test_root/old-sha")" ]]
     if grep -q 'up -d --no-deps --no-build --pull never app worker' "$TEST_PROJECT/docker.log"; then exit 1; fi
+    [[ ! -f "$TEST_PROJECT/.release-runtime/maintenance" ]]
   else
     [[ "$("$REAL_GIT" -C "$TEST_PROJECT" rev-parse HEAD)" == "$TEST_SHA" ]]
     grep -q 'new-secret-' "$TEST_PROJECT/.env.production"
     jq -e '.migrationsStarted' "$TEST_PROJECT/releases/active.json" >/dev/null
     grep -q 'rm -f miaomiao-release-123-1-migrate miaomiao-release-123-1-admin' "$TEST_PROJECT/docker.log"
+    [[ -f "$TEST_PROJECT/.release-runtime/maintenance" ]]
   fi
   [[ -z "$(find "$TEST_PROJECT/backups" -name '*.incomplete' 2>/dev/null)" ]]
   assert_no_secret_evidence
+done
+
+for blocked in force_kill database_client failed_recovery; do
+  fixture
+  if [[ "$blocked" == force_kill ]]; then TEST_DRAIN_EXIT=137; fi
+  if [[ "$blocked" == database_client ]]; then TEST_CLIENTS=1; fi
+  if [[ "$blocked" == failed_recovery ]]; then FAIL_PHASE=backup; FAIL_RECOVERY=1; fi
+  if run_release; then echo "unsafe release accepted: $blocked" >&2; exit 1; fi
+  jq -e '.migrationsStarted==false and .status=="failed"' "$TEST_PROJECT/releases/active.json" >/dev/null
+  if grep -q 'phase=migrate$' "$test_root/run.log"; then exit 1; fi
+  if [[ "$blocked" == failed_recovery ]]; then [[ -f "$TEST_PROJECT/.release-runtime/maintenance" ]]; fi
 done
 
 # An unfinished attempt is visible and requires the existing recovery input.
@@ -197,4 +257,4 @@ touch "$test_root/release-lock"
 wait "$holder"
 if ! wait "$runner"; then cat "$test_root/run.log"; exit 1; fi
 assert_no_secret_evidence
-echo 'Production release: success, 8 injected failures, rollback checks, duplicate attempt, secrets and real host lock passed.'
+echo 'Production release: success, 15 phase faults, forced drain/database/recovery failures, rollback checks, duplicate attempt, secrets and real host lock passed.'

@@ -219,17 +219,21 @@ async function shutdown(signal: string, exitCode = 0) {
   if (maintenanceTimer) clearInterval(maintenanceTimer);
   // 先等队列任务排空，再清除心跳：滚动发布期间健康检查不应在活跃任务尚未
   // 完成时就把 Worker 判死。
-  await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), activeMaintenance, stopAchievementRefresh?.()]);
+  const drained = await Promise.allSettled([worker.close(), weeklyChallengeWorker.close(), activeMaintenance, stopAchievementRefresh?.()]);
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   // Finish the last write before deleting this instance's keys.
   await activeHeartbeat;
-  await Promise.allSettled([
+  const released = await Promise.allSettled([
     closeVideoQueue(),
     closeWeeklyChallengeQueue(),
     closeWorkerHealth(),
     closeDouyinBrowser(),
     db.$disconnect(),
   ]);
+  if ([...drained, ...released].some((result) => result.status === "rejected")) {
+    console.error("[video-worker] shutdown did not complete cleanly");
+    exitCode = 1;
+  }
   closePerformanceStore();
   if (watchdogTimer) clearInterval(watchdogTimer);
   process.exit(exitCode);

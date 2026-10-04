@@ -12,6 +12,7 @@ output
 .git
 releases
 .release-private
+.release-runtime
 .production.lock
 # Type checks and tests still run in core; these files are not runtime inputs.
 tests
@@ -19,5 +20,16 @@ docs
 .github
 AGENTS.md
 README.md
+PRODUCTION-READINESS.md
 playwright.config.ts
 vitest.config.ts
+# Host release tooling is tested by CI and sent through the trusted payload;
+# it is not a runtime input of either image.
+scripts/*.sh
+scripts/test-*.mjs
+scripts/prepare-production-release.mjs
+scripts/release-manifest.mjs
+scripts/automatic-release.mjs
+scripts/observe-production-release.mjs
+scripts/verify-web-candidate.mjs
+scripts/nginx-release.conf

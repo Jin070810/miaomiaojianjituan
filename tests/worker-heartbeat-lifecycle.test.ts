@@ -42,3 +42,19 @@ it("keeps heartbeats alive during slow startup maintenance and a graceful drain"
   await vi.advanceTimersByTimeAsync(0);
   expect(exit).toHaveBeenCalledWith(0);
 });
+
+it("reports an unsuccessful queue close as a failed deployment drain", async () => {
+  vi.resetModules();
+  vi.clearAllTimers();
+  exit.mockClear();
+  let finishMaintenance!: (value: { failures: [] }) => void;
+  s.maintenance.mockReturnValue(new Promise((resolve) => { finishMaintenance = resolve; }));
+  s.close.mockResolvedValue(undefined);
+  await import("../worker");
+  await vi.advanceTimersByTimeAsync(0);
+  s.close.mockRejectedValueOnce(new Error("synthetic queue close failure"));
+  s.handlers.get("SIGTERM")!();
+  finishMaintenance({ failures: [] });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(exit).toHaveBeenCalledWith(1);
+});

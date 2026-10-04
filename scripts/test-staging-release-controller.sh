@@ -6,7 +6,9 @@ set -euo pipefail
 [[ -n "${RUNNER_TEMP:-}" ]]
 source_root="$(pwd)"
 fixture="$(mktemp -d "$RUNNER_TEMP/release-controller.XXXXXX")"
-export TEST_REAL_DOCKER TEST_APP_ID TEST_WORKER_ID
+export TEST_REAL_DOCKER TEST_APP_ID TEST_WORKER_ID TEST_RELEASE_FIXTURE TEST_RELEASE_SOURCE
+TEST_RELEASE_FIXTURE="$fixture"
+TEST_RELEASE_SOURCE="$source_root"
 TEST_REAL_DOCKER="$(command -v docker)"
 TEST_APP_ID="$(docker image inspect --format '{{.Id}}' miaomiao-points-app:production)"
 TEST_WORKER_ID="$(docker image inspect --format '{{.Id}}' miaomiao-points-worker:production)"
@@ -25,6 +27,20 @@ cat > "$fixture/bin/docker" <<'ADAPTER'
 set -euo pipefail
 if [[ "${1:-}" == login ]]; then cat >/dev/null; exit 0; fi
 if [[ "${1:-}" == pull && "${2:-}" == ghcr.io/fixture/* ]]; then exit 0; fi
+if [[ "${1:-}" == stop && ! -f "$TEST_RELEASE_FIXTURE/pending-release" ]]; then
+  service="$("$TEST_REAL_DOCKER" inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "${@: -1}")"
+  if [[ "$service" == app ]]; then
+    node "$TEST_RELEASE_SOURCE/scripts/test-staging-maintenance.mjs" "$TEST_RELEASE_SOURCE/output/release-controller/"
+    "$TEST_REAL_DOCKER" "$@" &
+    stopping=$!
+    sleep 1
+    # A forced/signal-only shutdown would already have dropped the request.
+    [[ "$("$TEST_REAL_DOCKER" inspect --format '{{.State.Running}}' "${@: -1}")" == true ]]
+    touch "$TEST_RELEASE_FIXTURE/pending-release"
+    wait "$stopping"
+    exit 0
+  fi
+fi
 args=()
 for arg in "$@"; do
   if [[ "$arg" == ghcr.io/fixture/system-app@* ]]; then arg="$TEST_APP_ID"; fi
@@ -66,18 +82,38 @@ node scripts/release-manifest.mjs create output/release/deploy-candidate.json .
 # signature orchestration and main-only real signing are tested separately.
 printf '{"syntheticHostFixture":true}\n' > output/release/deploy-candidate.sigstore.json
 node scripts/prepare-production-release.mjs "$fixture/payload"
+node scripts/test-staging-pending-request.mjs "$fixture" &
+pending_request=$!
+for _ in {1..50}; do
+  [[ ! -f "$fixture/pending-ready" ]] || break
+  sleep 0.1
+done
+[[ -f "$fixture/pending-ready" ]]
 set +e
 tar -czf - -C "$fixture/payload" request.json manifest.json attestation.json production-lock.sh production-release.sh \
-  production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh |
+  production-preflight.sh pull-release-images.sh backup-db.sh verify-release-health.sh \
+  release-lifecycle.sh nginx-release.conf verify-web-candidate.mjs legacy-queue-drain.cjs release-capacity.sh |
   bash scripts/receive-production-release.sh "$project"
 status=$?
 set -e
+if (( status == 0 )); then
+  wait "$pending_request"
+  cp "$fixture/pending-completed.json" "$source_root/output/release-controller/"
+else
+  kill "$pending_request" 2>/dev/null || true
+  wait "$pending_request" 2>/dev/null || true
+fi
 if [[ -d "$project/releases" ]]; then
   cp -r "$project/releases" "$source_root/output/release-controller/"
 fi
 # Retain only safe metadata, never the database dump or environment snapshots.
 if (( status != 0 )); then exit "$status"; fi
 jq -e '.status=="succeeded" and .phase=="completed" and .migrationsStarted' "$project/releases/active.json" >/dev/null
+jq -e '.state.ExitCode==143 or .state.ExitCode==0' "$project/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/drain-app.json" >/dev/null
+jq -e '.state.ExitCode==0' "$project/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/drain-worker.json" >/dev/null
+jq -e '.otherClients==0' "$project/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/database-quiescence.json" >/dev/null
 [[ "$(stat -c '%a' "$project/.env.production")" == 600 ]]
 bash scripts/verify-release-health.sh https://localhost "$GITHUB_SHA" > output/release-controller/tls-health.json
-echo 'Real staging release controller, verified pg_dump, migrations and TLS ingress passed.'
+bash scripts/probe-production-release.sh "$project" "$GITHUB_SHA" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" localhost integrity > output/release-controller/observation-probe.json
+jq -e '.state == "healthy" and .integrity == true' output/release-controller/observation-probe.json >/dev/null
+echo 'Real staging candidate preflight, maintenance gate, pending request drain, quiescent backup, migration and TLS ingress passed.'

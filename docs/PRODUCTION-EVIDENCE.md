@@ -1,0 +1,24 @@
+# 首次切换前的生产证据
+
+关联 #105；独立于业务整合先落地的只读诊断，用现有 GitHub production Environment 的部署连接取得实际容量、版本与备份证据。所有者 2026-10-04 已授权继续实施和全自动发版，无需逐次人工审查；不改变生产应用、数据库或业务开关。
+
+`Production Readiness Evidence` 仅允许 main，检出可信 workflow SHA，读取现有 SSH Secret，不返回私钥或环境文件。脚本仅查询：
+
+- 当前 App/Worker/PostgreSQL/Redis/Nginx 的镜像 ID、来源 digest、版本和运行状态；不读取容器 Env、命令参数或原始日志。
+- 可用内存和磁盘、数据库大小、表行数估计、migration 名称/checksum、最近最多 100 条视频的状态汇总；SQL 强制只读，单条 5 秒、锁等待 500ms。
+- 最近一份本地备份的文件名、大小、时间和 SHA-256 校验是否通过；不生成或下载备份。
+- 公开健康的固定状态和 App/Worker commit。
+
+存在主机维护锁时取得有界共享锁；旧版没有锁时如实标记 sharedLock=false，不把快照当成原子运行状态。临时文件位于私有 /tmp 目录，退出即清理。workflow 只上传成功的白名单 JSON，不上传数据库内容、成员 ID、昵称、手机号、收货信息或原始日志。
+
+该结果用于判断隔离迁移演练是否能在受限资源内进行、核对原 v1.11 镜像是否仍保留。它不是迁移演练或镜像排空资格验证本身，不因此勾选后续技术门禁。
+
+2026-10-04 首次实际诊断 run `37175035361` 成功：线上仍为 v1.11.0，服务健康，备份校验通过；数据库约 64.5 MB，可用内存约 2.53 GB，但项目所在文件系统只剩 **127,463,424 字节（约 122 MiB）**。此时不能开始镜像拉取、额外数据库恢复或正式切换。
+
+容量扩展诊断继续保持只读：统计文件系统总量/已用量、Docker 按对象类别的可回收容量、构建缓存 ID/大小/是否可回收、本项目镜像、固定目录占用与 Docker 存储后端。构建描述、其他项目镜像、容器 Env 和日志内容不输出。命令有界，旧 Docker 不支持缓存 JSON 时明确 available=false。不会执行任何 prune、删除镜像、删除卷或备份清理；须先依据实际占用识别可处理对象。
+
+接口依据：[docker system df](https://docs.docker.com/reference/cli/docker/system/df/)、[docker buildx du](https://docs.docker.com/reference/cli/docker/buildx/du/)。大小估计、共享层与可回收容量可能重叠，不可直接相加当作必然能释放的空间。
+
+原 v1.11.0 的来源依据为正式部署 run `36514915183` 及 `RELEASE-20260929-V1.11.0.md`，两者确认同一 SHA `752b084ec220ce5c827609611e51ce718b28b92d` 与 App/Worker digest。隔离验证必须直接拉取这些原 digest，不能用同 SHA 重建物代替。
+
+最新 main 的生产依赖审计仍被 Nodemailer 9 的 high 问题阻断。本分支采用已在整改候选通过验证的 Nodemailer 10.0.9 精确版本，使技术门禁恢复；不修改邮件发送逻辑，不降低审计阈值。该小修复随 main 进入后续整合，不会通过此诊断 workflow 部署到生产。

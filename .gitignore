@@ -23,6 +23,7 @@ output/dev.*
 output/
 releases/
 .release-private/
+.release-runtime/
 .production.lock
 tmp/
 .mimosa/

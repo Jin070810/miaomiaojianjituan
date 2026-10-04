@@ -19,7 +19,7 @@ Deploy Production 新增 `candidate_source`，默认 `ci-artifact`。artifact �
 
 验签使用官方 `gh attestation verify`，同时约束当前仓库、`refs/heads/main`、源 SHA、签名 workflow 的 SHA、精确 `.github/workflows/ci.yml` 身份、GitHub Actions OIDC issuer，并拒绝 self-hosted runner。身份校验针对签名证书；不能把 bundle 里 workflow 可自行填写的 predicate 当作来源证明。不会读取归档方提供的自定义 trusted root。
 
-随后仍通过 GitHub 已认证 API 读取原 run/attempt，确认 push/main、仓库、SHA、workflow、attempt 和 completed/success；再将 schema/migration 清单与该 SHA 的 Git 源码逐一比较。有效签名不豁免 CI 或数据库兼容性检查。
+随后仍通过 GitHub 已认证 API 读取原 run/attempt，确认 main 上的 push 或 workflow_dispatch、仓库、SHA、workflow、attempt 和 completed/success；再将 schema/migration 清单与该 SHA 的 Git 源码逐一比较。有效签名不豁免 CI 或数据库兼容性检查。自动化合并显式 dispatch main CI 的原因见 [自动发版](AUTOMATIC-RELEASE.md)。
 
 `server-archive` 解决 artifact 留存期问题，不承诺 GitHub 完全离线或所有历史记录被删除后仍能恢复。如果原 CI attempt 不可读取、签名缺失、镜像摘要被清理、来源不符或数据库不兼容，会明确失败；应选择可验证版本或重新验收前向修复，不能临时重建后沿用旧证明。
 

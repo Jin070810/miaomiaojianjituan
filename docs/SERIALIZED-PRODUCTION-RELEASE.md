@@ -60,4 +60,4 @@ GHCR token 和可选管理员密码仅通过私有 stdin 载荷传输，不出�
 
 CI staging 另执行 `test-staging-release-controller.sh`：仅 `CI=true`、显式开关和 `miaomiao_staging` 数据库允许进入。使用临时仓库、合成密钥、真实预检、pg_dump/目录校验、迁移、App/Worker 和本机 TLS Nginx 入口。在旧 App 保持一个尚未传完的无效登录请求，发送 SIGTERM 后确认进程仍等待，再完成请求并断言返回 400。维护页用 Playwright 检查 390×844 与 1440×900、刷新按钮、页面无横向溢出和 API 阻断。PR 无 registry 写权限，因此仅将 fixture 镜像路径映射到本次已经构建的实际 image ID；不模拟 Compose、数据库、容器启动或健康请求。新增演练须以该 PR 的 CI 成功结果为准；不代表脱敏生产副本恢复或已上线。
 
-部署主机需要 Bash、Git、Docker Compose、jq、OpenSSL、GNU timeout、flock、realpath、tar 和 sha256sum。上线前仍须维护者完成原有自审、staging、备份/快照、证书、密钥及回滚点确认。
+部署主机需要 Bash、Git、Docker Compose、jq、OpenSSL、GNU timeout、flock、realpath、tar 和 sha256sum。上线前仍须通过 staging、备份/恢复、证书、密钥及回滚兼容性检查。按所有者 2026-10-04 要求，这些检查由自动化执行，不要求维护者自审或逐次批准；见 [自动发版](AUTOMATIC-RELEASE.md)。

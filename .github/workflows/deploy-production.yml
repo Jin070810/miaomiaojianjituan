@@ -1,10 +1,14 @@
 name: Deploy Production
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_commit:
-        description: "已审查并合并到 main 的完整 commit SHA"
+        description: "故障恢复或历史制品重发使用的 main 完整 commit SHA；日常发布自动触发"
         required: true
         type: string
       candidate_run_id:
@@ -32,17 +36,7 @@ on:
         required: true
         default: false
         type: boolean
-      confirm_production:
-        description: "我已确认 release SHA、备份、证书和回滚点，可以发布到正式环境"
-        required: true
-        default: false
-        type: boolean
-      solo_maintainer_confirmation:
-        description: "单人维护者已完成 PR 自审、staging 验收和回滚确认（多人协作时也可作为发布负责人确认）"
-        required: true
-        default: false
-        type: boolean
-      confirm_alert_deferred:
+      allow_deferred_alerts:
         description: "仅在告警稍后配置且周挑战保持关闭时勾选；部署会强制验证开关关闭"
         required: true
         default: false
@@ -58,45 +52,70 @@ permissions:
   packages: read
   actions: read
 
-concurrency:
-  group: production
-  cancel-in-progress: false
-
 jobs:
+  plan:
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.plan.outputs.eligible }}
+      commit: ${{ steps.plan.outputs.commit }}
+      run_id: ${{ steps.plan.outputs.run_id }}
+      attempt: ${{ steps.plan.outputs.attempt }}
+      automatic: ${{ steps.plan.outputs.automatic }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Resolve the exact successful main candidate
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_SOURCE: ${{ inputs.candidate_source }}
+          CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+        run: node scripts/automatic-release.mjs plan
+
   deploy:
-    if: github.ref == 'refs/heads/main'
+    needs: plan
+    if: needs.plan.outputs.eligible == 'true'
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      packages: read
+      actions: read
+    outputs:
+      commit: ${{ needs.plan.outputs.commit }}
+      deployed: ${{ steps.record.outputs.deployed }}
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 35
     steps:
-      - name: Require explicit production confirmation
-        env:
-          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
-        run: |
-          test "$CONFIRM_PRODUCTION" = "true"
-
-      - name: Require maintainer review and staging confirmation
-        env:
-          SOLO_MAINTAINER_CONFIRMATION: ${{ inputs.solo_maintainer_confirmation }}
-        run: |
-          test "$SOLO_MAINTAINER_CONFIRMATION" = "true"
-
       - name: Validate release commit
         env:
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
         run: |
           if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
             echo "release_commit 必须是完整的 40 位 SHA"
             exit 1
           fi
 
-      - name: Verify commit is merged into main
+      - name: Read the trusted controller from main
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - name: Verify release ancestry
         env:
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
         run: |
           git fetch --no-tags origin main
           git cat-file -e "$RELEASE_COMMIT^{commit}"
@@ -109,7 +128,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Skip an automatic candidate superseded while waiting for the deployment lock
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+          AUTOMATIC: ${{ needs.plan.outputs.automatic }}
+        run: node scripts/automatic-release.mjs fresh
+
       - name: Configure SSH
+        if: steps.fresh.outputs.eligible == 'true'
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
@@ -134,11 +162,11 @@ jobs:
 
       - name: Verify the exact successful main CI run
         id: candidate_run
-        if: inputs.candidate_source == 'ci-artifact'
+        if: steps.fresh.outputs.eligible == 'true' && (inputs.candidate_source || 'ci-artifact') == 'ci-artifact'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+          CANDIDATE_RUN_ID: ${{ needs.plan.outputs.run_id }}
         run: |
           [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           mkdir -p output/release
@@ -146,43 +174,44 @@ jobs:
           node scripts/release-manifest.mjs verify-run output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID"
 
       - name: Download only that validated attempt's release manifest
-        if: inputs.candidate_source == 'ci-artifact'
+        if: steps.fresh.outputs.eligible == 'true' && (inputs.candidate_source || 'ci-artifact') == 'ci-artifact'
         uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
-          run-id: ${{ inputs.candidate_run_id }}
-          name: release-candidate-${{ inputs.candidate_run_id }}-${{ steps.candidate_run.outputs.attempt }}
+          run-id: ${{ needs.plan.outputs.run_id }}
+          name: release-candidate-${{ needs.plan.outputs.run_id }}-${{ steps.candidate_run.outputs.attempt }}
           path: output/release/candidate
 
       - name: Read the retained signed candidate (read-only)
-        if: inputs.candidate_source == 'server-archive'
+        if: steps.fresh.outputs.eligible == 'true' && inputs.candidate_source == 'server-archive'
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+          CANDIDATE_RUN_ID: ${{ needs.plan.outputs.run_id }}
           CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
         run: |
           bash scripts/fetch-retained-release.sh "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" \
             "$CANDIDATE_ATTEMPT" output/release/candidate
 
       - name: Verify signed bytes and exact main CI identity
+        if: steps.fresh.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
         run: |
           bash scripts/verify-signed-release.sh output/release/candidate/release-candidate.json \
             output/release/candidate/release-candidate.sigstore.json "$RELEASE_COMMIT" \
             > output/release/signature-verification.json
 
       - name: Validate the archived candidate's original successful CI attempt
-        if: inputs.candidate_source == 'server-archive'
+        if: steps.fresh.outputs.eligible == 'true' && inputs.candidate_source == 'server-archive'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+          CANDIDATE_RUN_ID: ${{ needs.plan.outputs.run_id }}
           CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
         run: |
           [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ && "$CANDIDATE_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
@@ -190,24 +219,35 @@ jobs:
           node scripts/release-manifest.mjs verify-run output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID"
 
       - name: Read the merged release schema and migrations
+        if: steps.fresh.outputs.eligible == 'true'
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.release_commit }}
+          ref: ${{ needs.plan.outputs.commit }}
           path: release-source
           persist-credentials: false
 
       - name: Validate manifest, image digests, and migration checksums
+        if: steps.fresh.outputs.eligible == 'true'
         id: release
         env:
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+          CANDIDATE_RUN_ID: ${{ needs.plan.outputs.run_id }}
         run: |
           node scripts/release-manifest.mjs verify output/release/candidate/release-candidate.json \
             output/release/run.json "$RELEASE_COMMIT" "$CANDIDATE_RUN_ID" release-source
           cp output/release/candidate/release-candidate.json output/release/deploy-candidate.json
           cp output/release/candidate/release-candidate.sigstore.json output/release/deploy-candidate.sigstore.json
 
+      - name: Allocate or reuse an immutable release version
+        if: steps.fresh.outputs.eligible == 'true'
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+        run: node scripts/automatic-release.mjs version
+
       - name: Run the entire release under one host lock
+        if: steps.fresh.outputs.eligible == 'true'
         timeout-minutes: 33
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
@@ -224,14 +264,15 @@ jobs:
           ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
           ALERT_SMTP_PASSWORD: ${{ secrets.ALERT_SMTP_PASSWORD }}
           ALERT_SMTP_SECURE: ${{ vars.ALERT_SMTP_SECURE }}
-          ALERTS_DEFERRED: ${{ inputs.confirm_alert_deferred }}
+          ALERTS_DEFERRED: ${{ vars.ALERTS_DEFERRED || inputs.allow_deferred_alerts || 'false' }}
           BACKUP_STORAGE_MODE: ${{ vars.BACKUP_STORAGE_MODE }}
           OSS_BUCKET: ${{ vars.OSS_BUCKET }}
           OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT }}
           OSS_ECS_ROLE_NAME: ${{ vars.OSS_ECS_ROLE_NAME }}
           OSS_PREFIX: ${{ vars.OSS_PREFIX }}
           LOCAL_BACKUP_RETENTION_DAYS: ${{ vars.LOCAL_BACKUP_RETENTION_DAYS }}
-          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
           BOOTSTRAP_ADMIN: ${{ inputs.bootstrap_admin }}
           RECOVER_FROM_FAILED_RELEASE: ${{ inputs.recover_from_failed_release }}
           MIGRATION_COMPATIBILITY_NOTE: ${{ inputs.migration_compatibility_note }}
@@ -244,10 +285,6 @@ jobs:
           set -euo pipefail
           payload="$(mktemp -d)"
           trap 'rm -rf -- "$payload"' EXIT
-          # The engineering process requires a version tag on the approved SHA.
-          versions="$(git tag --points-at "$RELEASE_COMMIT" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
-          [[ -n "$versions" && "$versions" != *$'\n'* ]]
-          export RELEASE_VERSION="$versions"
           node scripts/prepare-production-release.mjs "$payload"
           receiver="$(cat scripts/receive-production-release.sh)"
           remote="$(printf 'bash -c %q -- %q' "$receiver" "$PRODUCTION_PATH")"
@@ -259,23 +296,120 @@ jobs:
             | timeout --signal=TERM --kill-after=30s 32m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote"
 
       - name: Collect the atomic release journal even after failure
-        if: always()
+        if: always() && steps.fresh.outputs.eligible == 'true'
         env:
           PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
           PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
           PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
         run: |
           if test -f "$HOME/.ssh/config"; then
+            mkdir -p output/release
             path="$PRODUCTION_PATH/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/journal.json"
             remote="$(printf 'cat -- %q' "$path")"
             timeout 30 ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" > output/release/deploy-journal.json || true
           fi
 
+      - name: Record the deployed release automatically
+        if: steps.fresh.outputs.eligible == 'true'
+        id: record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+        run: node scripts/automatic-release.mjs record
+
       - name: Preserve release evidence (never the private payload)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: production-release-${{ inputs.release_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: production-release-${{ needs.plan.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: output/release/*.json
           if-no-files-found: warn
+          retention-days: 90
+
+  observe:
+    needs: [plan, deploy]
+    if: needs.deploy.outputs.deployed == 'true'
+    # Observation never owns the production deployment concurrency group.
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 70
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          name: production-release-${{ needs.plan.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release
+      - name: Configure bounded observation SSH
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          timeout 20 ssh-keyscan -T 10 -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+          printf '%s\n' 'Host *' '  BatchMode yes' '  ConnectTimeout 10' '  ServerAliveInterval 15' '  ServerAliveCountMax 3' > "$HOME/.ssh/config"
+          chmod 600 "$HOME/.ssh/config"
+      - name: Observe thirty healthy minutes and reconcile before and after
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+        run: node scripts/observe-production-release.mjs
+      - name: Retain sanitized observation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-observation-${{ needs.plan.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/release/observation.json
+            output/release/release-record.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  finalize:
+    needs: [plan, deploy, observe]
+    if: always() && needs.deploy.outputs.deployed == 'true' && (needs.observe.result == 'success' || needs.observe.result == 'failure')
+    # Only the brief metadata update shares the deploy lock. This closes the
+    # GET/PATCH race with a same-version redeployment's new release record.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          name: production-observation-${{ needs.plan.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release
+      - name: Finalize only this deployment's observation record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/automatic-release.mjs observe-record
+      - uses: actions/upload-artifact@v7
+        with:
+          name: production-final-record-${{ needs.plan.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/release/release-record.json
+          if-no-files-found: error
           retention-days: 90

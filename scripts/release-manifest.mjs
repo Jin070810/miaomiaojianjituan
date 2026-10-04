@@ -61,7 +61,7 @@ export function validateRun(run, expected) {
   requireValue(run.repository?.full_name?.toLowerCase() === expected.repository.toLowerCase(), "CI 仓库不匹配");
   requireValue(run.head_repository?.full_name?.toLowerCase() === expected.repository.toLowerCase(), "拒绝 fork 候选");
   requireValue(run.path === ".github/workflows/ci.yml", "只接受 CI workflow 的产物");
-  requireValue(run.event === "push" && run.head_branch === "main", "只接受 main push 的候选");
+  requireValue(["push", "workflow_dispatch"].includes(run.event) && run.head_branch === "main", "只接受 main push 或显式 main CI 的候选");
   requireValue(run.head_sha === expected.commit, "CI 没有验收当前 release SHA");
   requireValue(run.status === "completed" && run.conclusion === "success", "CI 未全部成功");
   requireValue(positiveInteger(run.run_attempt), "CI attempt 无效");

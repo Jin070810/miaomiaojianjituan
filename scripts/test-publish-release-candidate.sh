@@ -36,13 +36,17 @@ bash scripts/publish-release-candidate.sh
 jq -e '.images.app.digest == "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" and .ci.runId == "123" and .checks.e2e == true' output/release/release-candidate.json >/dev/null
 grep -Fqx "push ghcr.io/example/points-worker:$GITHUB_SHA-123-1" "$FAKE_LOG"
 if grep -Eq '^build' "$FAKE_LOG"; then echo "发布步骤重新构建了镜像" >&2; exit 1; fi
+export GITHUB_EVENT_NAME=workflow_dispatch
+bash scripts/publish-release-candidate.sh
 
-for failure in changed-image pr-event missing-proof; do
+for failure in changed-image pr-event pr-dispatch branch-dispatch missing-proof; do
   : > "$FAKE_LOG"
-  export ACTUAL_WORKER_ID="$WORKER_CONFIG_ID" GITHUB_EVENT_NAME=push
+  export ACTUAL_WORKER_ID="$WORKER_CONFIG_ID" GITHUB_EVENT_NAME=push CI_PULL_REQUEST_NUMBER='' GITHUB_REF=refs/heads/main
   case "$failure" in
     changed-image) export ACTUAL_WORKER_ID="$APP_CONFIG_ID" ;;
     pr-event) export GITHUB_EVENT_NAME=pull_request ;;
+    pr-dispatch) export GITHUB_EVENT_NAME=workflow_dispatch CI_PULL_REQUEST_NUMBER=7 ;;
+    branch-dispatch) export GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/fix/example ;;
     missing-proof) mv output/release/staging-proof.json output/release/invalid-proof.json ;;
   esac
   if bash scripts/publish-release-candidate.sh; then echo "未拒绝 $failure" >&2; exit 1; fi

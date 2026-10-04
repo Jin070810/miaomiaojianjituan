@@ -29,5 +29,7 @@ scripts/*.sh
 scripts/test-*.mjs
 scripts/prepare-production-release.mjs
 scripts/release-manifest.mjs
+scripts/automatic-release.mjs
+scripts/observe-production-release.mjs
 scripts/verify-web-candidate.mjs
 scripts/nginx-release.conf

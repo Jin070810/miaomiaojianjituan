@@ -114,4 +114,6 @@ jq -e '.state.ExitCode==0' "$project/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RU
 jq -e '.otherClients==0' "$project/releases/attempts/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/database-quiescence.json" >/dev/null
 [[ "$(stat -c '%a' "$project/.env.production")" == 600 ]]
 bash scripts/verify-release-health.sh https://localhost "$GITHUB_SHA" > output/release-controller/tls-health.json
+bash scripts/probe-production-release.sh "$project" "$GITHUB_SHA" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" localhost integrity > output/release-controller/observation-probe.json
+jq -e '.state == "healthy" and .integrity == true' output/release-controller/observation-probe.json >/dev/null
 echo 'Real staging candidate preflight, maintenance gate, pending request drain, quiescent backup, migration and TLS ingress passed.'

@@ -38,7 +38,7 @@ test("validated main candidate produces exact digest outputs and complete migrat
 });
 
 for (const [field, value] of [
-  ["event", "pull_request"], ["event", "workflow_dispatch"], ["head_branch", "feature/unreviewed"],
+  ["event", "pull_request"], ["event", "pull_request_target"], ["head_branch", "feature/unreviewed"],
   ["head_sha", "d".repeat(40)], ["status", "in_progress"], ["conclusion", "failure"],
   ["conclusion", "cancelled"], ["path", ".github/workflows/other.yml"], ["id", 456],
   ["repository", { full_name: "Other/points" }], ["head_repository", { full_name: "Fork/points" }],

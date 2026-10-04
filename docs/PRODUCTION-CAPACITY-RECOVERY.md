@@ -9,3 +9,5 @@
 这是依据实际磁盘证据进行的一次容量修复。完整自动发版由整合分支提供；合并本脚本不会自动升级线上应用。
 
 过滤器依据：[Docker Buildx prune 官方说明](https://github.com/docker/buildx/blob/master/docs/reference/buildx_prune.md)、[Docker Buildx du 官方说明](https://github.com/docker/buildx/blob/master/docs/reference/buildx_du.md)。
+
+兼容修正：首次run `37177628857` 选择结果为空，没有执行prune，所有受保护资源及健康保持不变。核对[BuildKit字段适配源码](https://github.com/moby/buildkit/blob/master/cache/manager.go)后，改用 `private=""` 匹配存在的私有记录，不能把布尔存在字段写成 `shared=false` 或 `inuse=false`。`du` 只列出候选，7天年龄由 `prune` 的KeepDuration执行，活跃记录由BuildKit自身保护。新增真实scratch构建缓存CI测试，验证年轻缓存不被7天过滤删除、精确ID回收及镜像保留，避免仅凭mock确认CLI语义。

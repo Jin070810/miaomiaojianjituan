@@ -1,5 +1,7 @@
 # 生产副本迁移演练
 
+已核实的最早三条历史校验差异按[精确兼容记录](LEGACY-MIGRATION-COMPATIBILITY.md)处理，原始记录与差异均保留。其余差异仍拒绝；最终合格仍要求迁移、结构、数值守恒和生产保持全部通过。
+
 `Isolated Production Copy Rehearsal` 由可信 main 工作流执行，输入必须是同仓库完整 CI 已成功的确切 commit。只传递该 commit 的 Prisma schema / migration 文件和 main 中的固定演练脚本，不启动候选应用。
 
 持有发布锁后，使用已校验的现有备份恢复到生产主机上的临时 PostgreSQL 容器。容器没有网络、映射端口或持久卷，数据仅存于受内存限制的 tmpfs；Prisma CLI 复用已存在的 Worker 镜像，加入这个隔离网络命名空间，无法连接生产数据库或互联网。所有原始备份、恢复日志和数据库行均留在主机，结束清理仅限本次演练容器和私有临时目录。生产服务不停止，不执行生产迁移。

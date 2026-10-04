@@ -135,16 +135,22 @@ printf 'SELECT json_agg(json_build_object('\''name'\'',migration_name,'\''checks
 jq -e 'all(.[]; .finished==true or .rolledBack==true)' "$private/before-migrations.json" >/dev/null
 phase=migration_checksums
 printf '[]\n' > "$private/checksum-differences.json"
+: > "$private/target-migrations.jsonl"
 while IFS=$'\t' read -r migration checksum; do
   [[ "$migration" =~ ^[0-9]{12,14}_[a-z0-9_]+$ && "$checksum" =~ ^[a-f0-9]{64}$ ]]
   actual="$(sha256sum "$payload/prisma/migrations/$migration/migration.sql" | cut -d' ' -f1)"
+  jq -nc --arg name "$migration" --arg hash "$actual" '{path:($name+"/migration.sql"),sha256:$hash}' >> "$private/target-migrations.jsonl"
   if [[ "$actual" != "$checksum" ]]; then
     jq --arg name "$migration" --arg recorded "$checksum" --arg target "$actual" \
       '.+[{name:$name,recorded:$recorded,target:$target}]' "$private/checksum-differences.json" > "$private/next.json"
     mv "$private/next.json" "$private/checksum-differences.json"
   fi
 done < <(jq -r '.[]|select(.rolledBack==false)|[.name,.checksum]|@tsv' "$private/before-migrations.json")
-# A mismatch still prevents qualification. Continue only inside the isolated
+jq -s '{migrations:.}' "$private/target-migrations.jsonl" > "$private/history-target.json"
+jq '[.[]|select(.rolledBack==false)]' "$private/before-migrations.json" > "$private/applied-history.json"
+jq --slurpfile target "$private/history-target.json" --slurpfile aliases "$payload/legacy-migration-checksums.json" \
+  -f "$payload/migration-history.jq" "$private/applied-history.json" > "$private/history-check.json"
+# An unknown mismatch still prevents qualification. Continue only inside the isolated
 # copy to gather structural evidence; never resolve or rewrite migration rows.
 # New SQL/schema only; never start Worker or import candidate application code.
 # The existing Prisma CLI has no host mounts except read-only schema, and shares
@@ -195,14 +201,17 @@ timeout 20 docker rm -f "$name-db" >/dev/null
 if docker container inspect "$name-db" >/dev/null 2>&1 || docker container inspect "$name-prisma" >/dev/null 2>&1; then exit 1; fi
 created=false
 history_matches="$(jq 'length==0' "$private/checksum-differences.json")"
+history_accepted="$(jq '.validChecksums and (.missingMigrations|length)==0' "$private/history-check.json")"
 jq -n --arg candidate "$candidate" --arg source "$source_sha" --arg at "$(date -u +%FT%TZ)" \
   --arg backup "$(basename "$backup")" --slurpfile aggregates "$private/after.json" --slurpfile migrations "$private/migrations.json" \
   --slurpfile differences "$private/checksum-differences.json" --argjson history "$history_matches" \
+  --slurpfile checked "$private/history-check.json" --argjson accepted "$history_accepted" \
   '{schemaVersion:1,candidateCommit:$candidate,productionCommit:$source,checkedAt:$at,backup:$backup,
     backupChecksumVerified:true,networkIsolated:true,rawDataExported:false,sanitizedBeforeMigration:true,
     repeatMigrationPassed:true,schemaDrift:false,aggregatesPreserved:true,productionServicesPreserved:true,
     isolatedCopyRemoved:true,aggregates:$aggregates[0],migrations:$migrations[0],structuralEquivalence:true,
-    historicalChecksumMatches:$history,checksumDifferences:$differences[0],qualified:$history,rehearsalPerformed:true}'
+    historicalChecksumMatches:$history,checksumDifferences:$differences[0],historicalChecksumAccepted:$accepted,
+    acceptedHistoricalVariants:$checked[0].historicalVariants,qualified:$accepted,rehearsalPerformed:true}'
 reported=true
 phase=historical_checksum_differences
-[[ "$history_matches" == true ]]
+[[ "$history_accepted" == true ]]

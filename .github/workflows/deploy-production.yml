@@ -280,6 +280,7 @@ jobs:
           cp -R release-source/prisma "$payload/prisma"
           find "$payload/prisma" -maxdepth 1 -type f ! -name schema.prisma -delete
           cp scripts/production-copy-rehearsal.sh scripts/sanitize-rehearsal.sql scripts/rehearsal-aggregate.sql scripts/rehearsal-structure.sql "$payload/"
+          cp scripts/migration-history.jq scripts/legacy-migration-checksums.json "$payload/"
           receiver='set -euo pipefail; umask 077; payload=$(mktemp -d /tmp/miaomiao-copy-payload.XXXXXX); trap '\''[[ "$payload" == /tmp/miaomiao-copy-payload.* ]] && rm -rf -- "$payload"'\'' EXIT; tar --no-same-owner --no-same-permissions -xzf - -C "$payload"; timeout --signal=TERM --kill-after=20s 12m bash "$payload/production-copy-rehearsal.sh" "$1" "$payload" "$2" "$3" "$4" if-changed'
           remote="$(printf 'bash -c %q -- %q %q %q %q' "$receiver" "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN" "$RELEASE_COMMIT" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
           tar -czf - -C "$payload" . |

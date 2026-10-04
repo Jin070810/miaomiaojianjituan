@@ -4,7 +4,7 @@ test_root="$(mktemp -d)"
 trap 'rm -rf -- "$test_root"' EXIT
 mkdir "$test_root/bin"
 printf '{"commit":"fixture"}\n' > "$test_root/manifest.json"
-printf '{"synthetic":true}\n' > "$test_root/bundle.json"
+printf '{}\n' > "$test_root/bundle.json"
 sha="$(printf 'a%.0s' {1..40})"
 # Exercise the installed CLI before substituting our contract adapter. Invalid
 # bundle media must reach the real parser; argument/auth/network errors cannot

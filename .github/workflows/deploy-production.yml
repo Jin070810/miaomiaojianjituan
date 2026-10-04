@@ -1,14 +1,15 @@
 name: Deploy Production
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
+      automatic:
+        description: "由 main CI 自动交接；仍要求该 CI 完整成功且候选为最新 main"
+        required: false
+        default: false
+        type: boolean
       release_commit:
-        description: "故障恢复或历史制品重发使用的 main 完整 commit SHA；日常发布自动触发"
+        description: "main 完整 commit SHA；日常由 CI 自动填写，故障恢复可显式指定"
         required: true
         type: string
       candidate_run_id:
@@ -22,7 +23,7 @@ on:
         type: choice
         options: [ci-artifact, server-archive]
       candidate_attempt:
-        description: "server-archive 必填：原成功 CI attempt；ci-artifact 忽略此项"
+        description: "自动交接及 server-archive 使用的原 CI attempt；手动 ci-artifact 从 API 核对"
         required: false
         default: "1"
         type: string
@@ -54,7 +55,7 @@ permissions:
 
 jobs:
   plan:
-    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository))
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -79,6 +80,7 @@ jobs:
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           CANDIDATE_SOURCE: ${{ inputs.candidate_source }}
           CANDIDATE_ATTEMPT: ${{ inputs.candidate_attempt }}
+          AUTOMATIC: ${{ inputs.automatic }}
         run: node scripts/automatic-release.mjs plan
 
   deploy:

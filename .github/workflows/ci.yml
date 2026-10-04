@@ -88,6 +88,7 @@ jobs:
       - run: bash scripts/test-production-evidence.sh
       - run: bash scripts/test-production-cache-cleanup.sh
       - run: bash scripts/test-rehearsal-sanitization.sh
+      - run: bash scripts/test-production-image-retention.sh
       - run: bash scripts/test-buildkit-cache-filter.sh
 
   e2e:

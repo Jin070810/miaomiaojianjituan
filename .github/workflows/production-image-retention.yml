@@ -1,0 +1,78 @@
+name: Production Image Retention
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inspect or remove only recoverable retired project images
+        type: choice
+        options: [inspect, clean]
+        default: inspect
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  retention:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Prepare private maintenance payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p output/image-payload output/image-result
+          cp scripts/production-image-retention.sh scripts/select-retired-images.jq output/image-payload/
+          jq -n '{actor:env.GITHUB_ACTOR,token:env.GH_TOKEN}' > output/image-payload/registry.json
+          tar -C output/image-payload -czf output/image-payload.tar.gz .
+      - name: Configure existing production connection
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          test -n "$PRODUCTION_HOST"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          timeout 20 ssh-keyscan -T 10 -H "$PRODUCTION_HOST" >> "$HOME/.ssh/known_hosts"
+          printf '%s\n' 'Host *' '  BatchMode yes' '  ConnectTimeout 10' '  ServerAliveInterval 15' '  ServerAliveCountMax 3' > "$HOME/.ssh/config"
+      - name: Verify immutable recovery sources and enforce retention
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+          PRODUCTION_PATH: ${{ vars.PRODUCTION_PATH }}
+          PRODUCTION_DOMAIN: ${{ vars.PRODUCTION_DOMAIN }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_PATH"
+          test -n "$PRODUCTION_USER"
+          receiver='set -euo pipefail; umask 077; payload=$(mktemp -d /tmp/miaomiao-image-payload.XXXXXX); trap '\''[[ "$payload" == /tmp/miaomiao-image-payload.* ]] && rm -rf -- "$payload"'\'' EXIT; tar --no-same-owner --no-same-permissions -xzf - -C "$payload"; timeout --signal=TERM --kill-after=20s 10m bash "$payload/production-image-retention.sh" "$1" "$payload" "$2" "$3"'
+          remote="$(printf 'bash -c %q -- %q %q %q' "$receiver" "$PRODUCTION_PATH" "$PRODUCTION_DOMAIN" "$MODE")"
+          timeout --signal=TERM --kill-after=30s 12m ssh "$PRODUCTION_USER@$PRODUCTION_HOST" "$remote" \
+            < output/image-payload.tar.gz > output/image-result/report.json
+          jq -e '.healthy and .protectedResourcesPreserved' output/image-result/report.json >/dev/null
+      - name: Retain maintenance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-image-retention-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/image-result/report.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Remove private runner payload
+        if: always()
+        run: rm -rf -- output/image-payload output/image-payload.tar.gz

@@ -30,6 +30,10 @@ elif [[ "${1:-}" == "image" && "${2:-}" == "inspect" ]]; then
   else
     printf 'verified\n'
   fi
+elif [[ "${1:-}" == manifest && "${2:-}" == inspect ]]; then
+  config="$REGISTRY_WORKER_CONFIG"
+  [[ "$*" != *'ghcr.io/example/app@'* ]] || config="$REGISTRY_APP_CONFIG"
+  jq -n --arg config "$config" '{schemaVersion:2,mediaType:"application/vnd.oci.image.manifest.v1+json",config:{digest:$config}}'
 fi
 FAKE_DOCKER
 chmod +x "$test_root/bin/docker"
@@ -84,3 +88,19 @@ if grep -Fq "tag " "$fake_log"; then
   exit 1
 fi
 echo "发布镜像拉取脚本测试通过。"
+
+# Original registry content is unchanged when one host reports manifest IDs and
+# the other reports config IDs. Both directions require the exact descriptor.
+export REGISTRY_APP_CONFIG="$app_config_id" REGISTRY_WORKER_CONFIG="$worker_config_id"
+export EXPECTED_APP_ID="$app_digest" EXPECTED_WORKER_ID="$worker_digest"
+printf '%s' "$EXPECTED_GHCR_TOKEN" | PULL_RELEASE_NO_TAG=1 bash scripts/pull-release-images.sh \
+  deployer ghcr.io/example/app "$app_digest" ghcr.io/example/worker "$worker_digest" "$release_commit" "$app_config_id" "$worker_config_id"
+export EXPECTED_APP_ID="$app_config_id" EXPECTED_WORKER_ID="$worker_config_id"
+printf '%s' "$EXPECTED_GHCR_TOKEN" | PULL_RELEASE_NO_TAG=1 bash scripts/pull-release-images.sh \
+  deployer ghcr.io/example/app "$app_digest" ghcr.io/example/worker "$worker_digest" "$release_commit" "$app_digest" "$worker_digest"
+export EXPECTED_APP_ID="$app_digest" EXPECTED_WORKER_ID="$worker_digest" REGISTRY_WORKER_CONFIG="$app_config_id"
+if printf '%s' "$EXPECTED_GHCR_TOKEN" | PULL_RELEASE_NO_TAG=1 bash scripts/pull-release-images.sh \
+  deployer ghcr.io/example/app "$app_digest" ghcr.io/example/worker "$worker_digest" "$release_commit" "$app_config_id" "$worker_config_id"; then
+  echo 'Accepted a manifest whose config is not the staged image' >&2; exit 1
+fi
+echo 'Cross-store identity requires the pinned manifest-to-config relationship.'

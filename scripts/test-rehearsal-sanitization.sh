@@ -38,11 +38,25 @@ if sql < scripts/sanitize-rehearsal.sql > "$fixture/guard.log" 2>&1; then echo '
 [[ "$(printf 'SELECT count(*) FROM "Session";\n' | sql)" == 1 ]]
 printf 'CREATE SCHEMA rehearsal_guard; CREATE TABLE rehearsal_guard.authorized_copy (id integer);\n' | sql >/dev/null
 sql < scripts/rehearsal-aggregate.sql > "$fixture/before.json"
+# Restore can reparse redundant AND/BETWEEN parentheses. Compare PostgreSQL's
+# canonical display without weakening the actual operator/boundary checks.
+printf 'CREATE TABLE "RehearsalConstraintFixture" (a int,b int,CHECK (a BETWEEN 1 AND 10 AND b BETWEEN 2 AND 20));\n' | sql
+sql < scripts/rehearsal-structure.sql > "$fixture/structure-before.json"
+docker exec "$container" pg_dump --schema-only --format=custom -U rehearsal -d miaomiao_rehearsal > "$fixture/schema.dump"
+printf 'CREATE DATABASE miaomiao_restored;\n' | sql
+docker exec -i "$container" pg_restore --exit-on-error --no-owner --no-privileges -U rehearsal -d miaomiao_restored < "$fixture/schema.dump"
+docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U rehearsal -d miaomiao_restored < scripts/rehearsal-structure.sql > "$fixture/structure-restored.json"
+cmp "$fixture/structure-before.json" "$fixture/structure-restored.json"
 sql < scripts/sanitize-rehearsal.sql > "$fixture/sanitize.log" 2>&1
+sql < scripts/rehearsal-structure.sql > "$fixture/structure-after.json"
+cmp "$fixture/structure-before.json" "$fixture/structure-after.json"
 sql < scripts/rehearsal-aggregate.sql > "$fixture/after.json"
 cmp "$fixture/before.json" "$fixture/after.json"
 jq -e '.users==1 and .accounts==1 and .balanceTotal==100 and .ledgerTotal==100 and .accountBalanceMismatches==0' "$fixture/after.json" >/dev/null
 docker exec "$container" pg_dump --data-only -U rehearsal -d miaomiao_rehearsal > "$fixture/sanitized.sql"
 if grep -q SENSITIVE_SENTINEL "$fixture/sanitized.sql"; then echo 'Sensitive fixture survived sanitization' >&2; exit 1; fi
 [[ "$(printf 'SELECT count(*) FROM "Session";\n' | sql)" == 0 ]]
+printf 'DROP INDEX "User_kuaishouId_lower_key";\n' | sql
+sql < scripts/rehearsal-structure.sql > "$fixture/missing-index.json"
+if cmp -s "$fixture/structure-before.json" "$fixture/missing-index.json"; then echo 'Missing uniqueness enforcement was invisible' >&2; exit 1; fi
 echo 'Rehearsal guard, PII/token/JSON removal, full schema constraints and financial aggregate preservation passed.'

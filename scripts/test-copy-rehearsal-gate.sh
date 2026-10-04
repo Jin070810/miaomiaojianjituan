@@ -21,6 +21,7 @@ cat > "$fixture/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
 # Deliberately fail if a schema difference reaches the full rehearsal. This
 # checks that changed migrations cannot be silently treated as an unchanged UI.
+if [[ "$*" == 'ps --all --format {{.Names}}' ]]; then exit 0; fi
 touch "$COPY_GATE_FIXTURE/rehearsal-reached"
 exit 42
 FAKE

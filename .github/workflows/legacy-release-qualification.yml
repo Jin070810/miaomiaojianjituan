@@ -6,8 +6,7 @@ on:
       - .github/workflows/legacy-release-qualification.yml
       - scripts/qualify-legacy-images.sh
       - scripts/test-legacy-pending-request.mjs
-      - scripts/signal-legacy-worker.mjs
-      - scripts/test-signal-legacy-worker.mjs
+      - scripts/legacy-queue-drain.cjs
   workflow_dispatch:
 
 permissions:
@@ -47,8 +46,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: node --test scripts/test-signal-legacy-worker.mjs
-      - name: Qualify original images with isolated active work and validated child TERM
+      - name: Qualify original images by draining paused queues before TERM
         run: bash scripts/qualify-legacy-images.sh
       - name: Preserve only synthetic qualification evidence
         if: always()

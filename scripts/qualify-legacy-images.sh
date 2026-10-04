@@ -72,7 +72,7 @@ timeout --kill-after=10s 120s docker run --rm --name "$prefix-migration" --netwo
 timeout --kill-after=10s 60s docker run --rm --name "$prefix-seed" --network "$prefix" --env-file "$private/app.env" \
   "$worker_ref" ./node_modules/.bin/tsx scripts/seed-admin.ts > "$private/seed.log" 2>&1
 checkpoint original_startup
-docker run -d --name "$prefix-worker" --restart unless-stopped --network "$prefix" --env-file "$private/app.env" "$worker_ref" >/dev/null
+docker run -d --name "$prefix-worker" --network "$prefix" --env-file "$private/app.env" "$worker_ref" >/dev/null
 docker run -d --name "$prefix-app" --network "$prefix" --network-alias app --env-file "$private/app.env" "$app_ref" >/dev/null
 for _ in {1..40}; do
   if timeout 8 docker exec "$prefix-app" node -e '(async()=>{const r=await fetch("http://127.0.0.1:3000/api/health",{signal:AbortSignal.timeout(5000)});process.stdout.write(await r.text());process.exitCode=r.ok?0:1})().catch(()=>process.exit(1))' > "$private/health.json" &&
@@ -85,6 +85,8 @@ jq '{ok,database,redis,worker,appCommit:.app.commit,workerCommit:.workerVersion.
 # A real job waits on a real isolated PostgreSQL lock. It references no member
 # and cannot fetch a platform URL or award points because the video does not exist.
 checkpoint active_worker_drain
+# An already paused queue must stay paused after a failed-release recovery.
+docker exec "$prefix-worker" node -e 'const {Queue}=require("bullmq"); (async()=>{const q=new Queue("weekly-challenges",{connection:{host:"cache",port:6379}}); await q.pause(); await q.close()})().catch(()=>process.exit(1))'
 docker exec -i -e PGAPPNAME=legacy-drain-blocker "$prefix-postgres" psql -X -qAt -v ON_ERROR_STOP=1 -U legacy -d miaomiao_legacy > "$private/blocker.log" 2>&1 <<'SQL' &
 BEGIN;
 SET LOCAL statement_timeout = '25s';
@@ -106,20 +108,23 @@ for _ in {1..50}; do
   sleep 0.1
 done
 [[ "${active:-}" == legacy-drain-check ]]
-# Original docker-stop was proven to interrupt the job (run 37175301016).
-# Test a narrow first-transition procedure: disable this container's restart,
-# signal its validated tsx child, then wait for the wrapper to exit naturally.
-docker update --restart=no "$prefix-worker" >/dev/null
-docker exec -i -e LEGACY_SIGNAL_EXECUTE=true "$prefix-worker" node --input-type=module \
-  < scripts/signal-legacy-worker.mjs > "$evidence/worker-signal.json"
-timeout --kill-after=5s 75s docker wait "$prefix-worker" > "$private/worker-wait-exit" &
+# Both wrapper and direct-child TERM interrupted work in the original tsx image.
+# Pause consumption first; an active task must finish before any stop is sent.
+docker exec -i -e LEGACY_QUEUE_ACTION=inspect "$prefix-worker" node \
+  < scripts/legacy-queue-drain.cjs > "$evidence/queues-before.json"
+timeout --kill-after=5s 85s docker exec -i -e LEGACY_QUEUE_ACTION=pause "$prefix-worker" node \
+  < scripts/legacy-queue-drain.cjs > "$evidence/queues-drained.json" &
 worker_stop_pid=$!
 sleep 1
 worker_waited="$(docker inspect --format '{{.State.Running}}' "$prefix-worker")"
+[[ "$(docker exec "$prefix-redis" redis-cli --raw LRANGE bull:kuaishou-video:active 0 -1)" == legacy-drain-check ]]
+[[ ! -s "$evidence/queues-drained.json" ]]
 wait "$blocker_pid"
 blocker_pid=""
 wait "$worker_stop_pid"
 worker_stop_pid=""
+jq -e 'all(.queues[]; .paused and .active==0)' "$evidence/queues-drained.json" >/dev/null
+docker stop --time 75 "$prefix-worker" >/dev/null
 completed="$(docker exec "$prefix-redis" redis-cli --raw ZSCORE bull:kuaishou-video:completed legacy-drain-check)"
 worker_completed=false
 [[ -z "$completed" ]] || worker_completed=true
@@ -151,11 +156,25 @@ jq -n --slurpfile worker "$evidence/worker-exit.json" --slurpfile app "$evidence
   --arg at "$(date -u +%FT%TZ)" --argjson workerWaited "$worker_waited" --argjson workerCompleted "$worker_completed" \
   --argjson appWaited "$app_waited" --argjson appCompleted "$app_completed" --argjson clients "$clients" \
   '{checkedAt:$at,isolatedSyntheticData:true,workerWaitedForActiveJob:$workerWaited,workerJobCompleted:$workerCompleted,
-    workerDrainStrategy:"legacy-child-term",originalDockerStopQualified:false,
+    workerDrainStrategy:"pause-consumption-before-stop",originalDockerStopQualified:false,
     appWaitedForRequest:$appWaited,appRequestCompleted:$appCompleted,remainingDatabaseClients:$clients,worker:$worker[0],app:$app[0]}
     | .qualified=(.workerWaitedForActiveJob and .workerJobCompleted and .appWaitedForRequest and .appRequestCompleted
-      and .remainingDatabaseClients==0 and .worker.Status=="exited" and .worker.ExitCode==0 and (.worker.OOMKilled|not)
+      and .remainingDatabaseClients==0 and .worker.Status=="exited" and (.worker.ExitCode==0 or .worker.ExitCode==143) and (.worker.OOMKilled|not)
       and .app.Status=="exited" and (.app.ExitCode==0 or .app.ExitCode==143) and (.app.OOMKilled|not))' > "$evidence/qualification.json"
 cat "$evidence/qualification.json"
 jq -e '.qualified == true' "$evidence/qualification.json" >/dev/null
+# Recovery must restore only queues that were previously unpaused. The original
+# image restarts while paused and cannot consume until this explicit restoration.
+checkpoint queue_recovery
+docker start "$prefix-worker" >/dev/null
+for _ in {1..30}; do
+  if docker exec -i -e LEGACY_QUEUE_ACTION=inspect "$prefix-worker" node < scripts/legacy-queue-drain.cjs > "$private/paused.json"; then break; fi
+  sleep 1
+done
+jq -e 'all(.queues[]; .paused and .active==0)' "$private/paused.json" >/dev/null
+docker exec -i -e LEGACY_QUEUE_ACTION=resume -e "LEGACY_QUEUE_PREVIOUS=$(cat "$evidence/queues-before.json")" \
+  "$prefix-worker" node < scripts/legacy-queue-drain.cjs > "$evidence/queues-recovered.json"
+jq -s -e '([.[0].queues[].paused] == [.[1].queues[].paused])' \
+  "$evidence/queues-before.json" "$evidence/queues-recovered.json" >/dev/null
+docker stop --time 75 "$prefix-worker" >/dev/null
 checkpoint completed

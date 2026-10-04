@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main ]]
+[[ ( "${GITHUB_EVENT_NAME:-}" == push || "${GITHUB_EVENT_NAME:-}" == workflow_dispatch ) && "${GITHUB_REF:-}" == refs/heads/main ]]
+[[ -z "${CI_PULL_REQUEST_NUMBER:-}" ]]
 [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]]
 [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]]
 [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]

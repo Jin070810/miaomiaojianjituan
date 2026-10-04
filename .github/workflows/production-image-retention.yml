@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p output/image-payload output/image-result
-          cp scripts/production-image-retention.sh scripts/select-retired-images.jq output/image-payload/
+          cp scripts/production-image-retention.sh scripts/select-retired-images.jq scripts/image-retention-metadata.jq output/image-payload/
           jq -n '{actor:env.GITHUB_ACTOR,token:env.GH_TOKEN}' > output/image-payload/registry.json
           tar -C output/image-payload -czf output/image-payload.tar.gz .
       - name: Configure existing production connection

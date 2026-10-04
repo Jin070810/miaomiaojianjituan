@@ -6,7 +6,16 @@ export RETENTION_FIXTURE="$fixture"
 mkdir -p "$fixture/bin" "$fixture/project/backups" "$fixture/payload"
 touch "$fixture/project/.production.lock"
 printf preserve > "$fixture/project/backups/synthetic.dump"
-cp scripts/select-retired-images.jq "$fixture/payload/"
+cp scripts/select-retired-images.jq scripts/image-retention-metadata.jq "$fixture/payload/"
+# A historical build environment may supply the version only if there is no
+# conflicting label. Unrelated image environment values never enter evidence.
+jq -n '[{Id:"fixture",Config:{Env:["APP_COMMIT_SHA="+("a"*40),"PRIVATE=must-not-export"]}}]' |
+  jq -f scripts/image-retention-metadata.jq > "$fixture/metadata.json"
+jq -e '.revision==("a"*40) and .revisionSource=="build_environment" and (.Config==null)' "$fixture/metadata.json" >/dev/null
+for label in invalid bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; do
+  jq -n --arg label "$label" '[{Config:{Labels:{"org.opencontainers.image.revision":$label},Env:["APP_COMMIT_SHA="+("a"*40)]}}]' |
+    jq -f scripts/image-retention-metadata.jq | jq -e '.revision==null' >/dev/null
+done
 printf '{"actor":"fixture","token":"synthetic-only"}\n' > "$fixture/payload/registry.json"
 # Three recent version pairs, one retired pair, and a stopped-container pair.
 jq -n '[range(1;6) as $v | ["app","worker"][] as $kind |

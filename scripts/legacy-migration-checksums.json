@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "migration": "202607230001_init",
+      "recordedChecksum": "6e6fe853c3dbca0be9e58817a7deb66b1a343c5eada29cab9f51af3ce629d2b4",
+      "canonicalChecksum": "cae2fedffe4fa43232152c8c6fb16ddc255cd6a8a123d7d069406fa3953618a2",
+      "evidenceRun": "37184823509",
+      "evidenceCandidate": "ef6ea1e5bd86cf5242b5c50dd5d331d2bb990008"
+    },
+    {
+      "migration": "20260723120000_business_rules",
+      "recordedChecksum": "148b4433ca3bc6e91d2f80fa78df4116d2262b2a6f240e648e75aaae0e27bb8e",
+      "canonicalChecksum": "bdc789b04e53b7895c3fede06e6c84dd06f6fab2aa5fc5c748328bd04a211b5b",
+      "evidenceRun": "37184823509",
+      "evidenceCandidate": "ef6ea1e5bd86cf5242b5c50dd5d331d2bb990008"
+    },
+    {
+      "migration": "20260723123000_ranking_award_qr",
+      "recordedChecksum": "f1b9c8ac8f607772c68a6fa448f9ff388aabdab6ad0e11c07c3fd6546991336a",
+      "canonicalChecksum": "18250f585b5bb378d0653b91d2a374c01c966c65c3c5323f6975a17f7fb43c78",
+      "evidenceRun": "37184823509",
+      "evidenceCandidate": "ef6ea1e5bd86cf5242b5c50dd5d331d2bb990008"
+    }
+  ]
+}

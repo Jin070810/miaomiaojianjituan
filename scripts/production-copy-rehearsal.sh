@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# No production DB writes, no raw backup export, no production service restart.
+set -euo pipefail
+root="$(realpath -e "${1:?project}")" payload="$(realpath -e "${2:?payload}")"
+domain="${3:?domain}" candidate="${4:?candidate SHA}" run_id="${5:?run ID}"
+[[ "$domain" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$candidate" =~ ^[a-f0-9]{40}$ && "$run_id" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
+cd "$root"
+umask 077
+[[ -f .production.lock && ! -L .production.lock ]]
+exec 9<.production.lock
+flock --exclusive --wait 15 9
+private="$(mktemp -d /tmp/miaomiao-copy.XXXXXX)"
+name="miaomiao-copy-$run_id"
+created=false
+phase=preflight
+finish() {
+  local code=$?
+  trap - EXIT INT TERM HUP
+  if (( code != 0 )); then printf 'Isolated copy rehearsal failed: phase=%s exit=%s\n' "$phase" "$code" >&2; fi
+  if [[ "$created" == true ]]; then
+    timeout 20 docker rm -f "$name-prisma" "$name-db" >/dev/null 2>&1 || true
+  fi
+  [[ "$private" == /tmp/miaomiao-copy.* ]] && rm -rf -- "$private"
+  exit "$code"
+}
+trap finish EXIT
+trap 'exit 143' TERM HUP
+trap 'exit 130' INT
+source_sha="$(git rev-parse HEAD)"
+[[ "$source_sha" =~ ^[a-f0-9]{40}$ ]]
+health() {
+  curl --fail --silent --connect-timeout 3 --max-time 15 "https://$domain/api/health" |
+    jq -e --arg sha "$source_sha" '.ok==true and .database=="ok" and .redis=="ok" and .worker=="ok"
+      and .app.commit==$sha and .workerVersion.commit==$sha' >/dev/null
+}
+inventory() {
+  local service id
+  for service in app worker postgres redis nginx; do
+    id="$(docker ps --no-trunc --filter label=com.docker.compose.project=miaomiao-points \
+      --filter label=com.docker.compose.oneoff=False --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')"
+    [[ "$id" =~ ^[a-f0-9]{64}$ ]]
+    docker inspect "$id" | jq -ce --arg service "$service" '.[0] | select(.State.Running==true) |
+      {service:$service,Id,Image,StartedAt:.State.StartedAt}'
+  done
+}
+health
+inventory > "$private/before.jsonl"
+(( $(df -B1 --output=avail . | tail -1) >= 3221225472 ))
+(( $(awk '/^MemAvailable:/ {print $2}' /proc/meminfo) >= 2097152 ))
+backup="$(find backups -maxdepth 1 -type f -name 'miaomiao-*.dump' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+[[ "$backup" =~ ^backups/miaomiao-[0-9-]+\.dump$ && -f "$backup.sha256" ]]
+expected="$(awk 'NR==1 {print $1}' "$backup.sha256")"
+[[ "$expected" =~ ^[a-f0-9]{64}$ && "$(sha256sum "$backup" | cut -d' ' -f1)" == "$expected" ]]
+# Bounded first-upgrade rehearsal: the actual database is ~65 MB. Refuse larger
+# copies rather than exhaust the production host's RAM. No anonymous volumes.
+(( $(stat -c %s "$backup") <= 134217728 ))
+pg_image="$(jq -sr '.[]|select(.service=="postgres")|.Image' "$private/before.jsonl")"
+worker_image="$(jq -sr '.[]|select(.service=="worker")|.Image' "$private/before.jsonl")"
+[[ "$pg_image" =~ ^sha256:[a-f0-9]{64}$ && "$worker_image" =~ ^sha256:[a-f0-9]{64}$ ]]
+[[ -d "$payload/prisma/migrations" && -f "$payload/prisma/schema.prisma" ]]
+[[ -z "$(find "$payload/prisma" -type l -print -quit)" ]]
+# Do not overwrite an earlier attempt or unrelated container.
+if docker container inspect "$name-db" >/dev/null 2>&1 || docker container inspect "$name-prisma" >/dev/null 2>&1; then
+  echo 'Rehearsal container name already exists; refusing to replace it.' >&2; exit 1
+fi
+created=true
+phase=start_isolated_database
+docker run -d --pull never --name "$name-db" --label miaomiao.copy-rehearsal="$run_id" \
+  --network none --memory 1g --memory-swap 1g --cpus 0.5 --pids-limit 128 \
+  --tmpfs /var/lib/postgresql/data:rw,nosuid,noexec,size=768m \
+  --log-driver none -e POSTGRES_DB=miaomiao_rehearsal -e POSTGRES_USER=rehearsal \
+  -e POSTGRES_HOST_AUTH_METHOD=trust "$pg_image" \
+  postgres -c shared_buffers=32MB -c max_connections=10 -c log_statement=none \
+  -c log_min_error_statement=panic -c log_min_messages=panic >/dev/null
+for _ in {1..30}; do
+  if docker exec "$name-db" pg_isready -U rehearsal -d miaomiao_rehearsal >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+psql_copy() { timeout 60 docker exec -i "$name-db" psql -X -qAt -v ON_ERROR_STOP=1 -U rehearsal -d miaomiao_rehearsal; }
+# A guard absent from every production database; sanitizer refuses without it.
+printf 'CREATE SCHEMA rehearsal_guard; CREATE TABLE rehearsal_guard.authorized_copy (id integer);\n' | psql_copy > "$private/initialize.log" 2>&1
+timeout 180 docker exec -i "$name-db" pg_restore --exit-on-error --no-owner --no-privileges \
+  -U rehearsal -d miaomiao_rehearsal < "$backup" > "$private/restore.log" 2>&1
+phase=sanitize
+psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/restored.json" 2> "$private/sql.log"
+psql_copy < "$payload/sanitize-rehearsal.sql" > "$private/sanitize.log" 2>&1
+psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/sanitized.json" 2> "$private/sql.log"
+cmp -s "$private/restored.json" "$private/sanitized.json"
+printf 'SELECT json_agg(json_build_object('\''name'\'',migration_name,'\''checksum'\'',checksum,'\''finished'\'',finished_at IS NOT NULL,'\''rolledBack'\'',rolled_back_at IS NOT NULL)) FROM "_prisma_migrations";\n' |
+  psql_copy > "$private/before-migrations.json" 2> "$private/sql.log"
+jq -e 'all(.[]; .finished==true or .rolledBack==true)' "$private/before-migrations.json" >/dev/null
+while IFS=$'\t' read -r migration checksum; do
+  [[ "$migration" =~ ^[0-9]{12,14}_[a-z0-9_]+$ && "$checksum" =~ ^[a-f0-9]{64}$ ]]
+  [[ "$(sha256sum "$payload/prisma/migrations/$migration/migration.sql" | cut -d' ' -f1)" == "$checksum" ]]
+done < <(jq -r '.[]|select(.rolledBack==false)|[.name,.checksum]|@tsv' "$private/before-migrations.json")
+# New SQL/schema only; never start Worker or import candidate application code.
+# The existing Prisma CLI has no host mounts except read-only schema, and shares
+# the copy's network NONE namespace: it cannot reach production or the Internet.
+prisma_copy() {
+  timeout --kill-after=5s 180s docker run --rm --pull never --name "$name-prisma" \
+    --label miaomiao.copy-rehearsal="$run_id" --network "container:$name-db" \
+    --memory 384m --memory-swap 384m --cpus 0.5 --pids-limit 64 --log-driver none \
+    --read-only --tmpfs /tmp:rw,nosuid,size=64m \
+    --mount "type=bind,source=$payload/prisma,target=/rehearsal/prisma,readonly" \
+    -e DATABASE_URL=postgresql://rehearsal@127.0.0.1:5432/miaomiao_rehearsal?schema=public \
+    --entrypoint node "$worker_image" /app/node_modules/prisma/build/index.js "$@"
+}
+phase=migrate_copy
+prisma_copy migrate deploy --schema /rehearsal/prisma/schema.prisma > "$private/migrate.log" 2>&1
+phase=repeat_migration
+prisma_copy migrate deploy --schema /rehearsal/prisma/schema.prisma > "$private/repeat.log" 2>&1
+phase=schema_drift
+prisma_copy migrate diff --from-url postgresql://rehearsal@127.0.0.1:5432/miaomiao_rehearsal?schema=public \
+  --to-schema-datamodel /rehearsal/prisma/schema.prisma --exit-code > "$private/drift.log" 2>&1
+psql_copy < "$payload/rehearsal-aggregate.sql" > "$private/after.json" 2> "$private/sql.log"
+cmp -s "$private/sanitized.json" "$private/after.json"
+printf 'SELECT json_agg(json_build_object('\''name'\'',migration_name,'\''checksum'\'',checksum,'\''finished'\'',finished_at IS NOT NULL,'\''rolledBack'\'',rolled_back_at IS NOT NULL) ORDER BY migration_name) FROM "_prisma_migrations";\n' |
+  psql_copy > "$private/migrations.json" 2> "$private/sql.log"
+jq -e 'all(.[]; .finished==true or .rolledBack==true)' "$private/migrations.json" >/dev/null
+[[ "$(jq '[.[]|select(.rolledBack==false)]|length' "$private/migrations.json")" == "$(find "$payload/prisma/migrations" -mindepth 2 -maxdepth 2 -name migration.sql -type f | wc -l)" ]]
+phase=verify_production_preserved
+inventory > "$private/after.jsonl"
+cmp -s "$private/before.jsonl" "$private/after.jsonl"
+health
+[[ "$(git rev-parse HEAD)" == "$source_sha" && "$(sha256sum "$backup" | cut -d' ' -f1)" == "$expected" ]]
+jq -n --arg candidate "$candidate" --arg source "$source_sha" --arg at "$(date -u +%FT%TZ)" \
+  --arg backup "$(basename "$backup")" --slurpfile aggregates "$private/after.json" --slurpfile migrations "$private/migrations.json" \
+  '{schemaVersion:1,candidateCommit:$candidate,productionCommit:$source,checkedAt:$at,backup:$backup,
+    backupChecksumVerified:true,networkIsolated:true,rawDataExported:false,sanitizedBeforeMigration:true,
+    repeatMigrationPassed:true,schemaDrift:false,aggregatesPreserved:true,productionServicesPreserved:true,
+    aggregates:$aggregates[0],migrations:$migrations[0],qualified:true}'

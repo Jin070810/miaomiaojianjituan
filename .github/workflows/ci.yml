@@ -81,6 +81,7 @@ jobs:
       - run: bash scripts/test-production-cache-cleanup.sh
       - run: bash scripts/test-rehearsal-sanitization.sh
       - run: bash scripts/test-copy-rehearsal-gate.sh
+      - run: bash scripts/test-production-image-retention.sh
       - run: bash scripts/test-buildkit-cache-filter.sh
       - run: bash scripts/test-release-capacity.sh
       - run: bash scripts/test-publish-release-candidate.sh
@@ -89,7 +90,6 @@ jobs:
       - run: bash scripts/test-release-observation.sh
       - run: bash scripts/test-production-release.sh
       - run: bash scripts/test-signed-release.sh
-      - run: bash scripts/test-production-cache-cleanup.sh
 
   # Full browser matrix now runs against these exact final images, once.
   # This replaces both host "next start" E2E and the second staging build.
